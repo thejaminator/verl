@@ -14,7 +14,8 @@ import subprocess
 import shutil
 from typing import Optional, Sequence
 from pydantic import BaseModel
-
+# Step 2: Push to HuggingFace Hub
+from huggingface_hub import HfApi
 
 class ChatMessage(BaseModel):
     role: str
@@ -116,77 +117,6 @@ def load_and_convert_dataset(dataset_path: str, output_path: str) -> int:
     return len(data)
 
 
-def create_reward_function_file(output_path: str):
-    """Create a reward function file for verl with proper interface"""
-    # Copy the comprehensive math reward function
-    source_file = "example_scripts/steg/math_reward_function.py"
-
-    if os.path.exists(source_file):
-        shutil.copy2(source_file, output_path)
-        print(f"Copied comprehensive math reward function to: {output_path}")
-        print("Reward function includes:")
-        print("  - Format rewards (0.5 + 0.5 + 1.0 points)")
-        print("  - Correctness reward (8.0 points)")
-        print("  - Length penalty (up to 4.0 points when correct)")
-        print("  - Total possible: ~14.0 points")
-    else:
-        print(f"Warning: Could not find reward function file at {source_file}")
-        print("Creating simple fallback reward function...")
-
-        # Fallback simple reward function with updated parameters
-        reward_function_code = '''
-import re
-import math
-
-def extract_answer(text: str) -> str:
-    """Extract answer from <answer> tags"""
-    if "<answer>" in text and "</answer>" in text:
-        after_ans = text.split("<answer>")[-1]
-        answer = after_ans.split("</answer>")[0]
-        return answer.strip()
-    return text.strip()
-
-def math_equal(predicted: str, expected: str) -> bool:
-    """Check if math answers are equal"""
-    try:
-        # Simple numeric comparison
-        return float(predicted.replace(",", "")) == float(expected.replace(",", ""))
-    except:
-        return predicted.strip().lower() == expected.strip().lower()
-
-def compute_score(data_source, solution_str, ground_truth, extra_info=None):
-    """Simple fallback reward function for math problems."""
-    total_reward = 0.0
-    
-    if not isinstance(solution_str, str):
-        solution_str = str(solution_str)
-    if not isinstance(ground_truth, str):
-        ground_truth = str(ground_truth)
-    
-    # Format reward (0.5 points)
-    if "<answer>" in solution_str and "</answer>" in solution_str:
-        total_reward += 0.5
-    
-    # Correctness reward (8.0 points)
-    extracted_answer = extract_answer(solution_str)
-    if math_equal(extracted_answer, ground_truth):
-        total_reward += 8.0
-        
-        # Length penalty (up to 4.0 points, updated parameters)
-        before_answer = solution_str.split("<answer>")[0] if "<answer>" in solution_str else solution_str
-        token_length = len(before_answer.split())
-        half_life_tokens = 1000  # Updated to match qwen3_grpo_length_penalty.py
-        decay_lambda = math.log(2) / half_life_tokens
-        length_reward = 4.0 * math.exp(-decay_lambda * token_length)
-        total_reward += length_reward
-    
-    return total_reward
-'''
-
-        with open(output_path, "w") as f:
-            f.write(reward_function_code)
-        print(f"Created fallback reward function at: {output_path}")
-
 
 def convert_verl_to_hf_and_push(params: VerlParams, step: Optional[int] = None):
     """
@@ -254,8 +184,7 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: Optional[int] = None):
     subprocess.run(merge_cmd, capture_output=True, text=True, check=True)
     print("✅ Successfully converted checkpoint to HuggingFace format")
 
-    # Step 2: Push to HuggingFace Hub
-    from huggingface_hub import HfApi
+    
 
     # Determine repository name
     repo_name = f"{params.hub_repo_id}-step-{step}" if step else params.hub_repo_id
@@ -610,9 +539,19 @@ def main():
         eval_parquet = os.path.join(params.output_dir, "eval.parquet")
         load_and_convert_dataset(params.eval_path, eval_parquet)
 
-    # Create reward function file
-    reward_file = os.path.join(params.output_dir, "reward_function.py")
-    create_reward_function_file(reward_file)
+    # Use math reward function directly
+    reward_file = "math_reward_function.py"
+    
+    if os.path.exists(reward_file):
+        print(f"Using math reward function: {reward_file}")
+        print("Reward function includes:")
+        print("  - Format rewards (0.5 + 0.5 + 1.0 points)")
+        print("  - Correctness reward (8.0 points)")
+        print("  - Length penalty (up to 4.0 points when correct)")
+        print("  - Total possible: ~14.0 points")
+    else:
+        print(f"❌ Error: Could not find reward function file at {reward_file}")
+        sys.exit(1)
 
     # Launch training
     print("\nLaunching verl training...")
