@@ -373,7 +373,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
 
     # Add logger configuration
     if params.use_wandb:
-        cmd.append("trainer.logger=console,wandb")
+        cmd.append('trainer.logger=["console","wandb"]')
     else:
         cmd.append("trainer.logger=console")
 
