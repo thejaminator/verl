@@ -9,6 +9,8 @@ Based on the verl documentation and examples.
 
 import json
 import os
+# set HF_HOME to /workspace
+os.environ["HF_HOME"] = "/workspace"
 import sys
 import subprocess
 import shutil
@@ -408,6 +410,7 @@ def main():
     # Load environment variables
     hf_api_key = os.getenv("HF_WRITE_TOKEN")
     wandb_key = os.getenv("WANDB_KEY")
+    
 
     # Configuration (optimized based on reference GRPO setup)
     params = VerlParams(
