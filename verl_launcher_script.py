@@ -78,13 +78,14 @@ def extract_answer(text: str) -> str:
     return text.strip()
 
 
-def load_and_convert_dataset(dataset_path: str, output_path: str) -> int:
+def load_and_convert_dataset(dataset_path: str, output_path: str, data_source: str = "custom") -> int:
     """
     Load dataset from JSONL and convert to verl format (parquet).
 
     Args:
         dataset_path: Path to input JSONL file
         output_path: Path to output parquet file
+        data_source: Source identifier for the dataset
 
     Returns:
         Number of samples processed
@@ -95,21 +96,31 @@ def load_and_convert_dataset(dataset_path: str, output_path: str) -> int:
 
     data = []
     with open(dataset_path, "r") as f:
-        for line in f:
+        for idx, line in enumerate(f):
             if line.strip():
                 sample_dict = json.loads(line)
                 sample = RLSample.model_validate(sample_dict)
 
-                # Convert to verl format
-                # verl expects a "prompt" field with the conversation messages
+                # Convert to verl format following the pattern from examples
                 prompt_messages = [msg.model_dump() for msg in sample.messages]
+                
+                # Extract split from filename (train/test/eval)
+                split = "train" if "train" in dataset_path else ("test" if "test" in dataset_path else "eval")
+                
+                # Create structured data following the pattern
+                structured_data = {
+                    "data_source": data_source,
+                    "prompt": prompt_messages,
+                    "ability": "math",  # Adjust this based on your domain
+                    "reward_model": {"style": "rule", "ground_truth": sample.answer},
+                    "extra_info": {
+                        "split": split,
+                        "index": idx,
+                        "original_answer": sample.answer,
+                    },
+                }
 
-                data.append(
-                    {
-                        "prompt": prompt_messages,
-                        "answer": sample.answer,  # Ground truth for reward computation
-                    }
-                )
+                data.append(structured_data)
 
     # Save as parquet for verl
     df = pd.DataFrame(data)
@@ -466,12 +477,12 @@ def main():
 
     # Convert datasets to parquet format
     train_parquet = os.path.join(params.output_dir, "train.parquet")
-    load_and_convert_dataset(params.train_path, train_parquet)
+    load_and_convert_dataset(params.train_path, train_parquet, data_source="math_training_data")
 
     eval_parquet = None
     if params.eval_path:
         eval_parquet = os.path.join(params.output_dir, "eval.parquet")
-        load_and_convert_dataset(params.eval_path, eval_parquet)
+        load_and_convert_dataset(params.eval_path, eval_parquet, data_source="math_eval_data")
 
     # Use math reward function directly
     reward_file = "math_reward_function.py"
