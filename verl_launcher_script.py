@@ -323,7 +323,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
         # Model configuration
         f"actor_rollout_ref.hybrid_engine=true",
         f"actor_rollout_ref.model.path={params.model_name}",
-        f"actor_rollout_ref.model.enable_gradient_checkpointing=false",
+        f"actor_rollout_ref.model.enable_gradient_checkpointing=true",
         f"actor_rollout_ref.model.trust_remote_code=false",
         f"actor_rollout_ref.model.use_remove_padding=true",
         # Actor configuration
