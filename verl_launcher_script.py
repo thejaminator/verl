@@ -411,7 +411,7 @@ def main():
 
     # Configuration (optimized based on reference GRPO setup)
     params = VerlParams(
-        model_name="Qwen/Qwen2.5-3B",
+        model_name="Qwen/Qwen3-4B",
         num_generations=4,  # Reduced from 16 for better efficiency
         batch_size=32,  # Increased from 16 (adjust based on GPU memory)
         gradient_accumulation_steps=4,  # To achieve effective batch size of 128
