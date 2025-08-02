@@ -287,6 +287,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
     """
 
     # Construct the verl training command with Hydra overrides
+    max_num_batched_tokens=params.max_prompt_length + params.max_response_length
     cmd = [
         sys.executable,
         "-m",
@@ -346,6 +347,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
         f"actor_rollout_ref.rollout.top_p=1.0",
         f"actor_rollout_ref.rollout.prompt_length={params.max_prompt_length}",
         f"actor_rollout_ref.rollout.response_length={params.max_response_length}",
+        f"actor_rollout_ref.rollout.max_num_batched_tokens={max_num_batched_tokens}",
         f"actor_rollout_ref.rollout.dtype=bfloat16",
         f"actor_rollout_ref.rollout.gpu_memory_utilization=0.6",
         f"actor_rollout_ref.rollout.ignore_eos=false",
@@ -417,7 +419,7 @@ def main():
     params = VerlParams(
         model_name="Qwen/Qwen3-4B",
         num_generations=4,  # Reduced from 16 for better efficiency
-        batch_size=32,  # Increased from 16 (adjust based on GPU memory)
+        batch_size=4,  # Increased from 16 (adjust based on GPU memory)
         gradient_accumulation_steps=4,  # To achieve effective batch size of 128
         micro_batch_size_per_gpu=8,  # Optimized for single GPU
         max_seq_length=10_000,  # More reasonable for math problems
