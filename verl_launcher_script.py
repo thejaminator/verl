@@ -315,7 +315,6 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
         f"actor_rollout_ref.model.enable_gradient_checkpointing=false",
         f"actor_rollout_ref.model.trust_remote_code=false",
         f"actor_rollout_ref.model.use_remove_padding=true",
-        f"actor_rollout_ref.model.dtype=bfloat16",
         # Actor configuration
         f"actor_rollout_ref.actor.strategy=fsdp2",
         f"actor_rollout_ref.actor.ppo_mini_batch_size={params.batch_size}",
