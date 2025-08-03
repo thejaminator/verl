@@ -351,7 +351,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
         f"actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
         # Rollout configuration
         # actor_rollout_ref.model.use_fused_kernels
-        "actor_rollout_ref.model.use_fused_kernels=true",
+        "actor_rollout_ref.model.use_fused_kernels=false",
         "actor_rollout_ref.rollout.name=vllm",
         f"actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
         "actor_rollout_ref.rollout.temperature=1.0",
