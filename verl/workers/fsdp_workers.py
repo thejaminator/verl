@@ -27,7 +27,6 @@ import psutil
 import torch
 import torch.distributed
 import torch.distributed as dist
-from bitsandbytes.optim import AdamW8bit
 from codetiming import Timer
 from omegaconf import DictConfig, OmegaConf, open_dict
 from peft import LoraConfig, TaskType, get_peft_model
@@ -417,8 +416,6 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
         # TODO: add more optimizer args into config
         if role == "actor" and optim_config is not None:
-            from verl.utils.torch_functional import get_constant_schedule_with_warmup, get_cosine_schedule_with_warmup
-
             # print("Using AdamW8bit")
             # actor_optimizer = AdamW8bit(
             #     actor_module_fsdp.parameters(),
@@ -428,6 +425,9 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             # )
             # normal AdamW
             from torch import optim
+
+            from verl.utils.torch_functional import get_constant_schedule_with_warmup, get_cosine_schedule_with_warmup
+
             actor_optimizer = optim.AdamW(
                 actor_module_fsdp.parameters(),
                 lr=optim_config.lr,
