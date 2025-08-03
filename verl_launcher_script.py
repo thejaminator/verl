@@ -41,7 +41,7 @@ class VerlParams(BaseModel):
     max_seq_length: int = 2048
     max_prompt_length: int = 1024
     max_response_length: int = 1024
-    batch_size: int = 16
+    micro_batch: int = 16
     gradient_accumulation_steps: int = 1
     micro_batch_size_per_gpu: int = 8  # New parameter for fine control
     max_steps: int = 100
@@ -232,7 +232,7 @@ This model was trained using [verl](https://github.com/volcengine/verl) with GRP
 - **Framework**: verl GRPO
 - **Training steps**: {step}
 - **Dataset**: Math reasoning problems
-- **Batch size**: {params.batch_size}
+- **Batch size**: {params.micro_batch}
 - **Learning rate**: {params.learning_rate}
 - **LoRA rank**: {params.lora_rank}
 - **Number of generations**: {params.num_generations}
@@ -310,7 +310,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
         f"data.prompt_key=prompt",
         f"data.max_prompt_length={params.max_prompt_length}",
         f"data.max_response_length={params.max_response_length}",
-        f"data.train_batch_size={params.batch_size * params.gradient_accumulation_steps}",
+        f"data.train_batch_size={params.micro_batch * params.gradient_accumulation_steps}",
         f"data.shuffle=true",
         f"data.truncation=error",
         f"data.filter_overlong_prompts=true",
@@ -329,7 +329,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
         f"actor_rollout_ref.model.use_remove_padding=true",
         # Actor configuration
         f"actor_rollout_ref.actor.strategy=fsdp2",
-        f"actor_rollout_ref.actor.ppo_mini_batch_size={params.batch_size}",
+        f"actor_rollout_ref.actor.ppo_mini_batch_size={params.micro_batch}",
         f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
         f"actor_rollout_ref.actor.ppo_epochs=1",
         f"actor_rollout_ref.actor.grad_clip=0.5",
@@ -430,7 +430,7 @@ def main():
     params = VerlParams(
         model_name="Qwen/Qwen3-4B",
         num_generations=4,  # Reduced from 16 for better efficiency
-        batch_size=16,  # Increased from 16 (adjust based on GPU memory)
+        micro_batch=4,  # Increased from 16 (adjust based on GPU memory)
         gradient_accumulation_steps=4,  # To achieve effective batch size of 16
         micro_batch_size_per_gpu=4,  # Optimized for single GPU
         max_seq_length=10_000,  # More reasonable for math problems
