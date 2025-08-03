@@ -116,6 +116,7 @@ def load_and_convert_dataset(dataset_path: str, output_path: str, data_source: s
                     "ability": "math",  # Adjust this based on your domain
                     "reward_model": {"style": "rule", "ground_truth": sample.answer},
                     "extra_info": {
+                        "prompt": prompt_messages[0]["content"],
                         "split": split,
                         "index": idx,
                         "original_answer": sample.answer,

@@ -6,17 +6,15 @@ Based on the reward computation from qwen3_grpo_length_penalty.py and grader.py.
 This implements a comprehensive reward system for math problem solving with:
 - Format rewards for proper answer tags and structure
 - Correctness rewards for accurate mathematical answers
-- Length penalty to encourage concise reasoning (only when correct)
+- Length penalty to encourage concise reasoning and penalize overthinking
 
 Total possible reward: ~14.0 points
 - Basic answer format: 0.5 points
 - Full format compliance: 0.5 points
 - Soft format rewards: 1.0 points
 - Correctness: 8.0 points
-- Length penalty: up to 4.0 points (only if correct)
+- Length penalty: up to ±4.0 points (rewards shorter correct answers, penalizes long incorrect ones)
 """
-
-import math
 
 import regex
 
@@ -208,14 +206,17 @@ def compute_soft_format_reward(text: str) -> float:
     return reward
 
 
-def compute_length_penalty(text: str, is_correct: bool) -> float:
+def compute_length_penalty(text: str, is_correct: bool, all_lengths: list[int]) -> float:
     """
-    Compute length penalty that only rewards shorter reasoning when answer is correct.
-    Uses exponential decay so shorter sequences get dramatically higher rewards.
-    """
-    if not is_correct:
-        return 0.0
+    Compute length penalty based on relative length within batch.
 
+    Given k sampled responses, computes:
+    len_reward(i) = λ if correct, min(0, λ) if incorrect
+    where λ = 0.5 - (len(i) - min_len) / (max_len - min_len)
+
+    This promotes shorter responses and penalizes longer responses among correct ones,
+    while explicitly penalizing long responses with incorrect answers.
+    """
     # Get text before <answer>. If <answer> is not present, use the entire text
     if "<answer>" in text:
         before_answer = text.split("<answer>")[0]
@@ -223,17 +224,25 @@ def compute_length_penalty(text: str, is_correct: bool) -> float:
         before_answer = text
 
     # Simple word count as proxy for tokens (since we don't have tokenizer access)
-    token_length = len(before_answer.split())
+    current_length = len(before_answer.split())
 
-    # Exponential decay parameters (matching qwen3_grpo_length_penalty.py)
-    max_reward = 2.0
-    half_life_tokens = 1000  # At this length, reward will be 50% of max
-    decay_lambda = math.log(2) / half_life_tokens
+    # Batch-aware length penalty implementation
+    min_len = min(all_lengths)
+    max_len = max(all_lengths)
 
-    # Exponential decay: reward = max_reward * exp(-lambda * token_length)
-    reward = max_reward * math.exp(-decay_lambda * token_length)
+    # If all responses have same length, set length reward to zero
+    if max_len == min_len:
+        return 0.0
 
-    return reward
+    # Compute λ = 1.0 - (len(i) - min_len) / (max_len - min_len)
+    lambda_val = 1.0 - ((current_length - min_len) / (max_len - min_len))
+
+    if is_correct:
+        # For correct answers, give λ reward (can be positive or negative)
+        return lambda_val
+    else:
+        # For incorrect answers, give min(0, λ) reward (only penalty, no reward)
+        return min(0, lambda_val)
 
 
 def compute_score(data_source, solution_str, ground_truth, extra_info=None):
@@ -244,7 +253,7 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None):
         data_source: The input data/prompt (not used in this implementation)
         solution_str: The model's generated response/solution
         ground_truth: The expected answer
-        extra_info: Optional extra information (not used in this implementation)
+        extra_info: Dict containing batch information, expects 'all_lengths' key with list of lengths
 
     Returns:
         Float reward score for this single example
@@ -276,11 +285,19 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None):
     extracted_answer = extract_answer(solution_str)
     is_correct = math_equal(extracted_answer, ground_truth)
 
+    # Extract batch length information from extra_info
+    all_lengths = []
+    if extra_info and isinstance(extra_info, dict) and "all_lengths" in extra_info:
+        all_lengths = extra_info["all_lengths"]
+
     if is_correct:
         total_reward += 8.0
-
-        # 5. Length penalty (up to 4.0 points, only if correct)
-        length_reward = compute_length_penalty(solution_str, is_correct=True)
+        # 5. Length penalty (up to 4.0 points)
+        length_reward = compute_length_penalty(solution_str, is_correct=True, all_lengths=all_lengths)
+        total_reward += length_reward
+    else:
+        # 5. Length penalty for incorrect answers (only penalties)
+        length_reward = compute_length_penalty(solution_str, is_correct=False, all_lengths=all_lengths)
         total_reward += length_reward
 
     return total_reward

@@ -54,13 +54,32 @@ class NaiveRewardManager:
         reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
         reward_extra_info = defaultdict(list)
 
+        # First pass: collect all response lengths grouped by prompt_ids
+        prompt_to_lengths: dict[tuple[int], list[int]] = defaultdict(list)
+        prompt_id_to_key = {}  # Map from data index to prompt key
+
+        for i in range(len(data)):
+            data_item = data[i]
+            prompt_ids = data_item.batch["prompts"]
+            response_ids = data_item.batch["responses"]
+
+            prompt_length = prompt_ids.shape[-1]
+            valid_response_length = data_item.batch["attention_mask"][prompt_length:].sum()
+
+            # Use prompt_ids as key (convert to tuple for hashing)
+            valid_prompt_length = data_item.batch["attention_mask"][:prompt_length].sum()
+            valid_prompt_ids = prompt_ids[-valid_prompt_length:]
+            prompt_key = tuple(valid_prompt_ids.tolist())
+
+            prompt_to_lengths[prompt_key].append(int(valid_response_length))
+            prompt_id_to_key[i] = prompt_key
+
         already_print_data_sources = {}
 
         for i in range(len(data)):
             data_item = data[i]  # DataProtoItem
 
             prompt_ids = data_item.batch["prompts"]
-
             prompt_length = prompt_ids.shape[-1]
 
             valid_prompt_length = data_item.batch["attention_mask"][:prompt_length].sum()
@@ -79,6 +98,10 @@ class NaiveRewardManager:
             extra_info = data_item.non_tensor_batch.get("extra_info", {})
             num_turns = data_item.non_tensor_batch.get("__num_turns__", None)
             extra_info["num_turns"] = num_turns
+
+            # Add all_lengths for this prompt group to extra_info
+            prompt_key = prompt_id_to_key[i]
+            extra_info["all_lengths"] = prompt_to_lengths[prompt_key]
 
             score = self.compute_score(
                 data_source=data_source,
