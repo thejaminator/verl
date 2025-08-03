@@ -431,7 +431,7 @@ def main():
         model_name="Qwen/Qwen3-4B",
         num_generations=8,  # Reduced from 16 for better efficiency
         micro_batch=4,  # Increased from 16 (adjust based on GPU memory)
-        gradient_accumulation_steps=2,  # To achieve effective batch size of 16
+        gradient_accumulation_steps=4,  # To achieve effective batch size of 4 * 4 = 16
         micro_batch_size_per_gpu=4,  # Optimized for single GPU
         max_seq_length=10_000,  # More reasonable for math problems
         max_prompt_length=1_000,  # Reduced from 6000, matching reference
