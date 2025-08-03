@@ -234,8 +234,8 @@ def compute_length_penalty(text: str, is_correct: bool, all_lengths: list[int]) 
     if max_len == min_len:
         return 0.0
 
-    # Compute λ = 1.0 - (len(i) - min_len) / (max_len - min_len)
-    lambda_val = 1.0 - ((current_length - min_len) / (max_len - min_len))
+    # Compute λ = 0.5 - (len(i) - min_len) / (max_len - min_len)
+    lambda_val = 0.5 - ((current_length - min_len) / (max_len - min_len))
 
     if is_correct:
         # For correct answers, give λ reward (can be positive or negative)
@@ -281,7 +281,7 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None):
     soft_reward = compute_soft_format_reward(solution_str)
     total_reward += soft_reward
 
-    # 4. Correctness reward (8.0 points)
+    # 4. Correctness reward (1.0 points)
     extracted_answer = extract_answer(solution_str)
     is_correct = math_equal(extracted_answer, ground_truth)
 
@@ -291,12 +291,11 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None):
         all_lengths = extra_info["all_lengths"]
 
     if is_correct:
-        total_reward += 8.0
-        # 5. Length penalty (up to 4.0 points)
+        total_reward += 1.0
+        # 5. Length penalty (up to 0.5 points)
         length_reward = compute_length_penalty(solution_str, is_correct=True, all_lengths=all_lengths)
         total_reward += length_reward
     else:
-        # 5. Length penalty for incorrect answers (only penalties)
         length_reward = compute_length_penalty(solution_str, is_correct=False, all_lengths=all_lengths)
         total_reward += length_reward
 
