@@ -350,8 +350,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
         "actor_rollout_ref.ref.fsdp_config.wrap_policy.min_num_params=0",
         f"actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
         # Rollout configuration
-        # actor_rollout_ref.model.use_fused_kernels
-        "actor_rollout_ref.model.use_fused_kernels=false",
+        "actor_rollout_ref.model.use_fused_kernels=true",
         "actor_rollout_ref.rollout.name=vllm",
         f"actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
         "actor_rollout_ref.rollout.temperature=1.0",
@@ -363,7 +362,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
         "actor_rollout_ref.rollout.dtype=bfloat16",
         "actor_rollout_ref.rollout.gpu_memory_utilization=0.6",
         "actor_rollout_ref.rollout.ignore_eos=false",
-        "actor_rollout_ref.rollout.enforce_eager=true",
+        "actor_rollout_ref.rollout.enforce_eager=false",
         "actor_rollout_ref.rollout.free_cache_engine=true",
         "actor_rollout_ref.rollout.load_format=dummy_dtensor",
         "actor_rollout_ref.rollout.tensor_model_parallel_size=1",
