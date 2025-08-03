@@ -17,8 +17,8 @@ Total possible reward: ~14.0 points
 """
 
 import math
+
 import regex
-from typing import Union
 
 
 def parse_digits(num):
@@ -56,8 +56,8 @@ def numeric_equal(prediction, reference, tol=1e-4):
 
 
 def math_equal(
-    prediction: Union[bool, float, str],
-    reference: Union[float, str],
+    prediction: bool | float | str,
+    reference: float | str,
     include_percentage: bool = True,
     is_close: bool = True,
 ) -> bool:

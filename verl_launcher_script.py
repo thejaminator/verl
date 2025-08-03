@@ -9,15 +9,17 @@ Based on the verl documentation and examples.
 
 import json
 import os
+
 # set HF_HOME to /workspace
 os.environ["HF_HOME"] = "/workspace"
-import sys
 import subprocess
-import shutil
+import sys
 from typing import Optional, Sequence
-from pydantic import BaseModel
+
 # Step 2: Push to HuggingFace Hub
 from huggingface_hub import HfApi
+from pydantic import BaseModel
+
 
 class ChatMessage(BaseModel):
     role: str
@@ -95,7 +97,7 @@ def load_and_convert_dataset(dataset_path: str, output_path: str, data_source: s
     print(f"Loading dataset from: {dataset_path}")
 
     data = []
-    with open(dataset_path, "r") as f:
+    with open(dataset_path) as f:
         for idx, line in enumerate(f):
             if line.strip():
                 sample_dict = json.loads(line)
@@ -103,10 +105,10 @@ def load_and_convert_dataset(dataset_path: str, output_path: str, data_source: s
 
                 # Convert to verl format following the pattern from examples
                 prompt_messages = [msg.model_dump() for msg in sample.messages]
-                
+
                 # Extract split from filename (train/test/eval)
                 split = "train" if "train" in dataset_path else ("test" if "test" in dataset_path else "eval")
-                
+
                 # Create structured data following the pattern
                 structured_data = {
                     "data_source": data_source,
@@ -128,7 +130,6 @@ def load_and_convert_dataset(dataset_path: str, output_path: str, data_source: s
 
     print(f"Converted {len(data)} samples to {output_path}")
     return len(data)
-
 
 
 def convert_verl_to_hf_and_push(params: VerlParams, step: Optional[int] = None):
@@ -196,8 +197,6 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: Optional[int] = None):
     print(f"Running model merger: {' '.join(merge_cmd)}")
     subprocess.run(merge_cmd, capture_output=True, text=True, check=True)
     print("✅ Successfully converted checkpoint to HuggingFace format")
-
-    
 
     # Determine repository name
     repo_name = f"{params.hub_repo_id}-step-{step}" if step else params.hub_repo_id
@@ -298,7 +297,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
     """
 
     # Construct the verl training command with Hydra overrides
-    max_num_batched_tokens=params.max_prompt_length + params.max_response_length
+    max_num_batched_tokens = params.max_prompt_length + params.max_response_length
     cmd = [
         sys.executable,
         "-m",
@@ -307,85 +306,85 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
         # Data configuration
         f"data.train_files={train_parquet}",
         f"data.val_files={eval_parquet if eval_parquet else train_parquet}",
-        f"data.prompt_key=prompt",
+        "data.prompt_key=prompt",
         f"data.max_prompt_length={params.max_prompt_length}",
         f"data.max_response_length={params.max_response_length}",
         f"data.train_batch_size={params.micro_batch * params.gradient_accumulation_steps}",
-        f"data.shuffle=true",
-        f"data.truncation=error",
-        f"data.filter_overlong_prompts=true",
+        "data.shuffle=true",
+        "data.truncation=error",
+        "data.filter_overlong_prompts=true",
         # Algorithm configuration
-        f"algorithm.gamma=1.0",
-        f"algorithm.lam=1.0",
-        f"algorithm.adv_estimator=grpo",
-        f"algorithm.use_kl_in_reward=false",
-        f"algorithm.kl_ctrl.type=fixed",
+        "algorithm.gamma=1.0",
+        "algorithm.lam=1.0",
+        "algorithm.adv_estimator=grpo",
+        "algorithm.use_kl_in_reward=false",
+        "algorithm.kl_ctrl.type=fixed",
         f"algorithm.kl_ctrl.kl_coef={params.beta}",
         # Model configuration
-        f"actor_rollout_ref.hybrid_engine=true",
+        "actor_rollout_ref.hybrid_engine=true",
         f"actor_rollout_ref.model.path={params.model_name}",
-        f"actor_rollout_ref.model.enable_gradient_checkpointing=true",
-        f"actor_rollout_ref.model.trust_remote_code=false",
-        f"actor_rollout_ref.model.use_remove_padding=true",
+        "actor_rollout_ref.model.enable_gradient_checkpointing=true",
+        "actor_rollout_ref.model.trust_remote_code=false",
+        "actor_rollout_ref.model.use_remove_padding=true",
         # Actor configuration
-        f"actor_rollout_ref.actor.strategy=fsdp2",
+        "actor_rollout_ref.actor.strategy=fsdp2",
         f"actor_rollout_ref.actor.ppo_mini_batch_size={params.micro_batch}",
         f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
-        f"actor_rollout_ref.actor.ppo_epochs=1",
-        f"actor_rollout_ref.actor.grad_clip=0.5",
-        f"actor_rollout_ref.actor.clip_ratio=0.2",
-        f"actor_rollout_ref.actor.entropy_coeff=0.0",
-        f"actor_rollout_ref.actor.use_kl_loss=true",
-        f"actor_rollout_ref.actor.kl_loss_coef=0.001",
-        f"actor_rollout_ref.actor.kl_loss_type=low_var_kl",
+        "actor_rollout_ref.actor.ppo_epochs=1",
+        "actor_rollout_ref.actor.grad_clip=0.5",
+        "actor_rollout_ref.actor.clip_ratio=0.2",
+        "actor_rollout_ref.actor.entropy_coeff=0.0",
+        "actor_rollout_ref.actor.use_kl_loss=true",
+        "actor_rollout_ref.actor.kl_loss_coef=0.001",
+        "actor_rollout_ref.actor.kl_loss_type=low_var_kl",
         f"actor_rollout_ref.actor.optim.lr={params.learning_rate}",
         f"actor_rollout_ref.actor.optim.lr_warmup_steps={params.warmup_steps}",
-        f"actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.0",
+        "actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.0",
         f"actor_rollout_ref.actor.optim.total_training_steps={params.max_steps}",
-        f"actor_rollout_ref.actor.fsdp_config.wrap_policy.min_num_params=0",
-        f"actor_rollout_ref.actor.fsdp_config.param_offload=true",
-        f"actor_rollout_ref.actor.fsdp_config.optimizer_offload=true",
+        "actor_rollout_ref.actor.fsdp_config.wrap_policy.min_num_params=0",
+        "actor_rollout_ref.actor.fsdp_config.param_offload=true",
+        "actor_rollout_ref.actor.fsdp_config.optimizer_offload=true",
         # Reference model configuration
-        f"actor_rollout_ref.ref.strategy=fsdp2",
-        f"actor_rollout_ref.ref.fsdp_config.param_offload=true",
-        f"actor_rollout_ref.ref.fsdp_config.wrap_policy.min_num_params=0",
+        "actor_rollout_ref.ref.strategy=fsdp2",
+        "actor_rollout_ref.ref.fsdp_config.param_offload=true",
+        "actor_rollout_ref.ref.fsdp_config.wrap_policy.min_num_params=0",
         f"actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
         # Rollout configuration
         # actor_rollout_ref.model.use_fused_kernels
-        f"actor_rollout_ref.model.use_fused_kernels=true",
-        f"actor_rollout_ref.rollout.name=vllm",
+        "actor_rollout_ref.model.use_fused_kernels=true",
+        "actor_rollout_ref.rollout.name=vllm",
         f"actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
-        f"actor_rollout_ref.rollout.temperature=1.0",
-        f"actor_rollout_ref.rollout.top_k=-1",
-        f"actor_rollout_ref.rollout.top_p=1.0",
+        "actor_rollout_ref.rollout.temperature=1.0",
+        "actor_rollout_ref.rollout.top_k=-1",
+        "actor_rollout_ref.rollout.top_p=1.0",
         f"actor_rollout_ref.rollout.prompt_length={params.max_prompt_length}",
         f"actor_rollout_ref.rollout.response_length={params.max_response_length}",
         f"actor_rollout_ref.rollout.max_num_batched_tokens={max_num_batched_tokens}",
-        f"actor_rollout_ref.rollout.dtype=bfloat16",
-        f"actor_rollout_ref.rollout.gpu_memory_utilization=0.6",
-        f"actor_rollout_ref.rollout.ignore_eos=false",
-        f"actor_rollout_ref.rollout.enforce_eager=true",
-        f"actor_rollout_ref.rollout.free_cache_engine=true",
-        f"actor_rollout_ref.rollout.load_format=dummy_dtensor",
-        f"actor_rollout_ref.rollout.tensor_model_parallel_size=1",
+        "actor_rollout_ref.rollout.dtype=bfloat16",
+        "actor_rollout_ref.rollout.gpu_memory_utilization=0.6",
+        "actor_rollout_ref.rollout.ignore_eos=false",
+        "actor_rollout_ref.rollout.enforce_eager=true",
+        "actor_rollout_ref.rollout.free_cache_engine=true",
+        "actor_rollout_ref.rollout.load_format=dummy_dtensor",
+        "actor_rollout_ref.rollout.tensor_model_parallel_size=1",
         f"actor_rollout_ref.rollout.n={params.num_generations}",
-        f"actor_rollout_ref.rollout.val_kwargs.temperature=1.0",
-        f"actor_rollout_ref.rollout.val_kwargs.n=1",
-        f"actor_rollout_ref.rollout.val_kwargs.do_sample=true",
+        "actor_rollout_ref.rollout.val_kwargs.temperature=1.0",
+        "actor_rollout_ref.rollout.val_kwargs.n=1",
+        "actor_rollout_ref.rollout.val_kwargs.do_sample=true",
         # Reward model configuration
-        f"reward_model.enable=false",
+        "reward_model.enable=false",
         # Custom reward function
         f"custom_reward_function.path={reward_file}",
-        f"custom_reward_function.name=compute_score",
+        "custom_reward_function.name=compute_score",
         # Trainer configuration
-        f"trainer.total_epochs=1",
+        "trainer.total_epochs=1",
         f"trainer.project_name={params.wandb_project}",
         f"trainer.experiment_name=grpo-{params.model_name.split('/')[-1]}",
-        f"trainer.nnodes=1",
+        "trainer.nnodes=1",
         f"trainer.n_gpus_per_node={params.n_gpus}",
         f"trainer.save_freq={params.save_steps}",
         f"trainer.test_freq={params.save_steps}",
-        f"trainer.val_before_train=false",
+        "trainer.val_before_train=false",
         f"trainer.default_local_dir={params.output_dir}",
     ]
 
@@ -426,7 +425,6 @@ def main():
     # Load environment variables
     hf_api_key = os.getenv("HF_WRITE_TOKEN")
     wandb_key = os.getenv("WANDB_KEY")
-    
 
     # Configuration (optimized based on reference GRPO setup)
     params = VerlParams(
@@ -489,7 +487,7 @@ def main():
 
     # Use math reward function directly
     reward_file = "math_reward_function.py"
-    
+
     if os.path.exists(reward_file):
         print(f"Using math reward function: {reward_file}")
         print("Reward function includes:")
