@@ -64,6 +64,7 @@ class NaiveRewardManager:
             response_ids = data_item.batch["responses"]
 
             prompt_length = prompt_ids.shape[-1]
+            # 0s after EOS token
             valid_response_length = data_item.batch["attention_mask"][prompt_length:].sum()
 
             # Use prompt_ids as key (convert to tuple for hashing)
