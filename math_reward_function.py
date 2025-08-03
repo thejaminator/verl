@@ -226,7 +226,7 @@ def compute_length_penalty(text: str, is_correct: bool) -> float:
     token_length = len(before_answer.split())
 
     # Exponential decay parameters (matching qwen3_grpo_length_penalty.py)
-    max_reward = 4.0
+    max_reward = 2.0
     half_life_tokens = 1000  # At this length, reward will be 50% of max
     decay_lambda = math.log(2) / half_life_tokens
 

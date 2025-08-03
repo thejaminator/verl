@@ -366,9 +366,9 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
         f"actor_rollout_ref.rollout.load_format=dummy_dtensor",
         f"actor_rollout_ref.rollout.tensor_model_parallel_size=1",
         f"actor_rollout_ref.rollout.n={params.num_generations}",
-        f"actor_rollout_ref.rollout.val_kwargs.temperature=0",
+        f"actor_rollout_ref.rollout.val_kwargs.temperature=1.0",
         f"actor_rollout_ref.rollout.val_kwargs.n=1",
-        f"actor_rollout_ref.rollout.val_kwargs.do_sample=false",
+        f"actor_rollout_ref.rollout.val_kwargs.do_sample=true",
         # Reward model configuration
         f"reward_model.enable=false",
         # Custom reward function
@@ -382,7 +382,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
         f"trainer.n_gpus_per_node={params.n_gpus}",
         f"trainer.save_freq={params.save_steps}",
         f"trainer.test_freq={params.save_steps}",
-        f"trainer.val_before_train=true",
+        f"trainer.val_before_train=false",
         f"trainer.default_local_dir={params.output_dir}",
     ]
 
@@ -430,14 +430,14 @@ def main():
         model_name="Qwen/Qwen3-4B",
         num_generations=4,  # Reduced from 16 for better efficiency
         batch_size=16,  # Increased from 16 (adjust based on GPU memory)
-        gradient_accumulation_steps=2,  # To achieve effective batch size of 16
+        gradient_accumulation_steps=4,  # To achieve effective batch size of 16
         micro_batch_size_per_gpu=4,  # Optimized for single GPU
         max_seq_length=10_000,  # More reasonable for math problems
         max_prompt_length=1_000,  # Reduced from 6000, matching reference
         max_response_length=9_000,  # Reduced from 6000, matching reference
         lora_rank=32,
         max_steps=4000,
-        learning_rate=1e-6,  # Reduced from 6e-5, closer to reference 1e-6
+        learning_rate=5e-6,  # reference 1e-6
         output_dir="/workspace/verl_outputs",
         train_path="../math_train.jsonl",
         eval_path="../math_test.jsonl",
