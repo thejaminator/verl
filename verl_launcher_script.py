@@ -332,7 +332,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
         f"actor_rollout_ref.actor.ppo_mini_batch_size={params.batch_size}",
         f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
         f"actor_rollout_ref.actor.ppo_epochs=1",
-        f"actor_rollout_ref.actor.grad_clip=1.0",
+        f"actor_rollout_ref.actor.grad_clip=0.5",
         f"actor_rollout_ref.actor.clip_ratio=0.2",
         f"actor_rollout_ref.actor.entropy_coeff=0.0",
         f"actor_rollout_ref.actor.use_kl_loss=true",
