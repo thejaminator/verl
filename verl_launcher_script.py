@@ -303,6 +303,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
         sys.executable,
         "-m",
         "verl.trainer.main_ppo",
+        "trainer.log_val_generations=10",
         # Data configuration
         f"data.train_files={train_parquet}",
         f"data.val_files={eval_parquet if eval_parquet else train_parquet}",
