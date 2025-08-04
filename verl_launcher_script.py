@@ -440,8 +440,8 @@ def main():
         max_steps=4000,
         learning_rate=2e-6,  # reduced from 1e-5
         output_dir="/workspace/verl_outputs",
-        train_path="../math_train.jsonl",
-        eval_path="../math_test.jsonl",
+        train_path="../math_only_train.jsonl",
+        eval_path="../math_only_test.jsonl",
         save_steps=20,
         n_gpus=1,
         use_wandb=True,
