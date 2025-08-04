@@ -291,7 +291,9 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None):
         length_reward = compute_length_penalty(is_correct=True, all_lengths=all_lengths, current_length=response_length)
         total_reward += length_reward
     else:
-        length_reward = compute_length_penalty(is_correct=False, all_lengths=all_lengths, current_length=response_length)
+        length_reward = compute_length_penalty(
+            is_correct=False, all_lengths=all_lengths, current_length=response_length
+        )
         total_reward += length_reward
 
     return total_reward
