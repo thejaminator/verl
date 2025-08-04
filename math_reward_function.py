@@ -8,12 +8,12 @@ This implements a comprehensive reward system for math problem solving with:
 - Correctness rewards for accurate mathematical answers
 - Length penalty to encourage concise reasoning and penalize overthinking
 
-Total possible reward: ~14.0 points
-- Basic answer format: 0.5 points
-- Full format compliance: 0.5 points
-- Soft format rewards: 1.0 points
-- Correctness: 8.0 points
-- Length penalty: up to ±4.0 points (rewards shorter correct answers, penalizes long incorrect ones)
+Total possible reward: 3.5 points
+- Basic answer format: 0.5 points (presence of <answer> tags)
+- Full format compliance: 0.5 points (complete <think>/<answer> structure)
+- Soft format rewards: 1.0 points (partial credit for format elements)
+- Correctness: 1.0 points (mathematically correct answer)
+- Length penalty: up to ±0.5 points (rewards shorter correct answers, penalizes long incorrect ones)
 """
 
 import regex
@@ -175,38 +175,39 @@ def compute_soft_format_reward(text: str) -> float:
     reward = 0.0
     MAX_SOFT_REWARD = 1.0
     NUMBER_OF_SOFT_REWARDS = 8
+    value_increment = MAX_SOFT_REWARD / NUMBER_OF_SOFT_REWARDS
 
     # If starts with <
     if text.strip().startswith("<"):
-        reward += MAX_SOFT_REWARD / NUMBER_OF_SOFT_REWARDS
+        reward += value_increment
     # If first token is <think>
     if text.strip().startswith("<think>"):
-        reward += MAX_SOFT_REWARD / NUMBER_OF_SOFT_REWARDS
+        reward += value_increment
     # If there is exactly one <think>
     if text.count("<think>") == 1:
-        reward += MAX_SOFT_REWARD / NUMBER_OF_SOFT_REWARDS
+        reward += value_increment
     # If there is exactly one </think>
     if text.count("</think>") == 1:
-        reward += MAX_SOFT_REWARD / NUMBER_OF_SOFT_REWARDS
+        reward += value_increment
     # If there is exactly one <answer>
     if text.count("<answer>") == 1:
-        reward += MAX_SOFT_REWARD / NUMBER_OF_SOFT_REWARDS
+        reward += value_increment
     # If there is exactly one </answer>
     if text.count("</answer>") == 1:
-        reward += MAX_SOFT_REWARD / NUMBER_OF_SOFT_REWARDS
+        reward += value_increment
     # We didn't ask for boxed{}, reward if it's not there
     if "\\boxed{" not in text:
-        reward += MAX_SOFT_REWARD / NUMBER_OF_SOFT_REWARDS
+        reward += value_increment
     # No text between </think> and <answer>
     if "</think>" in text and "<answer>" in text:
         between_tags = text.split("</think>")[1].split("<answer>")[0]
         if between_tags.strip() == "":
-            reward += MAX_SOFT_REWARD / NUMBER_OF_SOFT_REWARDS
+            reward += value_increment
 
     return reward
 
 
-def compute_length_penalty(text: str, is_correct: bool, all_lengths: list[int]) -> float:
+def compute_length_penalty(is_correct: bool, all_lengths: list[int], current_length: int) -> float:
     """
     Compute length penalty based on relative length within batch.
 
@@ -217,14 +218,6 @@ def compute_length_penalty(text: str, is_correct: bool, all_lengths: list[int]) 
     This promotes shorter responses and penalizes longer responses among correct ones,
     while explicitly penalizing long responses with incorrect answers.
     """
-    # Get text before <answer>. If <answer> is not present, use the entire text
-    if "<answer>" in text:
-        before_answer = text.split("<answer>")[0]
-    else:
-        before_answer = text
-
-    # Simple word count as proxy for tokens (since we don't have tokenizer access)
-    current_length = len(before_answer.split())
 
     # Batch-aware length penalty implementation
     min_len = min(all_lengths)
@@ -286,17 +279,19 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None):
     is_correct = math_equal(extracted_answer, ground_truth)
 
     # Extract batch length information from extra_info
-    all_lengths = []
-    if extra_info and isinstance(extra_info, dict) and "all_lengths" in extra_info:
-        all_lengths = extra_info["all_lengths"]
+    assert extra_info is not None and isinstance(extra_info, dict), "extra_info must be a non-None dictionary"
+    assert "all_lengths" in extra_info, "extra_info must contain 'all_lengths' key"
+    all_lengths: list[int] = extra_info["all_lengths"]
+    assert "response_length" in extra_info, "extra_info must contain 'response_length' key"
+    response_length: int = extra_info["response_length"]
 
     if is_correct:
         total_reward += 1.0
         # 5. Length penalty (up to 0.5 points)
-        length_reward = compute_length_penalty(solution_str, is_correct=True, all_lengths=all_lengths)
+        length_reward = compute_length_penalty(is_correct=True, all_lengths=all_lengths, current_length=response_length)
         total_reward += length_reward
     else:
-        length_reward = compute_length_penalty(solution_str, is_correct=False, all_lengths=all_lengths)
+        length_reward = compute_length_penalty(is_correct=False, all_lengths=all_lengths, current_length=response_length)
         total_reward += length_reward
 
     return total_reward

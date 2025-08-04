@@ -104,6 +104,9 @@ class NaiveRewardManager:
             prompt_key = prompt_id_to_key[i]
             extra_info["all_lengths"] = prompt_to_lengths[prompt_key]
 
+            # Add response_length for this prompt group to extra_info
+            extra_info["response_length"] = valid_response_length
+
             score = self.compute_score(
                 data_source=data_source,
                 solution_str=response_str,
