@@ -438,11 +438,11 @@ def main():
         max_response_length=9_000,  # Reduced from 6000, matching reference
         lora_rank=32,
         max_steps=4000,
-        learning_rate=5e-6,  # reference 1e-6
+        learning_rate=2e-6,  # reduced from 1e-5
         output_dir="/workspace/verl_outputs",
         train_path="../math_train.jsonl",
         eval_path="../math_test.jsonl",
-        save_steps=50,
+        save_steps=20,
         n_gpus=1,
         use_wandb=True,
         wandb_project="gsm8k-verl-grpo",
