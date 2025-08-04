@@ -431,18 +431,20 @@ def main():
         model_name="Qwen/Qwen3-4B",
         num_generations=8,  # Reduced from 16 for better efficiency
         micro_batch=4,  # Increased from 16 (adjust based on GPU memory)
-        gradient_accumulation_steps=4,  # To achieve effective batch size of 4 * 4 = 16
         micro_batch_size_per_gpu=4,  # Optimized for single GPU
+        warmup_steps=5,
+        gradient_accumulation_steps=16,  # To achieve effective batch size of 4 * 16 = 64
         max_seq_length=10_000,  # More reasonable for math problems
         max_prompt_length=1_000,  # Reduced from 6000, matching reference
         max_response_length=9_000,  # Reduced from 6000, matching reference
+        learning_rate=2e-6,  # reduced from 1e-5, simple rl uses 1e-5
+        beta=1e-4, # follows simple rl zoo https://github.com/hkust-nlp/simpleRL-reason
         lora_rank=32,
         max_steps=4000,
-        learning_rate=2e-6,  # reduced from 1e-5
         output_dir="/workspace/verl_outputs",
         train_path="../math_only_train.jsonl",
         eval_path="../math_only_test.jsonl",
-        save_steps=20,
+        save_steps=10,
         n_gpus=1,
         use_wandb=True,
         wandb_project="gsm8k-verl-grpo",
