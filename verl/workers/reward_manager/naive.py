@@ -96,6 +96,10 @@ class NaiveRewardManager:
             if i == 0:
                 print("[prompt]" + prompt_str + "\n")
                 print("[response]" + response_str + "\n")
+                # lengths for this prompt
+                prompt_key = prompt_id_to_key[i]
+                print("[lengths]" + str(prompt_to_lengths[prompt_key]) + "\n")
+                print("[response_length]" + str(valid_response_length) + "\n")
 
             ground_truth = data_item.non_tensor_batch["reward_model"]["ground_truth"]
             data_source = data_item.non_tensor_batch[self.reward_fn_key]
