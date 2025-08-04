@@ -93,6 +93,10 @@ class NaiveRewardManager:
             # decode
             prompt_str = self.tokenizer.decode(valid_prompt_ids, skip_special_tokens=True)
             response_str = self.tokenizer.decode(valid_response_ids, skip_special_tokens=True)
+            
+
+            ground_truth = data_item.non_tensor_batch["reward_model"]["ground_truth"]
+
             if i == 0:
                 print("[prompt]" + prompt_str + "\n")
                 print("[response]" + response_str + "\n")
@@ -100,8 +104,8 @@ class NaiveRewardManager:
                 prompt_key = prompt_id_to_key[i]
                 print("[lengths]" + str(prompt_to_lengths[prompt_key]) + "\n")
                 print("[response_length]" + str(valid_response_length) + "\n")
+                print("[ground_truth]" + ground_truth + "\n")
 
-            ground_truth = data_item.non_tensor_batch["reward_model"]["ground_truth"]
             data_source = data_item.non_tensor_batch[self.reward_fn_key]
             extra_info = data_item.non_tensor_batch.get("extra_info", {})
             num_turns = data_item.non_tensor_batch.get("__num_turns__", None)
@@ -139,6 +143,7 @@ class NaiveRewardManager:
                 print("[prompt]", prompt_str)
                 print("[response]", response_str)
                 print("[ground_truth]", ground_truth)
+                
                 if isinstance(score, dict):
                     for key, value in score.items():
                         print(f"[{key}]", value)
