@@ -234,8 +234,10 @@ def compute_length_penalty(is_correct: bool, all_lengths: list[int], current_len
         # For correct answers, give λ reward (can be positive or negative)
         return lambda_val
     else:
+        # if wrong, just give 0
+        return 0.0
         # For incorrect answers, give min(0, λ) reward (only penalty, no reward)
-        return min(0, lambda_val)
+        # return min(0, lambda_val)
 
 
 def compute_score(data_source, solution_str, ground_truth, extra_info=None):
