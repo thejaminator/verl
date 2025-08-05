@@ -240,7 +240,7 @@ def compute_length_penalty(is_correct: bool, all_lengths: list[int], current_len
         # return min(0, lambda_val)
 
 
-def compute_score(data_source, solution_str, ground_truth, extra_info=None):
+def compute_score(data_source, solution_str, ground_truth, extra_info=None) -> dict[str, str | float | bool]:
     """
     Custom reward function for math problems using proper verl interface.
 
@@ -300,4 +300,4 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None):
         )
         total_reward += length_reward
 
-    return total_reward
+    return {"score": total_reward, "is_correct": is_correct}

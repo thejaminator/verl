@@ -13,8 +13,10 @@
 # limitations under the License.
 
 from collections import defaultdict
+from typing import Mapping
 
 import torch
+import wandb
 
 from verl import DataProto
 from verl.utils.reward_score import default_compute_score
@@ -41,6 +43,10 @@ class NaiveRewardManager:
         self.compute_score = compute_score or default_compute_score
         self.reward_fn_key = reward_fn_key  # Store the key for accessing the data source
 
+        # Initialize wandb table for logging
+        assert wandb.run is not None, "wandb.run must be initialized"
+        self.wandb_table = wandb.Table(columns=["prompt", "response", "ground_truth", "is_correct", "score"])
+
     def __call__(self, data: DataProto, return_dict=False):
         """We will expand this function gradually based on the available datasets"""
 
@@ -57,6 +63,7 @@ class NaiveRewardManager:
         # First pass: collect all response lengths grouped by prompt_ids
         prompt_to_lengths: dict[tuple[int], list[int]] = defaultdict(list)
         prompt_id_to_key = {}  # Map from data index to prompt key
+        corrects: list[bool] = []
 
         for i in range(len(data)):
             data_item = data[i]
@@ -117,12 +124,17 @@ class NaiveRewardManager:
             # Add response_length for this prompt group to extra_info
             extra_info["response_length"] = valid_response_length
 
-            score = self.compute_score(
+            score: Mapping[str, str | float | bool] = self.compute_score(
                 data_source=data_source,
                 solution_str=response_str,
                 ground_truth=ground_truth,
                 extra_info=extra_info,
-            )
+            )  # type: ignore
+
+            assert "score" in score, "score must contain 'score' key, reward function should add it"
+            assert "is_correct" in score, "score must contain 'is_correct' key, reward function should add it"
+            is_correct: bool = score["is_correct"]  # type: ignore
+            corrects.append(is_correct)
 
             if isinstance(score, dict):
                 reward = score["score"]
@@ -131,6 +143,12 @@ class NaiveRewardManager:
                     reward_extra_info[key].append(value)
             else:
                 reward = score
+
+            # now log prompt, response, ground_truth, is_correct, score to a table in wandb
+            if self.wandb_table is not None:
+                # Extract the score value if it's a dict
+                score_value: float = float(score["score"])  # type: ignore
+                self.wandb_table.add_data(prompt_str, response_str, ground_truth, is_correct, float(score_value))
 
             reward_tensor[i, valid_response_length - 1] = reward
 
@@ -148,6 +166,8 @@ class NaiveRewardManager:
                         print(f"[{key}]", value)
                 else:
                     print("[score]", score)
+        # log batch accuracy to wandb
+        wandb.log({"actor/batch_accuracy": sum(corrects) / len(corrects)})
 
         if return_dict:
             return {
