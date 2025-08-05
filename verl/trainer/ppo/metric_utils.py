@@ -474,11 +474,12 @@ def log_reward_manager_table(batch: DataProto, step: int, existing_table: Option
     # Extract table data from batch (list of individual row dictionaries)
     table_data_list = batch.non_tensor_batch["table_data"]
 
-    assert existing_table is not None, "Existing table must be provided"
-
     first_row = table_data_list[0]
     table_keys = list(first_row.keys())
     with_steps = ["step"] + table_keys
+
+    if existing_table is None:
+        existing_table = wandb.Table(columns=with_steps)
 
     # Initialize table on first call or if columns changed
     assert existing_table.columns == with_steps, "Columns of existing table must match new columns"
