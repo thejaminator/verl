@@ -403,6 +403,8 @@ def process_validation_metrics(
                     continue
                 if isinstance(var_vals[0], dict):
                     continue
+                if not isinstance(var_vals[0], (int, float)):
+                    continue
 
                 metric = {}
                 n_resps = len(var_vals)
