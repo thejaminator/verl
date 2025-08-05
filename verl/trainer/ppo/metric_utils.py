@@ -401,6 +401,8 @@ def process_validation_metrics(
             for var_name, var_vals in var2vals.items():
                 if isinstance(var_vals[0], str):
                     continue
+                if isinstance(var_vals[0], dict):
+                    continue
 
                 metric = {}
                 n_resps = len(var_vals)
