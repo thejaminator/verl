@@ -17,7 +17,7 @@ Metrics related to the PPO trainer.
 
 from collections import defaultdict
 from functools import partial
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import numpy as np
 import torch
@@ -453,35 +453,43 @@ def process_validation_metrics(
     return data_src2var2metric2val
 
 
-def log_reward_manager_table(batch: DataProto, step: int) -> None:
+def log_reward_manager_table(batch: DataProto, step: int, existing_table: Optional[Any] = None) -> Optional[Any]:
     """
-    Log reward manager table data to wandb.
+    Log reward manager table data to wandb, appending to existing table if provided.
 
     Args:
         batch: DataProto object containing the batch data with table_data in non_tensor_batch
         step: Current training step
-    """
+        existing_table: Existing wandb.Table to append to, or None to create new table
 
+    Returns:
+        Updated wandb.Table with new data appended, or None if no data to log
+    """
     if not wandb.run:
-        return
+        return existing_table
 
     if "table_data" not in batch.non_tensor_batch:
-        return
+        return existing_table
 
     # Extract table data from batch (list of individual row dictionaries)
     table_data_list = batch.non_tensor_batch["table_data"]
+
+    assert existing_table is not None, "Existing table must be provided"
 
     first_row = table_data_list[0]
     table_keys = list(first_row.keys())
     with_steps = ["step"] + table_keys
 
-    # Create wandb table
-    table = wandb.Table(columns=with_steps)
+    # Initialize table on first call or if columns changed
+    assert existing_table.columns == with_steps, "Columns of existing table must match new columns"
+    rollouts_table = existing_table
 
-    # Add data rows
+    # Add new data rows
     for row_data in table_data_list:
         values_to_add = [row_data[key] for key in table_keys]
-        table.add_data(step, *values_to_add)
+        rollouts_table.add_data(step, *values_to_add)
 
-    # log table to wandb
-    wandb.log({"rollouts": table})
+    # Log the updated table
+    wandb.log({"rollouts": rollouts_table}, step=step)
+
+    return rollouts_table

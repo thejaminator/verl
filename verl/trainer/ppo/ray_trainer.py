@@ -27,7 +27,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from pprint import pprint
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import ray
@@ -562,6 +562,9 @@ class RayPPOTrainer:
 
         self.total_training_steps = total_training_steps
         print(f"Total training steps: {self.total_training_steps}")
+
+        # Initialize rollouts table for wandb logging
+        self.rollouts_table: Optional[Any] = None  # wandb.Table or None
 
         try:
             OmegaConf.set_struct(self.config, True)
@@ -1374,7 +1377,9 @@ class RayPPOTrainer:
                 # Log reward manager table data to wandb
                 from verl.trainer.ppo.metric_utils import log_reward_manager_table
 
-                log_reward_manager_table(batch=batch, step=self.global_steps)
+                self.rollouts_table = log_reward_manager_table(
+                    batch=batch, step=self.global_steps, existing_table=self.rollouts_table
+                )
 
                 # TODO: make a canonical logger that supports various backend
                 logger.log(data=metrics, step=self.global_steps)
