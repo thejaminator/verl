@@ -152,6 +152,8 @@ class NaiveRewardManager:
                     "prompt": prompt_str,
                     "response": response_str,
                     "ground_truth": ground_truth,
+                    "given_answer": response_str,
+                    "length": valid_response_length,
                     "is_correct": is_correct,
                     "score": score_value,
                 }

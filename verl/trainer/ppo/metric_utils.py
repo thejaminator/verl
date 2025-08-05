@@ -481,19 +481,17 @@ def log_reward_manager_table(batch: DataProto, step: int) -> None:
     # Extract table data from batch (list of individual row dictionaries)
     table_data_list = batch.non_tensor_batch["table_data"]
 
+    first_row = table_data_list[0]
+    table_keys = list(first_row.keys())
+    with_steps = ["step"] + table_keys
+
     # Create wandb table
-    table = wandb.Table(columns=["step", "prompt", "response", "ground_truth", "is_correct", "score"])
+    table = wandb.Table(columns=with_steps)
 
     # Add data rows
     for row_data in table_data_list:
-        table.add_data(
-            step,
-            row_data["prompt"],
-            row_data["response"],
-            row_data["ground_truth"],
-            row_data["is_correct"],
-            row_data["score"],
-        )
+        values_to_add = [row_data[key] for key in table_keys]
+        table.add_data(step, *values_to_add)
 
     # log table to wandb
     wandb.log({"rollouts": table})
