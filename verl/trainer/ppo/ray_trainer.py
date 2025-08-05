@@ -1371,6 +1371,11 @@ class RayPPOTrainer:
                 if isinstance(self.train_dataloader.sampler, AbstractCurriculumSampler):
                     self.train_dataloader.sampler.update(batch=batch)
 
+                # Log reward manager table data to wandb
+                from verl.trainer.ppo.metric_utils import log_reward_manager_table
+
+                log_reward_manager_table(batch=batch, step=self.global_steps)
+
                 # TODO: make a canonical logger that supports various backend
                 logger.log(data=metrics, step=self.global_steps)
 

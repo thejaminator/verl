@@ -25,6 +25,13 @@ import torch
 from verl import DataProto
 from verl.utils.import_utils import deprecated
 
+try:
+    import wandb
+
+    HAS_WANDB = True
+except ImportError:
+    HAS_WANDB = False
+
 
 @deprecated("verl.utils.metric.reduce_metrics")
 def reduce_metrics(metrics: dict[str, list[Any]]) -> dict[str, Any]:
@@ -176,6 +183,11 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         metrics["num_turns/min"] = num_turns.min()
         metrics["num_turns/max"] = num_turns.max()
         metrics["num_turns/mean"] = num_turns.mean()
+
+    # Add batch accuracy from reward manager
+    if "batch_accuracy" in batch.non_tensor_batch:
+        batch_accuracy = batch.non_tensor_batch["batch_accuracy"][0]  # Extract from array
+        metrics["critic/batch_accuracy"] = batch_accuracy
 
     return metrics
 
@@ -444,3 +456,38 @@ def process_validation_metrics(
                 data_src2var2metric2val[data_source][var_name][metric_name] = np.mean(prompt_vals)
 
     return data_src2var2metric2val
+
+
+def log_reward_manager_table(batch: DataProto, step: int) -> None:
+    """
+    Log reward manager table data to wandb.
+
+    Args:
+        batch: DataProto object containing the batch data with table_data in non_tensor_batch
+        step: Current training step
+    """
+    if not HAS_WANDB or not wandb.run:
+        return
+
+    if "table_data" not in batch.non_tensor_batch:
+        return
+
+    # Extract table data from batch (it's wrapped in a list)
+    table_data = batch.non_tensor_batch["table_data"][0]
+
+    # Create wandb table
+    table = wandb.Table(columns=["step", "prompt", "response", "ground_truth", "is_correct", "score"])
+
+    # Add data rows
+    for i in range(len(table_data["prompts"])):
+        table.add_data(
+            step,
+            table_data["prompts"][i],
+            table_data["responses"][i],
+            table_data["ground_truths"][i],
+            table_data["is_corrects"][i],
+            table_data["scores"][i],
+        )
+
+    # log table to wandb
+    wandb.log({"rollouts": table})
