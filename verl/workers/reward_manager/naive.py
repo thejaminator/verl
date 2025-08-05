@@ -131,6 +131,8 @@ class NaiveRewardManager:
 
             assert "score" in score, "score must contain 'score' key, reward function should add it"
             assert "is_correct" in score, "score must contain 'is_correct' key, reward function should add it"
+            assert "parsed_answer" in score, "score must contain 'parsed_answer' key, reward function should add it"
+            parsed_answer: str = score["parsed_answer"]  # type: ignore
             is_correct: bool = score["is_correct"]  # type: ignore
             corrects.append(is_correct)
 
@@ -152,9 +154,9 @@ class NaiveRewardManager:
                     "prompt": prompt_str,
                     "response": response_str,
                     "ground_truth": ground_truth,
-                    "given_answer": response_str,
                     "length": valid_response_length,
                     "is_correct": is_correct,
+                    "parsed_answer": parsed_answer,
                     "score": score_value,
                 }
             )

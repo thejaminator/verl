@@ -464,7 +464,11 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None) -> d
         )
         total_reward += length_reward
 
-    return {"score": total_reward, "is_correct": is_correct}
+    return {
+        "score": total_reward,
+        "is_correct": is_correct,
+        "parsed_answer": extracted_answer,
+    }
 
 
 if __name__ == "__main__":
