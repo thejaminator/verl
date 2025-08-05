@@ -186,7 +186,8 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
 
     # Add batch accuracy from reward manager
     if "batch_accuracy" in batch.non_tensor_batch:
-        batch_accuracy = batch.non_tensor_batch["batch_accuracy"][0]  # Extract from array
+        batch_accuracy_list = batch.non_tensor_batch["batch_accuracy"]  # List of booleans
+        batch_accuracy = np.mean(batch_accuracy_list).item()  # Compute mean accuracy
         metrics["critic/batch_accuracy"] = batch_accuracy
 
     return metrics
@@ -466,27 +467,32 @@ def log_reward_manager_table(batch: DataProto, step: int) -> None:
         batch: DataProto object containing the batch data with table_data in non_tensor_batch
         step: Current training step
     """
-    if not HAS_WANDB or not wandb.run:
+    if not HAS_WANDB:
+        return
+
+    import wandb
+
+    if not wandb.run:
         return
 
     if "table_data" not in batch.non_tensor_batch:
         return
 
-    # Extract table data from batch (it's wrapped in a list)
-    table_data = batch.non_tensor_batch["table_data"][0]
+    # Extract table data from batch (list of individual row dictionaries)
+    table_data_list = batch.non_tensor_batch["table_data"]
 
     # Create wandb table
     table = wandb.Table(columns=["step", "prompt", "response", "ground_truth", "is_correct", "score"])
 
     # Add data rows
-    for i in range(len(table_data["prompts"])):
+    for row_data in table_data_list:
         table.add_data(
             step,
-            table_data["prompts"][i],
-            table_data["responses"][i],
-            table_data["ground_truths"][i],
-            table_data["is_corrects"][i],
-            table_data["scores"][i],
+            row_data["prompt"],
+            row_data["response"],
+            row_data["ground_truth"],
+            row_data["is_correct"],
+            row_data["score"],
         )
 
     # log table to wandb

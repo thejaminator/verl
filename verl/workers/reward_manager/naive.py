@@ -60,8 +60,8 @@ class NaiveRewardManager:
         prompt_id_to_key = {}  # Map from data index to prompt key
         corrects: list[bool] = []
 
-        # Collect data for logging table
-        table_data = {"prompts": [], "responses": [], "ground_truths": [], "is_corrects": [], "scores": []}
+        # Collect data for logging table - one entry per batch item
+        table_data: list[dict] = []
 
         for i in range(len(data)):
             data_item = data[i]
@@ -143,12 +143,19 @@ class NaiveRewardManager:
                 reward = score
 
             # Collect data for table logging (will be passed through reward_extra_info)
-            score_value = score["score"] if isinstance(score, dict) else score  # type: ignore
-            table_data["prompts"].append(prompt_str)
-            table_data["responses"].append(response_str)
-            table_data["ground_truths"].append(ground_truth)
-            table_data["is_corrects"].append(is_correct)
-            table_data["scores"].append(float(score_value))
+            if isinstance(score, dict):
+                score_value = float(score["score"])  # type: ignore
+            else:
+                score_value = float(score)
+            table_data.append(
+                {
+                    "prompt": prompt_str,
+                    "response": response_str,
+                    "ground_truth": ground_truth,
+                    "is_correct": is_correct,
+                    "score": score_value,
+                }
+            )
 
             reward_tensor[i, valid_response_length - 1] = reward
 
@@ -167,8 +174,8 @@ class NaiveRewardManager:
                 else:
                     print("[score]", score)
         # Add table data and batch accuracy to reward_extra_info for logging in training loop
-        reward_extra_info["table_data"] = [table_data]  # Wrap in list for consistency
-        reward_extra_info["batch_accuracy"] = [sum(corrects) / len(corrects)]
+        reward_extra_info["table_data"] = table_data  # List of individual row dicts
+        reward_extra_info["batch_accuracy"] = corrects  # List of booleans per batch item
 
         if return_dict:
             return {
