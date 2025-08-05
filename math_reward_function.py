@@ -289,11 +289,11 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None):
 
     if is_correct:
         total_reward += 1.0
-        # 5. Length penalty (up to 0.5 points)
-        length_reward = compute_length_penalty(is_correct=True, all_lengths=all_lengths, current_length=response_length)
+        # 5. Length penalty (up to 0.25 points)
+        length_reward = 0.5 * compute_length_penalty(is_correct=True, all_lengths=all_lengths, current_length=response_length)
         total_reward += length_reward
     else:
-        length_reward = compute_length_penalty(
+        length_reward = 0.5 * compute_length_penalty(
             is_correct=False, all_lengths=all_lengths, current_length=response_length
         )
         total_reward += length_reward
