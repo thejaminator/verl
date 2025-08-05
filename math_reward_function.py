@@ -14,43 +14,137 @@ Total possible reward: 3.5 points
 - Soft format rewards: 1.0 points (partial credit for format elements)
 - Correctness: 1.0 points (mathematically correct answer)
 - Length penalty: up to ±0.5 points (rewards shorter correct answers, penalizes long incorrect ones)
+This logic is largely copied from the Hendrycks' MATH release (math_equivalence), and borrowed from:
+- https://github.com/microsoft/ProphetNet/tree/master/CRITIC
+- https://github.com/openai/prm800k
+- https://github.com/microsoft/ToRA/blob/main/src/eval/grader.py
+- https://github.com/deepseek-ai/DeepSeek-Math/blob/main/evaluation/eval/eval_utils.py
+
+from https://github.com/QwenLM/Qwen2.5-Math/blob/main/evaluation/grader.py
 """
 
+import re
+from math import isclose
+
 import regex
+from latex2sympy2 import latex2sympy
+from sympy import N, simplify
+from sympy.parsing.latex import parse_latex
+from sympy.parsing.sympy_parser import parse_expr
+
+
+def choice_answer_clean(pred: str) -> str:
+    cleaned_pred = pred.strip("\n").rstrip(".").rstrip("/").strip(" ").lstrip(":")
+    # Clean the answer based on the dataset
+    tmp: list[str] = re.findall(r"\b(A|B|C|D|E)\b", cleaned_pred.upper())
+    if tmp:
+        answer_list = tmp
+    else:
+        answer_list = [cleaned_pred.strip().strip(".")]
+    final_answer = answer_list[-1]
+    # Remove the period at the end, again!
+    final_answer = final_answer.rstrip(".").rstrip("/")
+    return final_answer
 
 
 def parse_digits(num):
-    """Parse numeric strings, handling commas and percentages."""
     num = regex.sub(",", "", str(num))
     try:
         return float(num)
-    except:
+    except:  # noqa: E722
         if num.endswith("%"):
             num = num[:-1]
             if num.endswith("\\"):
                 num = num[:-1]
             try:
                 return float(num) / 100
-            except:
+            except:  # noqa: E722
                 pass
     return None
 
 
 def is_digit(num):
-    """Check if a string represents a number."""
-    try:
-        float(str(num).replace(",", ""))
-        return True
-    except:
-        return False
+    # paired with parse_digits
+    return parse_digits(num) is not None
 
 
-def numeric_equal(prediction, reference, tol=1e-4):
-    """Check if two numbers are approximately equal."""
+def str_to_pmatrix(input_str):
+    input_str = input_str.strip()
+    matrix_str = re.findall(r"\{.*,.*\}", input_str)
+    pmatrix_list = []
+
+    for m in matrix_str:
+        m = m.strip("{}")
+        pmatrix = r"\begin{pmatrix}" + m.replace(",", "\\") + r"\end{pmatrix}"
+        pmatrix_list.append(pmatrix)
+
+    return ", ".join(pmatrix_list)
+
+
+def numeric_equal(prediction: float, reference: float):
+    # Note that relative tolerance has significant impact
+    # on the result of the synthesized GSM-Hard dataset
+    # if reference.is_integer():
+    #     return isclose(reference, round(prediction), abs_tol=1e-4)
+    # else:
+    # prediction = round(prediction, len(str(reference).split(".")[-1]))
+    return isclose(reference, prediction, rel_tol=1e-4)
+
+
+def symbolic_equal(a, b):
+    def _parse(s):
+        for f in [parse_latex, parse_expr, latex2sympy]:
+            try:
+                return f(s.replace("\\\\", "\\"))
+            except:  # noqa: E722
+                try:
+                    return f(s)
+                except:  # noqa: E722
+                    pass
+        return s
+
+    a = _parse(a)
+    b = _parse(b)
+
+    # direct equal
     try:
-        return abs(float(prediction) - float(reference)) < tol
-    except:
-        return False
+        if str(a) == str(b) or a == b:
+            return True
+    except:  # noqa: E722
+        pass
+
+    # simplify equal
+    try:
+        if a.equals(b) or simplify(a - b) == 0:
+            return True
+    except:  # noqa: E722
+        pass
+
+    # equation equal
+    try:
+        if (abs(a.lhs - a.rhs)).equals(abs(b.lhs - b.rhs)):
+            return True
+    except:  # noqa: E722
+        pass
+
+    try:
+        if numeric_equal(float(N(a)), float(N(b))):
+            return True
+    except:  # noqa: E722
+        pass
+
+    # matrix
+    try:
+        # if a and b are matrix
+        if a.shape == b.shape:
+            _a = a.applyfunc(lambda x: round(x, 3))
+            _b = b.applyfunc(lambda x: round(x, 3))
+            if _a.equals(_b):
+                return True
+    except:  # noqa: E722
+        pass
+
+    return False
 
 
 def math_equal(
@@ -60,65 +154,135 @@ def math_equal(
     is_close: bool = True,
 ) -> bool:
     """
-    Mathematical equality check with support for various formats.
-    Based on grader.py implementation.
+    Exact match of math if and only if:
+    1. numerical equal: both can convert to float and are equal
+    2. symbolic equal: both can convert to sympy expression and are equal
     """
-    if str(prediction).strip().lower() == str(reference).strip().lower():
+    if str(prediction.strip().lower()) == str(reference.strip().lower()):
+        return True
+    if reference in ["A", "B", "C", "D", "E"] and choice_answer_clean(prediction) == reference:
         return True
 
-    try:  # Numerical equality
+    try:  # 1. numerical equal
         if is_digit(prediction) and is_digit(reference):
-            pred_num = parse_digits(prediction)
-            ref_num = parse_digits(reference)
-
-            if pred_num is None or ref_num is None:
-                return False
-
-            # Handle percentage variations
+            prediction = parse_digits(prediction)
+            reference = parse_digits(reference)
+            # number questions
             if include_percentage:
-                gt_result = [ref_num / 100, ref_num, ref_num * 100]
+                gt_result = [reference / 100, reference, reference * 100]
             else:
-                gt_result = [ref_num]
-
+                gt_result = [reference]
             for item in gt_result:
                 try:
                     if is_close:
-                        if numeric_equal(pred_num, item):
+                        if numeric_equal(prediction, item):
                             return True
                     else:
-                        if item == pred_num:
+                        if item == prediction:
                             return True
                 except Exception:
                     continue
             return False
-    except:
+    except:  # noqa: E722
         pass
 
     if not prediction and prediction not in [0, False]:
         return False
 
-    # String equality after normalization
-    prediction = str(prediction).strip()
+    # 2. symbolic equal
     reference = str(reference).strip()
+    prediction = str(prediction).strip()
 
-    # Remove brackets and parentheses for comparison
+    ## pmatrix (amps)
+    if "pmatrix" in prediction and "pmatrix" not in reference:
+        reference = str_to_pmatrix(reference)
+
+    ## deal with [], (), {}
     pred_str, ref_str = prediction, reference
-    for s in ["{", "}", "(", ")", "[", "]"]:
+    if (prediction.startswith("[") and prediction.endswith("]") and not reference.startswith("(")) or (
+        prediction.startswith("(") and prediction.endswith(")") and not reference.startswith("[")
+    ):
+        pred_str = pred_str.strip("[]()")
+        ref_str = ref_str.strip("[]()")
+    for s in ["{", "}", "(", ")"]:
         ref_str = ref_str.replace(s, "")
         pred_str = pred_str.replace(s, "")
-
     if pred_str.lower() == ref_str.lower():
         return True
 
-    # Try symbolic comparison (simplified)
-    try:
-        # Remove common mathematical notation differences
-        pred_clean = prediction.replace(" ", "").lower()
-        ref_clean = reference.replace(" ", "").lower()
-        if pred_clean == ref_clean:
+    ## [a, b] vs. [c, d], return a==c and b==d
+    if (
+        regex.match(r"(\(|\[).+(\)|\])", prediction) is not None
+        and regex.match(r"(\(|\[).+(\)|\])", reference) is not None
+    ):
+        pred_parts = prediction[1:-1].split(",")
+        ref_parts = reference[1:-1].split(",")
+        if len(pred_parts) == len(ref_parts):
+            if all(
+                [math_equal(pred_parts[i], ref_parts[i], include_percentage, is_close) for i in range(len(pred_parts))]
+            ):
+                return True
+    if (
+        (prediction.startswith("\\begin{pmatrix}") or prediction.startswith("\\begin{bmatrix}"))
+        and (prediction.endswith("\\end{pmatrix}") or prediction.endswith("\\end{bmatrix}"))
+        and (reference.startswith("\\begin{pmatrix}") or reference.startswith("\\begin{bmatrix}"))
+        and (reference.endswith("\\end{pmatrix}") or reference.endswith("\\end{bmatrix}"))
+    ):
+        pred_lines = [
+            line.strip()
+            for line in prediction[len("\\begin{pmatrix}") : -len("\\end{pmatrix}")].split("\\\\")
+            if line.strip()
+        ]
+        ref_lines = [
+            line.strip()
+            for line in reference[len("\\begin{pmatrix}") : -len("\\end{pmatrix}")].split("\\\\")
+            if line.strip()
+        ]
+        matched = True
+        if len(pred_lines) == len(ref_lines):
+            for pred_line, ref_line in zip(pred_lines, ref_lines, strict=False):
+                pred_parts = pred_line.split("&")
+                ref_parts = ref_line.split("&")
+                if len(pred_parts) == len(ref_parts):
+                    if not all(
+                        [
+                            math_equal(
+                                pred_parts[i],
+                                ref_parts[i],
+                                include_percentage,
+                                is_close,
+                            )
+                            for i in range(len(pred_parts))
+                        ]
+                    ):
+                        matched = False
+                        break
+                else:
+                    matched = False
+                if not matched:
+                    break
+        else:
+            matched = False
+        if matched:
             return True
-    except:
-        pass
+
+    if prediction.count("=") == 1 and reference.count("=") == 1:
+        pred = prediction.split("=")
+        pred = f"{pred[0].strip()} - ({pred[1].strip()})"
+        ref = reference.split("=")
+        ref = f"{ref[0].strip()} - ({ref[1].strip()})"
+        if symbolic_equal(pred, ref) or symbolic_equal(f"-({pred})", ref):
+            return True
+    elif prediction.count("=") == 1 and len(prediction.split("=")[0].strip()) <= 2 and "=" not in reference:
+        if math_equal(prediction.split("=")[1], reference, include_percentage, is_close):
+            return True
+    elif reference.count("=") == 1 and len(reference.split("=")[0].strip()) <= 2 and "=" not in prediction:
+        if math_equal(prediction, reference.split("=")[1], include_percentage, is_close):
+            return True
+
+    # symbolic equal with sympy
+    if symbolic_equal(prediction, reference):
+        return True
 
     return False
 
@@ -301,3 +465,8 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None) -> d
         total_reward += length_reward
 
     return {"score": total_reward, "is_correct": is_correct}
+
+
+if __name__ == "__main__":
+    result = math_equal("-1/9", "-\\frac{1}{9}")
+    print(result)

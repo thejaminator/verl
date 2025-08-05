@@ -21,16 +21,10 @@ from typing import Any, Callable
 
 import numpy as np
 import torch
+import wandb
 
 from verl import DataProto
 from verl.utils.import_utils import deprecated
-
-try:
-    import wandb
-
-    HAS_WANDB = True
-except ImportError:
-    HAS_WANDB = False
 
 
 @deprecated("verl.utils.metric.reduce_metrics")
@@ -467,10 +461,6 @@ def log_reward_manager_table(batch: DataProto, step: int) -> None:
         batch: DataProto object containing the batch data with table_data in non_tensor_batch
         step: Current training step
     """
-    if not HAS_WANDB:
-        return
-
-    import wandb
 
     if not wandb.run:
         return

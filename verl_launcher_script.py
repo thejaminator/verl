@@ -224,7 +224,8 @@ model_type: llama
 
 # {repo_name}
 
-This model was trained using [verl](https://github.com/volcengine/verl) with GRPO (Group Relative Policy Optimization) on math reasoning tasks.
+This model was trained using [verl](https://github.com/volcengine/verl) with GRPO (Group Relative Policy Optimization) 
+on math reasoning tasks.
 
 ## Training Details
 
