@@ -391,8 +391,8 @@ def compute_length_penalty(is_correct: bool, all_lengths: list[int], current_len
     if max_len == min_len:
         return 0.0
 
-    # Compute λ = 0.5 - (len(i) - min_len) / (max_len - min_len)
-    lambda_val = 0.5 - ((current_length - min_len) / (max_len - min_len))
+    # Compute λ = 1 - (len(i) - min_len) / (max_len - min_len)
+    lambda_val = 1 - ((current_length - min_len) / (max_len - min_len))
 
     if is_correct:
         # For correct answers, give λ reward (can be positive or negative)
@@ -454,12 +454,12 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None) -> d
     if is_correct:
         total_reward += 1.0
         # 5. Length penalty (up to 0.25 points)
-        length_reward = 0.5 * compute_length_penalty(
+        length_reward = 0.25 * compute_length_penalty(
             is_correct=True, all_lengths=all_lengths, current_length=response_length
         )
         total_reward += length_reward
     else:
-        length_reward = 0.5 * compute_length_penalty(
+        length_reward = 0.25 * compute_length_penalty(
             is_correct=False, all_lengths=all_lengths, current_length=response_length
         )
         total_reward += length_reward

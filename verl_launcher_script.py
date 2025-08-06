@@ -438,8 +438,9 @@ def main():
         max_seq_length=10_000,  # More reasonable for math problems
         max_prompt_length=1_000,  # Reduced from 6000, matching reference
         max_response_length=9_000,  # Reduced from 6000, matching reference
-        learning_rate=2e-6,  # reduced from 1e-5, simple rl uses 1e-5
-        beta=1e-4,  # follows simple rl zoo https://github.com/hkust-nlp/simpleRL-reason
+        learning_rate=5e-6,  # reduced from 1e-5, simple rl uses 1e-5
+        # beta=1e-4,  # follows simple rl zoo https://github.com/hkust-nlp/simpleRL-reason
+        beta=0,  # no beta for science!
         lora_rank=32,
         max_steps=4000,
         output_dir="/workspace/verl_outputs",
