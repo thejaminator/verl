@@ -483,7 +483,7 @@ def log_reward_manager_table(batch: DataProto, step: int, existing_table: Option
     with_steps = ["step"] + table_keys
 
     if existing_table is None:
-        existing_table = wandb.Table(columns=with_steps)
+        existing_table = wandb.Table(columns=with_steps, log_mode="INCREMENTAL")
 
     # Initialize table on first call or if columns changed
     assert existing_table.columns == with_steps, "Columns of existing table must match new columns"
