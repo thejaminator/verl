@@ -443,7 +443,7 @@ def main():
         beta=0,  # no beta for science!
         lora_rank=32,
         max_steps=4000,
-        output_dir="/workspace/verl_outputs",
+        output_dir="/workspace/verl_outputs_no_beta",
         train_path="../math_only_train_level_2_and_above.jsonl",
         eval_path="../math_only_test_level_2_and_above.jsonl",
         save_steps=10,
