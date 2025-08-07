@@ -670,6 +670,65 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None) -> d
     }
 
 
+def compute_score_no_length_penalty(
+    data_source, solution_str, ground_truth, extra_info=None
+) -> dict[str, str | float | bool]:
+    """
+    Custom reward function for math problems using proper verl interface.
+
+    Args:
+        data_source: The input data/prompt (not used in this implementation)
+        solution_str: The model's generated response/solution
+        ground_truth: The expected answer
+        extra_info: Dict containing batch information, expects 'all_lengths' key with list of lengths
+
+    Returns:
+        Float reward score for this single example
+    """
+    total_reward = 0.0
+
+    # Ensure inputs are strings
+    if not isinstance(solution_str, str):
+        solution_str = str(solution_str)
+    if not isinstance(ground_truth, str):
+        ground_truth = str(ground_truth)
+
+    # 1. Basic answer format reward (0.5 points)
+    # Reward if <answer> and </answer> tags are present
+    if has_answer_tags(solution_str):
+        total_reward += 0.5
+
+    # 2. Full format compliance reward (0.5 points)
+    # Reward if follows complete format with <think> tags
+    if has_all_format(solution_str):
+        total_reward += 0.5
+
+    # 3. Soft format rewards (1.0 points)
+    # Partial credit for format compliance
+    soft_reward = compute_soft_format_reward(solution_str)
+    total_reward += soft_reward
+
+    # 4. Correctness reward (1.0 points)
+    extracted_answer = extract_answer(solution_str)
+    is_correct = grade_answer(extracted_answer, ground_truth)
+
+    # Extract batch length information from extra_info
+    assert extra_info is not None and isinstance(extra_info, dict), "extra_info must be a non-None dictionary"
+    assert "all_lengths" in extra_info, "extra_info must contain 'all_lengths' key"
+    all_lengths: list[int] = extra_info["all_lengths"]
+    assert "response_length" in extra_info, "extra_info must contain 'response_length' key"
+    response_length: int = extra_info["response_length"]
+
+    if is_correct:
+        total_reward += 1.0
+
+    return {
+        "score": total_reward,
+        "is_correct": is_correct,
+        "parsed_answer": extracted_answer,
+    }
+
+
 if __name__ == "__main__":
     result = grade_answer("-1/9", "-\\frac{1}{9}")
     print(result)

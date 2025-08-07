@@ -35,6 +35,8 @@ class VerlParams(BaseModel):
     # Dataset paths
     train_path: str
     eval_path: Optional[str] = None
+    reward_function_name: str = "compute_score"
+    experiment_name: str | None = None
 
     # Model configuration
     model_name: str = "Qwen/Qwen2.5-3B"
@@ -147,7 +149,7 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: Optional[int] = None):
 
     # Construct checkpoint paths based on verl's default structure
     project_name = params.wandb_project
-    experiment_name = f"grpo-{params.model_name.split('/')[-1]}-no-beta"
+    experiment_name = params.experiment_name or f"grpo-{params.model_name.split('/')[-1]}-no-beta"
 
     # Find the latest checkpoint if step not specified
     if step is None:
@@ -376,7 +378,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
         "reward_model.enable=false",
         # Custom reward function
         f"custom_reward_function.path={reward_file}",
-        "custom_reward_function.name=compute_score",
+        f"custom_reward_function.name={params.reward_function_name}",
         # Trainer configuration
         "trainer.total_epochs=1",
         f"trainer.project_name={params.wandb_project}",
@@ -420,41 +422,8 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
         convert_verl_to_hf_and_push(params)
 
 
-def main():
+def verl_main(params: VerlParams):
     """Main training pipeline using verl"""
-
-    # Load environment variables
-    hf_api_key = os.getenv("HF_WRITE_TOKEN")
-    wandb_key = os.getenv("WANDB_KEY")
-
-    # Configuration (optimized based on reference GRPO setup)
-    params = VerlParams(
-        model_name="Qwen/Qwen3-4B",
-        num_generations=8,  # Reduced from 16 for better efficiency
-        micro_batch=4,  # Increased from 16 (adjust based on GPU memory)
-        micro_batch_size_per_gpu=4,  # Optimized for single GPU
-        warmup_steps=5,
-        gradient_accumulation_steps=32,  # To achieve effective batch size of 4 * 16 = 64
-        max_seq_length=10_000,  # More reasonable for math problems
-        max_prompt_length=1_000,  # Reduced from 6000, matching reference
-        max_response_length=9_000,  # Reduced from 6000, matching reference
-        learning_rate=5e-6,  # reduced from 1e-5, simple rl uses 1e-5
-        # beta=1e-4,  # follows simple rl zoo https://github.com/hkust-nlp/simpleRL-reason
-        beta=0,  # no beta for science!
-        lora_rank=32,
-        max_steps=4000,
-        output_dir="/workspace/verl_outputs_no_beta",
-        train_path="../math_only_train_filtered_noncot.jsonl",
-        eval_path="../math_only_test_level_2_and_above.jsonl",
-        save_steps=10,
-        n_gpus=1,
-        use_wandb=True,
-        wandb_project="gsm8k-verl-grpo",
-        # HuggingFace Hub configuration (like your current script)
-        push_to_hub=True,
-        hub_repo_id="thejaminator/math_22jul_verl",  # Updated with "_verl" suffix
-        hf_api_key=hf_api_key,
-    )
 
     # Validate required environment variables (like your current script)
     if params.push_to_hub:
@@ -511,7 +480,40 @@ def main():
 if __name__ == "__main__":
     import dotenv
 
-    # Load environment variables
     dotenv.load_dotenv()
 
-    main()
+    # Load environment variables
+    hf_api_key = os.getenv("HF_WRITE_TOKEN")
+    wandb_key = os.getenv("WANDB_KEY")
+
+    # Configuration (optimized based on reference GRPO setup)
+    params = VerlParams(
+        model_name="Qwen/Qwen3-4B",
+        num_generations=8,  # Reduced from 16 for better efficiency
+        micro_batch=4,  # Increased from 16 (adjust based on GPU memory)
+        micro_batch_size_per_gpu=4,  # Optimized for single GPU
+        warmup_steps=5,
+        gradient_accumulation_steps=32,  # To achieve effective batch size of 4 * 16 = 64
+        max_seq_length=10_000,  # More reasonable for math problems
+        max_prompt_length=1_000,  # Reduced from 6000, matching reference
+        max_response_length=9_000,  # Reduced from 6000, matching reference
+        learning_rate=5e-6,  # reduced from 1e-5, simple rl uses 1e-5
+        # beta=1e-4,  # follows simple rl zoo https://github.com/hkust-nlp/simpleRL-reason
+        beta=0,  # no beta for science!
+        lora_rank=32,
+        max_steps=4000,
+        output_dir="/workspace/verl_outputs_no_beta",
+        train_path="../math_only_train_filtered_noncot.jsonl",
+        eval_path="../math_only_test_level_2_and_above.jsonl",
+        save_steps=10,
+        n_gpus=1,
+        use_wandb=True,
+        wandb_project="gsm8k-verl-grpo",
+        # HuggingFace Hub configuration (like your current script)
+        push_to_hub=True,
+        hub_repo_id="thejaminator/math_22jul_verl",  # Updated with "_verl" suffix
+        hf_api_key=hf_api_key,
+        reward_function_name="compute_score",
+    )
+
+    verl_main(params)
