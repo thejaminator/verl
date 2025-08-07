@@ -16,6 +16,8 @@ import subprocess
 import sys
 from typing import Optional, Sequence
 
+import wandb
+
 # Step 2: Push to HuggingFace Hub
 from huggingface_hub import HfApi
 from pydantic import BaseModel
@@ -405,7 +407,6 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
     if params.use_wandb:
         wandb_key = params.wandb_api_key
         assert wandb_key, "WANDB_API_KEY is required for wandb logging"
-        
 
     print("Launching verl training with direct parameters...")
     print(f"Using GPUs: {env.get('CUDA_VISIBLE_DEVICES', 'all')}")
@@ -433,9 +434,9 @@ def verl_main(params: VerlParams):
             print("❌ Error: hub_repo_id must be provided when push_to_hub=True")
             sys.exit(1)
 
-    if params.use_wandb and not params.wandb_api_key:
-        print("❌ Error: WANDB_KEY environment variable is required for wandb logging")
-        sys.exit(1)
+    if params.use_wandb:
+        assert params.wandb_api_key, "WANDB_API_KEY is required for wandb logging"
+        wandb.login(key=params.wandb_api_key)
 
     print("Starting verl GRPO training setup...")
     print(f"Model: {params.model_name}")
