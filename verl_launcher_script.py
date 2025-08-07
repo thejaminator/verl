@@ -71,6 +71,7 @@ class VerlParams(BaseModel):
     n_gpus: int = 1
     use_wandb: bool = True
     wandb_project: str = "gsm8k-verl-grpo"
+    wandb_api_key: Optional[str] = None
 
 
 def extract_answer(text: str) -> str:
@@ -402,11 +403,9 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: O
     env["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in range(params.n_gpus))
 
     if params.use_wandb:
-        wandb_key = os.getenv("WANDB_KEY")
-        if wandb_key:
-            env["WANDB_API_KEY"] = wandb_key
-        else:
-            print("Warning: WANDB_KEY not found in environment variables")
+        wandb_key = params.wandb_api_key
+        assert wandb_key, "WANDB_API_KEY is required for wandb logging"
+        
 
     print("Launching verl training with direct parameters...")
     print(f"Using GPUs: {env.get('CUDA_VISIBLE_DEVICES', 'all')}")
@@ -434,7 +433,7 @@ def verl_main(params: VerlParams):
             print("❌ Error: hub_repo_id must be provided when push_to_hub=True")
             sys.exit(1)
 
-    if params.use_wandb and not params.wandb_key:
+    if params.use_wandb and not params.wandb_api_key:
         print("❌ Error: WANDB_KEY environment variable is required for wandb logging")
         sys.exit(1)
 
