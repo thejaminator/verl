@@ -434,7 +434,7 @@ def verl_main(params: VerlParams):
             print("❌ Error: hub_repo_id must be provided when push_to_hub=True")
             sys.exit(1)
 
-    if params.use_wandb and not wandb_key:
+    if params.use_wandb and not params.wandb_key:
         print("❌ Error: WANDB_KEY environment variable is required for wandb logging")
         sys.exit(1)
 
