@@ -10,6 +10,7 @@ if __name__ == "__main__":
     # Load environment variables
     hf_api_key = os.getenv("HF_WRITE_TOKEN")
     wandb_key = os.getenv("WANDB_KEY")
+    assert wandb_key, "WANDB_KEY is required for wandb logging"
 
     # Configuration (optimized based on reference GRPO setup)
     params = VerlParams(
