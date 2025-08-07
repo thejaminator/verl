@@ -427,7 +427,7 @@ def verl_main(params: VerlParams):
 
     # Validate required environment variables (like your current script)
     if params.push_to_hub:
-        if not hf_api_key:
+        if not params.hf_api_key:
             print("❌ Error: HF_WRITE_TOKEN environment variable is required for HuggingFace push")
             sys.exit(1)
         if not params.hub_repo_id:
