@@ -500,7 +500,7 @@ if __name__ == "__main__":
         learning_rate=5e-6,  # reduced from 1e-5, simple rl uses 1e-5
         # beta=1e-4,  # follows simple rl zoo https://github.com/hkust-nlp/simpleRL-reason
         beta=0,  # no beta for science!
-        lora_rank=32,
+        # lora_rank=32, # lora not implemented in this script yet. But should be easy
         max_steps=4000,
         output_dir="/workspace/verl_outputs_no_beta",
         train_path="../math_only_train_filtered_noncot.jsonl",
