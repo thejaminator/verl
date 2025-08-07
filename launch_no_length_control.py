@@ -40,6 +40,7 @@ if __name__ == "__main__":
         hf_api_key=hf_api_key,
         reward_function_name="compute_score_no_length_penalty",
         experiment_name="grpo-no-penalty",
+        wandb_api_key=wandb_key,
     )
 
     verl_main(params)

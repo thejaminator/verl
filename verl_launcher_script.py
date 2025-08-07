@@ -513,6 +513,7 @@ if __name__ == "__main__":
         hub_repo_id="thejaminator/math_22jul_verl",  # Updated with "_verl" suffix
         hf_api_key=hf_api_key,
         reward_function_name="compute_score",
+        wandb_api_key=wandb_key,
     )
 
     verl_main(params)
