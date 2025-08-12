@@ -17,7 +17,7 @@ import asyncio
 import re
 import traceback
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import aiofiles
 
@@ -97,7 +97,7 @@ def center_word_with_equals_exactly(word: str, total_length: int, char: str = "=
     return char * left_pad + " " + word + " " + char * right_pad
 
 
-def highlight_keyword(content: str, keyword: Optional[str]):
+def highlight_keyword(content: str, keyword: str | None):
     if not keyword:
         return Text(content)
     text = Text()
@@ -265,7 +265,7 @@ class JsonLineViewer(App):
             self.step_select.focus()
             await self.update_content()
 
-    def update_result_options(self, offset: int = 0, sort_desc: Optional[bool] = None):
+    def update_result_options(self, offset: int = 0, sort_desc: bool | None = None):
         options = []
         if isinstance(self.selected_step_index, int) and self.selected_step_index < len(self.data):
             if self.sample_num is None or sort_desc is not None:
@@ -289,7 +289,7 @@ class JsonLineViewer(App):
             else:
                 self.selected_sample_index = offset
 
-    async def update_content(self, search_keyword: Optional[str] = None):
+    async def update_content(self, search_keyword: str | None = None):
         content = ""
         try:
             samples = self.data[self.selected_step_index].get("samples", [])

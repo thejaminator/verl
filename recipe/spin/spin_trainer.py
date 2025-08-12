@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pprint import pprint
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import ray
@@ -364,10 +364,10 @@ class RaySPINTrainer:
         processor=None,
         reward_fn=None,
         val_reward_fn=None,
-        train_dataset: Optional[Dataset] = None,
-        val_dataset: Optional[Dataset] = None,
+        train_dataset: Dataset | None = None,
+        val_dataset: Dataset | None = None,
         collate_fn=None,
-        train_sampler: Optional[Sampler] = None,
+        train_sampler: Sampler | None = None,
         device_name=None,
     ):
         # assert get_torch_device().is_available(), 'cuda must be available on driver'

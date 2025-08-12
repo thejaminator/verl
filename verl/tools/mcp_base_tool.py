@@ -15,7 +15,7 @@
 import json
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 from fastmcp.exceptions import ClientError
@@ -43,7 +43,7 @@ class MCPBaseTool(BaseTool):
         """Return the OpenAI tool schema."""
         return self.tool_schema
 
-    async def create(self, instance_id: Optional[str] = None, **kwargs) -> str:
+    async def create(self, instance_id: str | None = None, **kwargs) -> str:
         """Create a tool instance.
 
         Args:

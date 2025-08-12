@@ -15,7 +15,6 @@
 This file contains utilities to manipulate torch memory buffers
 """
 
-from typing import Optional
 
 import torch
 from torch import nn
@@ -29,7 +28,7 @@ class MemoryBuffer:
     memory. It must have a unique type to support this behavior.
     """
 
-    def __init__(self, numel: int, numel_padded: int, dtype: torch.dtype, source: Optional[torch.Tensor] = None):
+    def __init__(self, numel: int, numel_padded: int, dtype: torch.dtype, source: torch.Tensor | None = None):
         self.numel = numel
         self.numel_padded = numel_padded
         self.dtype = dtype

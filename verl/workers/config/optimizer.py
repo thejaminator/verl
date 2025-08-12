@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass
-from typing import Optional
 
 from omegaconf import MISSING
 
@@ -38,7 +37,7 @@ class OptimizerConfig(BaseConfig):
     lr_warmup_steps_ratio: float = 0.0
     total_training_steps: int = -1
     weight_decay: float = 0.01
-    lr_warmup_steps: Optional[int] = -1
+    lr_warmup_steps: int | None = -1
 
     def __post_init__(self):
         assert self.lr != MISSING
@@ -55,7 +54,7 @@ class FSDPOptimizerConfig(OptimizerConfig):
         num_cycles (float): Number of cosine cycles in LR schedule.
     """
 
-    min_lr_ratio: Optional[float] = None
+    min_lr_ratio: float | None = None
     warmup_style: str = "constant"
     num_cycles: float = 0.5
 
@@ -85,10 +84,10 @@ class McoreOptimizerConfig(OptimizerConfig):
     optimizer: str = "adam"
     clip_grad: float = 1.0
     lr_warmup_init: float = 0.0
-    lr_decay_steps: Optional[int] = None
+    lr_decay_steps: int | None = None
     lr_decay_style: str = "linear"
     min_lr: float = 0.0
     weight_decay_incr_style: str = "constant"
     lr_wsd_decay_style: str = "exponential"
-    lr_wsd_decay_steps: Optional[int] = None
+    lr_wsd_decay_steps: int | None = None
     use_checkpoint_opt_param_scheduler: bool = False

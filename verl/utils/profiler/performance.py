@@ -16,7 +16,7 @@ import datetime
 import inspect
 import logging
 from contextlib import contextmanager
-from typing import Any, Optional
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -173,8 +173,8 @@ def marked_timer(
     name: str,
     timing_raw: dict[str, float],
     color: str = None,
-    domain: Optional[str] = None,
-    category: Optional[str] = None,
+    domain: str | None = None,
+    category: str | None = None,
 ):
     """Context manager for timing with platform markers.
 

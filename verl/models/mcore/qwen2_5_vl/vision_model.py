@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional
 
 import torch
 from megatron.core import InferenceParams
@@ -231,9 +230,9 @@ class Qwen2_5VisionModel(VisionModule):
 
     def forward(
         self,
-        vision_data: Optional[torch.Tensor],
+        vision_data: torch.Tensor | None,
         grid_thw: torch.Tensor,
-        inference_params: Optional[InferenceParams] = None,
+        inference_params: InferenceParams | None = None,
         extra_block_kwargs: dict = None,
     ) -> torch.Tensor:
         """Forward function of the Qwen2 Vision Model. This function passes the input tensors
@@ -288,8 +287,8 @@ class Qwen2_5VisionModel(VisionModule):
 
     def build_packed_seq_params(
         self,
-        grid_thw: Optional[torch.Tensor],
-        cu_seqlens: Optional[torch.Tensor] = None,
+        grid_thw: torch.Tensor | None,
+        cu_seqlens: torch.Tensor | None = None,
     ) -> PackedSeqParams:
         # NOTE: each frame is a sequence (rather than each grid)
         if grid_thw is not None:

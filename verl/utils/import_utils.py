@@ -21,7 +21,6 @@ import importlib.util
 import os
 import warnings
 from functools import cache, wraps
-from typing import Optional
 
 
 @cache
@@ -80,7 +79,7 @@ def import_external_libs(external_libs=None):
         importlib.import_module(external_lib)
 
 
-def load_extern_type(file_path: Optional[str], type_name: Optional[str]) -> type:
+def load_extern_type(file_path: str | None, type_name: str | None) -> type:
     """Load a external data type based on the file path and type name"""
     if not file_path:
         return None

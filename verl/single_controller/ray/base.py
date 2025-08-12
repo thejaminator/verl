@@ -16,7 +16,7 @@ import inspect
 import logging
 import time
 from copy import deepcopy
-from typing import Any, Optional
+from typing import Any
 
 import ray
 from ray.experimental.state.api import get_actor
@@ -84,12 +84,12 @@ def sort_placement_group_by_node_ip(pgs: list[PlacementGroup]) -> list[Placement
 class RayResourcePool(ResourcePool):
     def __init__(
         self,
-        process_on_nodes: Optional[list[int]] = None,
+        process_on_nodes: list[int] | None = None,
         use_gpu: bool = True,
         name_prefix: str = None,
         max_colocate_count: int = 10,
         detached=False,
-        accelerator_type: Optional[str] = None,
+        accelerator_type: str | None = None,
     ) -> None:
         super().__init__(process_on_nodes, max_colocate_count)
         self.use_gpu = use_gpu

@@ -29,7 +29,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import typing
 
 import torch
 import torch.distributed as dist
@@ -44,9 +43,9 @@ class LinearCrossEntropy(torch.autograd.Function):
         hidden: torch.Tensor,
         weight: torch.Tensor,
         labels: torch.Tensor,
-        temperature: typing.Optional[float] = 1.0,
-        reduction: typing.Optional[str] = "none",
-        dist_process_group: typing.Optional[dist.ProcessGroup] = None,
+        temperature: float | None = 1.0,
+        reduction: str | None = "none",
+        dist_process_group: dist.ProcessGroup | None = None,
     ) -> list[torch.Tensor]:
         """_summary_
 

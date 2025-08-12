@@ -16,7 +16,6 @@ import argparse
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional
 
 import torch
 from accelerate import init_empty_weights
@@ -104,15 +103,15 @@ class ModelMergerConfig:
 
     operation: str  # 'merge' or 'test'
     backend: str
-    target_dir: Optional[str] = "tmp"
-    hf_upload_path: Optional[str] = None
+    target_dir: str | None = "tmp"
+    hf_upload_path: str | None = None
     private: bool = False
-    test_hf_dir: Optional[str] = None
+    test_hf_dir: str | None = None
     tie_word_embedding: bool = False
     trust_remote_code: bool = False
     is_value_model: bool = False
-    local_dir: Optional[str] = None
-    hf_model_config_path: Optional[str] = None
+    local_dir: str | None = None
+    hf_model_config_path: str | None = None
     hf_upload: bool = field(init=False)
     use_cpu_initialization: bool = False
 

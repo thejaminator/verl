@@ -17,7 +17,7 @@ import functools
 import logging
 import os
 from contextlib import contextmanager
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import torch_npu
 from omegaconf import DictConfig
@@ -26,7 +26,7 @@ from torch_npu.npu import mstx
 from .profile import DistProfiler, ProfilerConfig
 
 
-def mark_start_range(message: Optional[str] = None) -> None:
+def mark_start_range(message: str | None = None) -> None:
     """Start a mark range in the profiler.
 
     Args:
@@ -46,7 +46,7 @@ def mark_end_range(range_id: str) -> None:
     return mstx.range_end(range_id)
 
 
-def mark_annotate(message: Optional[str] = None) -> Callable:
+def mark_annotate(message: str | None = None) -> Callable:
     """Decorate a function to annotate a mark range along with the function life cycle.
 
     Args:
@@ -86,7 +86,7 @@ def marked_timer(name: str, timing_raw: dict[str, float], *args: Any, **kwargs: 
     mark_end_range(mark_range)
 
 
-def get_npu_profiler(option: DictConfig, role: Optional[str] = None, profile_step: Optional[str] = None):
+def get_npu_profiler(option: DictConfig, role: str | None = None, profile_step: str | None = None):
     """Generate and return an NPU profiler object.
 
     Args:
@@ -185,7 +185,7 @@ class NPUProfiler(DistProfiler):
                 NPUProfiler._define_count -= 1
 
     @staticmethod
-    def annotate(message: Optional[str] = None, role: Optional[str] = None, **kwargs) -> Callable:
+    def annotate(message: str | None = None, role: str | None = None, **kwargs) -> Callable:
         """Decorate a Worker member function to profile the current rank in the current training step.
 
         Requires the target function to be a member function of a Worker,

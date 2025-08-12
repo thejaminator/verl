@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import torch
 from megatron.core.models.common.embeddings.rope_utils import *
@@ -30,11 +29,11 @@ logger = logging.getLogger(__name__)
 
 # Slightly modified from Qwen2VLForConditionalGeneration.get_rope_index
 def get_rope_index(
-    input_ids: Optional[torch.LongTensor] = None,
-    image_grid_thw: Optional[torch.LongTensor] = None,
-    video_grid_thw: Optional[torch.LongTensor] = None,
-    second_per_grid_ts: Optional[torch.Tensor] = None,
-    attention_mask: Optional[torch.Tensor] = None,
+    input_ids: torch.LongTensor | None = None,
+    image_grid_thw: torch.LongTensor | None = None,
+    video_grid_thw: torch.LongTensor | None = None,
+    second_per_grid_ts: torch.Tensor | None = None,
+    attention_mask: torch.Tensor | None = None,
 ):
     """
     Calculate the 3D rope index based on image and video's temporal, height and width in LLM.
@@ -240,7 +239,7 @@ def apply_rotary_pos_emb_absolute(
     t: Tensor,
     freqs: Tensor,
     config: TransformerConfig,
-    cu_seqlens: Optional[Tensor] = None,
+    cu_seqlens: Tensor | None = None,
 ):
     """
     Reroute to the appropriate apply_rotary_pos_emb function depending on

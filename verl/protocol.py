@@ -23,7 +23,7 @@ import math
 import os
 import pickle
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import numpy as np
 import ray
@@ -424,7 +424,7 @@ class DataProto:
     @classmethod
     def from_dict(
         cls,
-        tensors: Optional[dict[str, torch.Tensor]] = None,
+        tensors: dict[str, torch.Tensor] | None = None,
         non_tensors=None,
         meta_info=None,
         num_batch_dims=1,
@@ -876,7 +876,7 @@ class DataProto:
             meta_info=self.meta_info,
         )
 
-    def unfold_column_chunks(self, n_split: int, split_keys: Optional[list[str]] = None):
+    def unfold_column_chunks(self, n_split: int, split_keys: list[str] | None = None):
         """Split along the second dim into `n_split`, unfold it to the first dim (batch dim)
         Useful in passing grouped tensors that doesn't want to be shuffled in dataset.
         keys not in split_keys are repeated to match the shape

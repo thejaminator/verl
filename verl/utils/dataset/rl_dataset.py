@@ -19,7 +19,6 @@ import logging
 import os
 import re
 from collections import defaultdict
-from typing import Optional
 
 import datasets
 import numpy as np
@@ -87,7 +86,7 @@ class RLHFDataset(Dataset):
         data_files: str | list[str],
         tokenizer: PreTrainedTokenizer,
         config: DictConfig,
-        processor: Optional[ProcessorMixin] = None,
+        processor: ProcessorMixin | None = None,
     ):
         if not isinstance(data_files, list | ListConfig):
             data_files = [data_files]

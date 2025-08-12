@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 
@@ -22,7 +22,7 @@ class BaseInteraction:
         self.config = config
         self.name: str = config.get("name", "interaction_agent")  # More general agent default role name
 
-    async def start_interaction(self, instance_id: Optional[str] = None, **kwargs) -> str:
+    async def start_interaction(self, instance_id: str | None = None, **kwargs) -> str:
         """Create a tool instance.
 
         Args:

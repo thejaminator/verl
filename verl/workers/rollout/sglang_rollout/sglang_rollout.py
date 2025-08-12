@@ -22,7 +22,7 @@ import os
 import time
 from copy import deepcopy
 from json import JSONDecodeError
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 import numpy as np
@@ -141,7 +141,7 @@ class AsyncEngine(sglang.srt.entrypoints.engine.Engine):
         # default to use dummy load format, which need to reload weights in first time
         self._need_reload = True
 
-    async def release_memory_occupation(self, tags: Optional[list[str]] = None):
+    async def release_memory_occupation(self, tags: list[str] | None = None):
         """Release GPU occupation temporarily."""
         if tags is None:
             obj = ReleaseMemoryOccupationReqInput()
@@ -149,7 +149,7 @@ class AsyncEngine(sglang.srt.entrypoints.engine.Engine):
             obj = ReleaseMemoryOccupationReqInput(tags=tags)
         return await self.tokenizer_manager.release_memory_occupation(obj, None)
 
-    async def resume_memory_occupation(self, tags: Optional[list[str]] = None):
+    async def resume_memory_occupation(self, tags: list[str] | None = None):
         """Resume GPU occupation."""
         # because __init__ is a sync method, it can not call the async release_memory_occupation
         # have to move release_memory_occupation from __init__ to here
@@ -987,13 +987,13 @@ class SGLangRollout(BaseRollout):
         return _req
 
     async def _handle_engine_call(
-        self, _req: AsyncRolloutRequest, sampling_params: dict, image_data: Optional[list[Any]] = None
+        self, _req: AsyncRolloutRequest, sampling_params: dict, image_data: list[Any] | None = None
     ) -> dict:
         generation_prompt_ids = _req.get_generation_prompt_ids(self.processing_class)
         return await self._handle_engine_generate(generation_prompt_ids, sampling_params, image_data)
 
     async def _handle_engine_generate(
-        self, generation_prompt_ids: list[int], sampling_params: dict, image_data: Optional[list[Any]] = None
+        self, generation_prompt_ids: list[int], sampling_params: dict, image_data: list[Any] | None = None
     ) -> dict:
         max_new_tokens = min(self.config.response_length, self.config.max_model_len - len(generation_prompt_ids) - 1)
         kwargs = sampling_params.copy()

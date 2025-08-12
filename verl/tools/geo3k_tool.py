@@ -16,7 +16,7 @@
 
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 from verl.utils.reward_score import geo3k
@@ -64,7 +64,7 @@ class Geo3kTool(BaseTool):
     def get_openai_tool_schema(self) -> OpenAIFunctionToolSchema:
         return self.tool_schema
 
-    async def create(self, instance_id: Optional[str] = None, ground_truth: Optional[str] = None, **kwargs) -> str:
+    async def create(self, instance_id: str | None = None, ground_truth: str | None = None, **kwargs) -> str:
         if instance_id is None:
             instance_id = str(uuid4())
         self._instance_dict[instance_id] = {

@@ -19,7 +19,6 @@
 # limitations under the License.
 
 import math
-from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -288,9 +287,9 @@ class ParallelLlamaAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-    ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, tuple[torch.Tensor] | None]:
         bsz, q_len, _ = hidden_states.size()
         qkv = self.qkv_proj(hidden_states)[0]
         query_states, key_states, value_states = qkv.split([self.q_size, self.k_size, self.v_size], dim=-1)
@@ -381,7 +380,7 @@ class ParallelLlamaAttentionRmPad(ParallelLlamaAttention):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        position_ids: Optional[torch.LongTensor] = None,
+        position_ids: torch.LongTensor | None = None,
         sequence_length: int = None,
         indices: torch.Tensor = None,
         cu_seqlens: torch.Tensor = None,

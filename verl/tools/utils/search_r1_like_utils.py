@@ -19,7 +19,7 @@ import threading
 import time
 import traceback
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 import requests
 
@@ -37,7 +37,7 @@ def call_search_api(
     topk: int = 3,
     return_scores: bool = True,
     timeout: int = DEFAULT_TIMEOUT,
-) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+) -> tuple[dict[str, Any] | None, str | None]:
     """
     Calls the remote search API to perform retrieval with retry logic for various errors,
     using increasing delay between retries. Logs internal calls with a unique ID.
@@ -142,7 +142,7 @@ def perform_single_search_batch(
     retrieval_service_url: str,
     query_list: list[str],
     topk: int = 3,
-    concurrent_semaphore: Optional[threading.Semaphore] = None,
+    concurrent_semaphore: threading.Semaphore | None = None,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> tuple[str, dict[str, Any]]:
     """

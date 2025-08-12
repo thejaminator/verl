@@ -21,7 +21,7 @@ This is heavily inspired from CanineTokenizer in transformers package.
 import json
 import os
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Sequence
 
 from transformers.tokenization_utils import AddedToken, PreTrainedTokenizer
 
@@ -99,7 +99,7 @@ class CharTokenizer(PreTrainedTokenizer):
         return "".join(tokens)
 
     def build_inputs_with_special_tokens(
-        self, token_ids_0: list[int], token_ids_1: Optional[list[int]] = None
+        self, token_ids_0: list[int], token_ids_1: list[int] | None = None
     ) -> list[int]:
         sep = [self.sep_token_id]
         cls = [self.cls_token_id]
@@ -111,7 +111,7 @@ class CharTokenizer(PreTrainedTokenizer):
     def get_special_tokens_mask(
         self,
         token_ids_0: list[int],
-        token_ids_1: Optional[list[int]] = None,
+        token_ids_1: list[int] | None = None,
         already_has_special_tokens: bool = False,
     ) -> list[int]:
         if already_has_special_tokens:

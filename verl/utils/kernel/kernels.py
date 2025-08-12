@@ -32,7 +32,6 @@
 Implementations of the linear cross entropy with token entropy kernel.
 """
 
-import typing
 from dataclasses import dataclass
 
 import torch
@@ -508,9 +507,9 @@ def efficient_entropy_forward(
     hidden: torch.Tensor,
     weight: torch.Tensor,
     labels: torch.Tensor,
-    reduction: typing.Optional[int] = 2,
-    temperature: typing.Optional[float] = 1.0,
-    dist_process_group: typing.Optional[dist.ProcessGroup] = None,
+    reduction: int | None = 2,
+    temperature: float | None = 1.0,
+    dist_process_group: dist.ProcessGroup | None = None,
 ) -> list[torch.Tensor]:
     """
     forward host function
@@ -1384,10 +1383,10 @@ def efficient_entropy_backward(
     maximum: torch.Tensor,
     acc: torch.Tensor,
     entropy_b: torch.Tensor,
-    reduction: typing.Optional[int] = 2,
+    reduction: int | None = 2,
     should_return_fp32_grad: bool = False,
-    temperature: typing.Optional[float] = 1.0,
-    dist_process_group: typing.Optional[dist.ProcessGroup] = None,
+    temperature: float | None = 1.0,
+    dist_process_group: dist.ProcessGroup | None = None,
 ) -> list[torch.Tensor]:
     """
     backward host function

@@ -17,7 +17,7 @@ import os
 import socket
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
-from typing import Any, Optional
+from typing import Any
 
 import fastapi
 import ray
@@ -113,7 +113,7 @@ class AsyncServerBase(ABC):
 
 
 def async_server_class(
-    rollout_backend: str, rollout_backend_module: Optional[str] = None, rollout_backend_class: Optional[str] = None
+    rollout_backend: str, rollout_backend_module: str | None = None, rollout_backend_class: str | None = None
 ) -> type[AsyncServerBase]:
     """Get async server class.
 

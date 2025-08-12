@@ -14,7 +14,7 @@
 import logging
 import os
 import pickle
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import ray
 import zmq
@@ -101,9 +101,9 @@ class ExternalRayDistributedExecutor(Executor):
     def collective_rpc(
         self,
         method: str | Callable,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
         args: tuple = (),
-        kwargs: Optional[dict[str, Any]] = None,
+        kwargs: dict[str, Any] | None = None,
     ) -> list[Any]:
         # TODO(wuxibin): support ray compiled graph
         if isinstance(method, str):
@@ -150,9 +150,9 @@ class ExternalZeroMQDistributedExecutor(Executor):
     def collective_rpc(
         self,
         method: str | Callable,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
         args: tuple = (),
-        kwargs: Optional[dict[str, Any]] = None,
+        kwargs: dict[str, Any] | None = None,
     ) -> list[Any]:
         if isinstance(method, str):
             sent_method = method
@@ -320,7 +320,7 @@ class AsyncvLLMServer(AsyncServerBase):
         generator = self.engine.generate(prompt=prompt, sampling_params=sampling_params, request_id=request_id)
 
         # Get final response
-        final_res: Optional[RequestOutput] = None
+        final_res: RequestOutput | None = None
         async for output in generator:
             final_res = output
         assert final_res is not None

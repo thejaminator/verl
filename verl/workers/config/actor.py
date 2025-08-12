@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from omegaconf import MISSING
 
@@ -89,8 +89,8 @@ class ActorConfig(BaseConfig):
 
     strategy: str = MISSING
     ppo_mini_batch_size: int = 256
-    ppo_micro_batch_size: Optional[int] = None
-    ppo_micro_batch_size_per_gpu: Optional[int] = None
+    ppo_micro_batch_size: int | None = None
+    ppo_micro_batch_size_per_gpu: int | None = None
     use_dynamic_bsz: bool = False
     ppo_max_token_len_per_gpu: int = 16384
     clip_ratio: float = 0.2
@@ -188,7 +188,7 @@ class McoreActorConfig(ActorConfig):
     """
 
     strategy: str = "megatron"
-    data_loader_seed: Optional[int] = None
+    data_loader_seed: int | None = None
     load_weight: bool = True
     megatron: McoreEngineConfig = field(default_factory=McoreEngineConfig)
     profile: dict[str, Any] = field(default_factory=dict)

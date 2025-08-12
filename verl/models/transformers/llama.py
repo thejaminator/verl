@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import sys
-from typing import Callable, Optional
+from typing import Callable
 
 import torch
 
@@ -40,15 +40,15 @@ logger = logging.get_logger(__name__)
 def llama_flash_attn_forward(
     self,
     hidden_states: torch.Tensor,
-    attention_mask: Optional[torch.LongTensor] = None,
-    position_ids: Optional[torch.LongTensor] = None,
-    past_key_value: Optional[Cache] = None,
+    attention_mask: torch.LongTensor | None = None,
+    position_ids: torch.LongTensor | None = None,
+    past_key_value: Cache | None = None,
     output_attentions: bool = False,
     use_cache: bool = False,
-    cache_position: Optional[torch.LongTensor] = None,
-    position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.46
+    cache_position: torch.LongTensor | None = None,
+    position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,  # will become mandatory in v4.46
     **kwargs,
-) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
+) -> tuple[torch.Tensor, torch.Tensor | None, tuple[torch.Tensor] | None]:
     """
     Adapted from transformers 4.47.1 to support Ulysses sequence parallelism.
 
@@ -169,11 +169,11 @@ def llama_attn_forward(
     self,
     hidden_states: torch.Tensor,
     position_embeddings: tuple[torch.Tensor, torch.Tensor],
-    attention_mask: Optional[torch.Tensor],
-    past_key_value: Optional[Cache] = None,
-    cache_position: Optional[torch.LongTensor] = None,
+    attention_mask: torch.Tensor | None,
+    past_key_value: Cache | None = None,
+    cache_position: torch.LongTensor | None = None,
     **kwargs,
-) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
+) -> tuple[torch.Tensor, torch.Tensor | None, tuple[torch.Tensor] | None]:
     """
     Adapted from transformers 4.49.0 to support Ulysses sequence parallelism for transformers >= 4.48.0.
 

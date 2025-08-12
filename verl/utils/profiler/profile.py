@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-from typing import Callable, Optional
+from typing import Callable
 
 import torch
 import torch.distributed
@@ -118,10 +118,10 @@ class Profiler:
 
 
 def mark_start_range(
-    message: Optional[str] = None,
-    color: Optional[str] = None,
-    domain: Optional[str] = None,
-    category: Optional[str] = None,
+    message: str | None = None,
+    color: str | None = None,
+    domain: str | None = None,
+    category: str | None = None,
 ) -> None:
     """Start a profiling range marker (no-op implementation).
 
@@ -144,10 +144,10 @@ def mark_end_range(range_id: str) -> None:
 
 
 def mark_annotate(
-    message: Optional[str] = None,
-    color: Optional[str] = None,
-    domain: Optional[str] = None,
-    category: Optional[str] = None,
+    message: str | None = None,
+    color: str | None = None,
+    domain: str | None = None,
+    category: str | None = None,
 ) -> Callable:
     """Decorator to annotate a function with profiling markers (no-op implementation).
 
@@ -179,7 +179,7 @@ class DistProfiler:
         config (ProfilerConfig, optional): Configuration for the profiler.
     """
 
-    def __init__(self, rank: int, config: Optional[ProfilerConfig] = None, **kwargs):
+    def __init__(self, rank: int, config: ProfilerConfig | None = None, **kwargs):
         pass
 
     def start(self, **kwargs):
@@ -190,10 +190,10 @@ class DistProfiler:
 
     @staticmethod
     def annotate(
-        message: Optional[str] = None,
-        color: Optional[str] = None,
-        domain: Optional[str] = None,
-        category: Optional[str] = None,
+        message: str | None = None,
+        color: str | None = None,
+        domain: str | None = None,
+        category: str | None = None,
         **kwargs,
     ) -> Callable:
         def decorator(func):

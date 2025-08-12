@@ -16,7 +16,7 @@
 
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 from verl.utils.reward_score import gsm8k
@@ -41,7 +41,7 @@ class Gsm8kInteraction(BaseInteraction):
         self._instance_dict = {}
 
     async def start_interaction(
-        self, instance_id: Optional[str] = None, ground_truth: Optional[str] = None, **kwargs
+        self, instance_id: str | None = None, ground_truth: str | None = None, **kwargs
     ) -> str:
         if instance_id is None:
             instance_id = str(uuid4())

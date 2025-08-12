@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -87,13 +86,13 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
 def _ulysses_flash_attn_forward(
     self,
     hidden_states: torch.Tensor,
-    attention_mask: Optional[torch.LongTensor] = None,
-    position_ids: Optional[torch.LongTensor] = None,
-    past_key_value: Optional[Cache] = None,
+    attention_mask: torch.LongTensor | None = None,
+    position_ids: torch.LongTensor | None = None,
+    past_key_value: Cache | None = None,
     output_attentions: bool = False,
     use_cache: bool = False,
     **kwargs,
-) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
+) -> tuple[torch.Tensor, torch.Tensor | None, tuple[torch.Tensor] | None]:
     bsz, q_len, _ = hidden_states.size()
 
     if self.q_lora_rank is None:

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import json
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 from verl.utils.rollout_trace import rollout_trace_op
@@ -43,7 +43,7 @@ class BaseTool:
     def get_openai_tool_schema(self) -> OpenAIFunctionToolSchema:
         return self.tool_schema
 
-    async def create(self, instance_id: Optional[str] = None, **kwargs) -> str:
+    async def create(self, instance_id: str | None = None, **kwargs) -> str:
         """Create a tool instance.
 
         Args:

@@ -19,7 +19,6 @@
 # limitations under the License.
 """PyTorch Qwen2 model."""
 
-from typing import Optional
 
 import torch
 import torch.utils.checkpoint
@@ -58,7 +57,7 @@ def _make_causal_mask(input_ids_shape: torch.Size, dtype: torch.dtype, device: t
 
 
 # Copied from transformers.models.bart.modeling_bart._expand_mask
-def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):
+def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: int | None = None):
     """
     Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`.
     """
@@ -124,8 +123,8 @@ class ParallelQwen2Model(nn.Module):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
     ) -> tuple | BaseModelOutputWithPast:
         """
 
@@ -183,8 +182,8 @@ class ParallelQwen2ForCausalLM(nn.Module):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
     ) -> tuple | CausalLMOutputWithPast:
         r"""
         Args:
@@ -251,7 +250,7 @@ class ParallelQwen2ModelRmPad(nn.Module):
     def forward(
         self,
         input_ids: torch.Tensor,
-        position_ids: Optional[torch.LongTensor] = None,
+        position_ids: torch.LongTensor | None = None,
         sequence_length: int = None,
         indices: torch.Tensor = None,
         cu_seqlens: int = None,
@@ -324,8 +323,8 @@ class ParallelQwen2ForCausalLMRmPad(nn.Module):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
     ) -> tuple | CausalLMOutputWithPast:
         r"""
         Args:
@@ -403,8 +402,8 @@ class ParallelQwen2ForValueRmPad(ParallelQwen2ForCausalLMRmPad):
     def forward(
         self,
         input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
     ) -> tuple | CausalLMOutputWithPast:
         output = super().forward(input_ids, attention_mask, position_ids)
         output.logits = torch.squeeze(output.logits, dim=-1)
@@ -482,7 +481,7 @@ class ParallelQwen2ModelRmPadPP(nn.Module):
     def forward(
         self,
         input_ids: torch.Tensor,
-        position_ids: Optional[torch.LongTensor] = None,
+        position_ids: torch.LongTensor | None = None,
         sequence_length: int = None,
         indices: torch.Tensor = None,
         cu_seqlens: int = None,
@@ -643,8 +642,8 @@ class ParallelQwen2ForCausalLMRmPadPP(nn.Module):
         # original input
         *,
         input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
     ) -> tuple | CausalLMOutputWithPast:
         r"""
         Args:
@@ -726,8 +725,8 @@ class ParallelQwen2ForValueRmPadPP(ParallelQwen2ForCausalLMRmPadPP):
         self,
         *,
         input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
     ) -> tuple | CausalLMOutputWithPast:
         output = super().forward(input_ids=input_ids, attention_mask=attention_mask, position_ids=position_ids)
         if self.post_process:

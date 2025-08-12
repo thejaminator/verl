@@ -15,7 +15,6 @@
 import inspect
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
 from transformers.modeling_flash_attention_utils import _flash_attention_forward
@@ -43,10 +42,10 @@ except ImportError:
 def get_rope_index(
     processor,
     input_ids: torch.Tensor,
-    image_grid_thw: Optional[torch.Tensor] = None,
-    video_grid_thw: Optional[torch.Tensor] = None,
-    second_per_grid_ts: Optional[torch.Tensor] = None,
-    attention_mask: Optional[torch.Tensor] = None,
+    image_grid_thw: torch.Tensor | None = None,
+    video_grid_thw: torch.Tensor | None = None,
+    second_per_grid_ts: torch.Tensor | None = None,
+    attention_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
     Gets the position ids for Qwen2-VL, it should be generated before sharding the sequence.
@@ -165,10 +164,10 @@ def flash_attention_forward(
     attention_mask: torch.Tensor,
     query_length: int,
     is_causal: bool = True,
-    position_ids: Optional[torch.Tensor] = None,
-    sliding_window: Optional[int] = None,
+    position_ids: torch.Tensor | None = None,
+    sliding_window: int | None = None,
     use_top_left_mask: bool = False,
-    deterministic: Optional[bool] = None,
+    deterministic: bool | None = None,
     **kwargs,
 ):
     """
@@ -228,9 +227,9 @@ def flash_attention_forward(
 def ulysses_flash_attn_forward(
     self,
     hidden_states: torch.Tensor,
-    attention_mask: Optional[torch.Tensor] = None,
-    position_ids: Optional[torch.LongTensor] = None,
-    position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.46
+    attention_mask: torch.Tensor | None = None,
+    position_ids: torch.LongTensor | None = None,
+    position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,  # will become mandatory in v4.46
     **kwargs,
 ) -> tuple[torch.Tensor, None, None]:
     from transformers.models.qwen2_vl.modeling_qwen2_vl import apply_multimodal_rotary_pos_emb, repeat_kv
@@ -306,27 +305,27 @@ def ulysses_flash_attn_forward(
 
 @dataclass
 class Qwen2VLCausalLMOutputForPPO(Qwen2VLCausalLMOutputWithPast):
-    log_probs: Optional[torch.FloatTensor] = None
-    entropy: Optional[torch.FloatTensor] = None
+    log_probs: torch.FloatTensor | None = None
+    entropy: torch.FloatTensor | None = None
 
 
 def forward_base_model(
     self: Qwen2VLForConditionalGeneration,
     input_ids: torch.LongTensor = None,
-    attention_mask: Optional[torch.Tensor] = None,
-    position_ids: Optional[torch.LongTensor] = None,
-    past_key_values: Optional[list[torch.FloatTensor]] = None,
-    inputs_embeds: Optional[torch.FloatTensor] = None,
-    use_cache: Optional[bool] = None,
-    output_attentions: Optional[bool] = None,
-    output_hidden_states: Optional[bool] = None,
-    return_dict: Optional[bool] = None,
-    pixel_values: Optional[torch.Tensor] = None,
-    pixel_values_videos: Optional[torch.FloatTensor] = None,
-    image_grid_thw: Optional[torch.LongTensor] = None,
-    video_grid_thw: Optional[torch.LongTensor] = None,
-    rope_deltas: Optional[torch.LongTensor] = None,
-    cache_position: Optional[torch.LongTensor] = None,
+    attention_mask: torch.Tensor | None = None,
+    position_ids: torch.LongTensor | None = None,
+    past_key_values: list[torch.FloatTensor] | None = None,
+    inputs_embeds: torch.FloatTensor | None = None,
+    use_cache: bool | None = None,
+    output_attentions: bool | None = None,
+    output_hidden_states: bool | None = None,
+    return_dict: bool | None = None,
+    pixel_values: torch.Tensor | None = None,
+    pixel_values_videos: torch.FloatTensor | None = None,
+    image_grid_thw: torch.LongTensor | None = None,
+    video_grid_thw: torch.LongTensor | None = None,
+    rope_deltas: torch.LongTensor | None = None,
+    cache_position: torch.LongTensor | None = None,
 ) -> tuple | Qwen2VLCausalLMOutputWithPast:
     r"""
     Copy paste Qwen2VL's forward
@@ -416,21 +415,21 @@ def forward_base_model(
 def forward_with_torch_backend(
     self: Qwen2VLForConditionalGeneration,
     input_ids: torch.LongTensor = None,
-    attention_mask: Optional[torch.Tensor] = None,
-    position_ids: Optional[torch.LongTensor] = None,
-    past_key_values: Optional[list[torch.FloatTensor]] = None,
-    inputs_embeds: Optional[torch.FloatTensor] = None,
-    labels: Optional[torch.LongTensor] = None,
-    use_cache: Optional[bool] = None,
-    output_attentions: Optional[bool] = None,
-    output_hidden_states: Optional[bool] = None,
-    return_dict: Optional[bool] = None,
-    pixel_values: Optional[torch.Tensor] = None,
-    pixel_values_videos: Optional[torch.FloatTensor] = None,
-    image_grid_thw: Optional[torch.LongTensor] = None,
-    video_grid_thw: Optional[torch.LongTensor] = None,
-    rope_deltas: Optional[torch.LongTensor] = None,
-    cache_position: Optional[torch.LongTensor] = None,
+    attention_mask: torch.Tensor | None = None,
+    position_ids: torch.LongTensor | None = None,
+    past_key_values: list[torch.FloatTensor] | None = None,
+    inputs_embeds: torch.FloatTensor | None = None,
+    labels: torch.LongTensor | None = None,
+    use_cache: bool | None = None,
+    output_attentions: bool | None = None,
+    output_hidden_states: bool | None = None,
+    return_dict: bool | None = None,
+    pixel_values: torch.Tensor | None = None,
+    pixel_values_videos: torch.FloatTensor | None = None,
+    image_grid_thw: torch.LongTensor | None = None,
+    video_grid_thw: torch.LongTensor | None = None,
+    rope_deltas: torch.LongTensor | None = None,
+    cache_position: torch.LongTensor | None = None,
     temperature: float = 1.0,
     **loss_kwargs,
 ) -> tuple | Qwen2VLCausalLMOutputForPPO:
@@ -489,21 +488,21 @@ def forward_with_torch_backend(
 def forward_with_triton_backend(
     self: Qwen2VLForConditionalGeneration,
     input_ids: torch.LongTensor = None,
-    attention_mask: Optional[torch.Tensor] = None,
-    position_ids: Optional[torch.LongTensor] = None,
-    past_key_values: Optional[list[torch.FloatTensor]] = None,
-    inputs_embeds: Optional[torch.FloatTensor] = None,
-    labels: Optional[torch.LongTensor] = None,
-    use_cache: Optional[bool] = None,
-    output_attentions: Optional[bool] = None,
-    output_hidden_states: Optional[bool] = None,
-    return_dict: Optional[bool] = None,
-    pixel_values: Optional[torch.Tensor] = None,
-    pixel_values_videos: Optional[torch.FloatTensor] = None,
-    image_grid_thw: Optional[torch.LongTensor] = None,
-    video_grid_thw: Optional[torch.LongTensor] = None,
-    rope_deltas: Optional[torch.LongTensor] = None,
-    cache_position: Optional[torch.LongTensor] = None,
+    attention_mask: torch.Tensor | None = None,
+    position_ids: torch.LongTensor | None = None,
+    past_key_values: list[torch.FloatTensor] | None = None,
+    inputs_embeds: torch.FloatTensor | None = None,
+    labels: torch.LongTensor | None = None,
+    use_cache: bool | None = None,
+    output_attentions: bool | None = None,
+    output_hidden_states: bool | None = None,
+    return_dict: bool | None = None,
+    pixel_values: torch.Tensor | None = None,
+    pixel_values_videos: torch.FloatTensor | None = None,
+    image_grid_thw: torch.LongTensor | None = None,
+    video_grid_thw: torch.LongTensor | None = None,
+    rope_deltas: torch.LongTensor | None = None,
+    cache_position: torch.LongTensor | None = None,
     temperature: float = 1.0,
     **loss_kwargs,
 ) -> tuple | Qwen2VLCausalLMOutputForPPO:

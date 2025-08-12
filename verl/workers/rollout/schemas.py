@@ -16,7 +16,7 @@ import difflib
 import logging
 import os
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 import torch
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -56,7 +56,7 @@ class FinishReasonTypeEnum(str, Enum):
 class Message(BaseModel):
     role: str
     content: str | dict[str, Any] | list[dict[str, Any]]
-    tool_calls: Optional[list[OpenAIFunctionToolCall]] = None
+    tool_calls: list[OpenAIFunctionToolCall] | None = None
 
 
 class AsyncRolloutRequestStateEnum(str, Enum):
@@ -88,24 +88,24 @@ class AsyncRolloutRequest(BaseModel):
     request_id: str
     state: AsyncRolloutRequestStateEnum
     messages: list[Message]
-    multi_modal_keys: Optional[list[str]] = None
-    multi_modal_data: Optional[dict[str, Any]] = None
-    multi_modal_inputs: Optional[dict[str, torch.Tensor]] = None
-    tool_schemas: Optional[list[OpenAIFunctionToolSchema]] = None
+    multi_modal_keys: list[str] | None = None
+    multi_modal_data: dict[str, Any] | None = None
+    multi_modal_inputs: dict[str, torch.Tensor] | None = None
+    tool_schemas: list[OpenAIFunctionToolSchema] | None = None
     tools_kwargs: dict[str, Any] = {}
     interaction_kwargs: dict[str, Any] = {}
-    input_ids: Optional[torch.Tensor] = None
-    prompt_ids: Optional[torch.Tensor] = None
-    response_ids: Optional[torch.Tensor] = None
-    attention_mask: Optional[torch.Tensor] = None
-    prompt_attention_mask: Optional[torch.Tensor] = None
-    response_attention_mask: Optional[torch.Tensor] = None
-    position_ids: Optional[torch.Tensor] = None
-    prompt_position_ids: Optional[torch.Tensor] = None
-    response_position_ids: Optional[torch.Tensor] = None
-    loss_mask: Optional[torch.Tensor] = None
-    prompt_loss_mask: Optional[torch.Tensor] = None
-    response_loss_mask: Optional[torch.Tensor] = None
+    input_ids: torch.Tensor | None = None
+    prompt_ids: torch.Tensor | None = None
+    response_ids: torch.Tensor | None = None
+    attention_mask: torch.Tensor | None = None
+    prompt_attention_mask: torch.Tensor | None = None
+    response_attention_mask: torch.Tensor | None = None
+    position_ids: torch.Tensor | None = None
+    prompt_position_ids: torch.Tensor | None = None
+    response_position_ids: torch.Tensor | None = None
+    loss_mask: torch.Tensor | None = None
+    prompt_loss_mask: torch.Tensor | None = None
+    response_loss_mask: torch.Tensor | None = None
     reward_scores: dict[str, float]
     max_prompt_len: int
     max_response_len: int = 8192
@@ -114,7 +114,7 @@ class AsyncRolloutRequest(BaseModel):
 
     use_inference_chat_template: bool
     tokenization_sanity_check_mode: TokenizationSanityCheckModeEnum
-    generation_prompt_ids: Optional[torch.Tensor] = None
+    generation_prompt_ids: torch.Tensor | None = None
     base_conv_wo_gen_prompt_end_pos: int
     base_conv_with_gen_prompt_end_pos: int
 
@@ -221,7 +221,7 @@ class AsyncRolloutRequest(BaseModel):
         processing_class: PreTrainedTokenizer | PreTrainedTokenizerFast | ProcessorMixin,
         messages: list[Message],
         multi_modal_data: dict[str, Any],
-        tools: Optional[list[OpenAIFunctionToolSchema]] = None,
+        tools: list[OpenAIFunctionToolSchema] | None = None,
         add_generation_prompt: bool = False,
         tokenize: bool = False,
         return_dict: bool = False,
@@ -257,7 +257,7 @@ class AsyncRolloutRequest(BaseModel):
         processing_class: PreTrainedTokenizer | PreTrainedTokenizerFast | ProcessorMixin,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-        multi_modal_inputs: Optional[dict[str, torch.Tensor]] = None,
+        multi_modal_inputs: dict[str, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         # special case for qwen2vl
         is_qwen2vl = (
@@ -297,7 +297,7 @@ class AsyncRolloutRequest(BaseModel):
         new_input_ids: torch.Tensor,
         attention_mask: bool,
         loss_mask: bool,
-        new_multi_modal_inputs: Optional[dict[str, torch.Tensor]] = None,
+        new_multi_modal_inputs: dict[str, torch.Tensor] | None = None,
     ) -> None:
         """
         Update the input_ids, attention_mask, position_ids, and loss_mask of the request in additive manner.
@@ -391,7 +391,7 @@ class AsyncRolloutRequest(BaseModel):
         self,
         processing_class: PreTrainedTokenizer | PreTrainedTokenizerFast | ProcessorMixin,
         content: str,
-        tool_calls: Optional[list[OpenAIFunctionToolCall]] = None,
+        tool_calls: list[OpenAIFunctionToolCall] | None = None,
     ) -> None:
         self.messages.append(Message(role="assistant", content=content, tool_calls=tool_calls))
 

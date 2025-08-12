@@ -19,7 +19,6 @@ import os
 import re
 import warnings
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 import torch
@@ -79,7 +78,7 @@ def get_huggingface_actor_config(model_name: str, override_config_kwargs=None, t
 def get_generation_config(
     model: str,
     trust_remote_code: bool = False,
-) -> Optional[GenerationConfig]:
+) -> GenerationConfig | None:
     try:
         return GenerationConfig.from_pretrained(model)
     except OSError:  # Not found
@@ -660,5 +659,5 @@ def load_valuehead_model(local_path, torch_dtype, model_config, trust_remote_cod
 
 @dataclass
 class CausalLMOutputForPPO(CausalLMOutputWithPast):
-    log_probs: Optional[torch.FloatTensor] = None
-    entropy: Optional[torch.FloatTensor] = None
+    log_probs: torch.FloatTensor | None = None
+    entropy: torch.FloatTensor | None = None

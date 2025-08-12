@@ -38,10 +38,9 @@ From: https://github.com/openai/prm800k/blob/main/prm800k/grading/math_normalize
 """
 
 import re
-from typing import Optional
 
 
-def normalize_answer(answer: Optional[str]) -> Optional[str]:
+def normalize_answer(answer: str | None) -> str | None:
     if answer is None:
         return None
     answer = answer.strip()

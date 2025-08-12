@@ -12,14 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Callable, Optional
+from typing import Callable
 
 
 def mark_start_range(
-    message: Optional[str] = None,
-    color: Optional[str] = None,
-    domain: Optional[str] = None,
-    category: Optional[str] = None,
+    message: str | None = None,
+    color: str | None = None,
+    domain: str | None = None,
+    category: str | None = None,
 ) -> None:
     pass
 
@@ -29,10 +29,10 @@ def mark_end_range(range_id: str) -> None:
 
 
 def mark_annotate(
-    message: Optional[str] = None,
-    color: Optional[str] = None,
-    domain: Optional[str] = None,
-    category: Optional[str] = None,
+    message: str | None = None,
+    color: str | None = None,
+    domain: str | None = None,
+    category: str | None = None,
 ) -> Callable:
     def decorator(func):
         return func

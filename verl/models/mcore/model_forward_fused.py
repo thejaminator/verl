@@ -15,7 +15,6 @@
 # limitations under the License.
 
 from collections import OrderedDict
-from typing import Optional
 
 import torch
 from megatron.core import parallel_state
@@ -169,10 +168,10 @@ def _fused_GPTModel_forward(
     inference_context: BaseInferenceContext = None,
     packed_seq_params: PackedSeqParams = None,
     extra_block_kwargs: dict = None,
-    runtime_gather_output: Optional[bool] = None,
+    runtime_gather_output: bool | None = None,
     *,
-    inference_params: Optional[BaseInferenceContext] = None,
-    loss_mask: Optional[Tensor] = None,
+    inference_params: BaseInferenceContext | None = None,
+    loss_mask: Tensor | None = None,
     temperature: float = 1.0,
 ) -> CausalLMOutputForPPO:
     """

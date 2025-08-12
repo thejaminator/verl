@@ -19,7 +19,6 @@ import logging
 import math
 import os
 import re
-from typing import Optional
 
 import datasets
 import torch
@@ -407,7 +406,7 @@ class RLHFDataset(Dataset):
         data_files: str | list[str],
         tokenizer: PreTrainedTokenizer,
         config: DictConfig,
-        processor: Optional[ProcessorMixin] = None,
+        processor: ProcessorMixin | None = None,
     ):
         if not isinstance(data_files, list | ListConfig):
             data_files = [data_files]

@@ -14,7 +14,7 @@ import os
 os.environ["HF_HOME"] = "/workspace"
 import subprocess
 import sys
-from typing import Optional, Sequence
+from typing import Sequence
 
 import wandb
 
@@ -36,7 +36,7 @@ class RLSample(BaseModel):
 class VerlParams(BaseModel):
     # Dataset paths
     train_path: str
-    eval_path: Optional[str] = None
+    eval_path: str | None = None
     reward_function_name: str = "compute_score"
     experiment_name: str | None = None
 
@@ -66,14 +66,14 @@ class VerlParams(BaseModel):
 
     # HuggingFace Hub configuration
     push_to_hub: bool = False
-    hub_repo_id: Optional[str] = None
-    hf_api_key: Optional[str] = None
+    hub_repo_id: str | None = None
+    hf_api_key: str | None = None
 
     # System configuration
     n_gpus: int = 1
     use_wandb: bool = True
     wandb_project: str = "gsm8k-verl-grpo"
-    wandb_api_key: Optional[str] = None
+    wandb_api_key: str | None = None
 
 
 def extract_answer(text: str) -> str:
@@ -138,7 +138,7 @@ def load_and_convert_dataset(dataset_path: str, output_path: str, data_source: s
     return len(data)
 
 
-def convert_verl_to_hf_and_push(params: VerlParams, step: Optional[int] = None):
+def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
     """
     Convert verl checkpoint to HuggingFace format using verl model merger and push to Hub.
 
@@ -292,7 +292,7 @@ Generated using verl model merger from checkpoint: `{actor_checkpoint_dir}`
     print("🎉 Model conversion and upload complete!")
 
 
-def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: Optional[str], reward_file: str):
+def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: str | None, reward_file: str):
     """
     Launch verl training by passing parameters directly to the subprocess.
 

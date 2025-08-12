@@ -6,7 +6,6 @@
 """Model and data parallel groups."""
 
 import os
-from typing import Optional
 
 import sglang.srt.distributed.parallel_state as ps
 import torch
@@ -77,7 +76,7 @@ def initialize_parallel_state(
 def ensure_model_parallel_initialized(
     tensor_model_parallel_size: int,
     pipeline_model_parallel_size: int = 1,
-    backend: Optional[str] = None,
+    backend: str | None = None,
 ) -> None:
     """Helper to initialize model parallel groups if they are not initialized,
     or ensure tensor-parallel and pipeline-parallel sizes are equal to expected
@@ -204,7 +203,7 @@ def initialize_model_parallel_for_sglang(
 def initialize_model_parallel(
     tensor_model_parallel_size: int = 1,
     pipeline_model_parallel_size: int = 1,
-    backend: Optional[str] = None,
+    backend: str | None = None,
 ) -> None:
     """
     NOTE: This method is a hack from the open-sourced version without

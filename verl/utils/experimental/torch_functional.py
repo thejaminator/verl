@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional
 
 import torch
 
@@ -38,8 +37,8 @@ def _fused_linear_for_ppo_fwd(
 
 
 def _fused_linear_for_ppo_bwd(
-    dlog_probs: Optional[torch.FloatTensor],
-    dentropy: Optional[torch.FloatTensor],
+    dlog_probs: torch.FloatTensor | None,
+    dentropy: torch.FloatTensor | None,
     hidden_states: torch.FloatTensor,
     vocab_weights: torch.FloatTensor,
     input_ids: torch.LongTensor,
@@ -129,7 +128,7 @@ class FusedLinearForPPOFunction(torch.autograd.Function):
         return log_probs, entropy
 
     @staticmethod
-    def backward(ctx, dlog_probs: Optional[torch.FloatTensor], dentropy: Optional[torch.FloatTensor]):
+    def backward(ctx, dlog_probs: torch.FloatTensor | None, dentropy: torch.FloatTensor | None):
         assert dlog_probs is not None or dentropy is not None
 
         hidden_states, vocab_weights, input_ids = ctx.saved_tensors

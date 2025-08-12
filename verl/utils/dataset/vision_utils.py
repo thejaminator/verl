@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from io import BytesIO
-from typing import Optional
 
 import torch
 from PIL import Image
@@ -61,10 +60,10 @@ eg.
 
 def process_video(
     video: dict,
-    nframes: Optional[int] = None,
-    fps: Optional[float] = None,
-    fps_min_frames: Optional[int] = None,
-    fps_max_frames: Optional[int] = None,
+    nframes: int | None = None,
+    fps: float | None = None,
+    fps_min_frames: int | None = None,
+    fps_max_frames: int | None = None,
 ) -> torch.Tensor:
     """Converts a video dict into a [n_frames, 3, H, W] tensor
 

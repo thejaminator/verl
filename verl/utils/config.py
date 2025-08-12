@@ -13,14 +13,14 @@
 # limitations under the License.
 
 from dataclasses import is_dataclass
-from typing import Any, Optional
+from typing import Any
 
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 __all__ = ["omega_conf_to_dataclass"]
 
 
-def omega_conf_to_dataclass(config: DictConfig | dict, dataclass_type: Optional[type[Any]] = None) -> Any:
+def omega_conf_to_dataclass(config: DictConfig | dict, dataclass_type: type[Any] | None = None) -> Any:
     """
     Convert an OmegaConf DictConfig to a dataclass.
 

@@ -20,7 +20,7 @@ import json
 import logging
 import os
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.language_models.base import LanguageModelInput
@@ -107,7 +107,7 @@ class ChatModel(BaseChatModel):
     def _generate(
         self,
         messages: list[BaseMessage],
-        stop: Optional[list[str]] = None,
+        stop: list[str] | None = None,
         **kwargs: Any,
     ) -> ChatResult:
         raise NotImplementedError
@@ -115,7 +115,7 @@ class ChatModel(BaseChatModel):
     async def _agenerate(
         self,
         messages: list[BaseMessage],
-        stop: Optional[list[str]] = None,
+        stop: list[str] | None = None,
         **kwargs: Any,
     ) -> ChatResult:
         """Asynchronously generate chat completion message.

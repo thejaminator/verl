@@ -35,8 +35,8 @@ class RolloutTraceConfig:
     """
 
     _instance: Optional["RolloutTraceConfig"] = None
-    backend: Optional[str] = None
-    client: Optional[object] = None
+    backend: str | None = None
+    client: object | None = None
     token2text: bool = False
     _initialized: bool = False
     project_name: str = None
@@ -85,15 +85,15 @@ class RolloutTraceConfig:
         config._initialized = True
 
     @classmethod
-    def get_backend(cls) -> Optional[str]:
+    def get_backend(cls) -> str | None:
         return cls.get_instance().backend
 
     @classmethod
-    def get_client(cls) -> Optional[object]:
+    def get_client(cls) -> object | None:
         return cls.get_instance().client
 
     @classmethod
-    def enable_token2text(cls) -> Optional[bool]:
+    def enable_token2text(cls) -> bool | None:
         return cls.get_instance().token2text
 
     @classmethod

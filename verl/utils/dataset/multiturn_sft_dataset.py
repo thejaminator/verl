@@ -17,7 +17,7 @@ Multi-turn SFT dataset that supports training on conversation data with multiple
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -112,8 +112,8 @@ class MultiTurnSFTDataset(Dataset):
         start_idx: int,
         end_idx: int,
         is_assistant: bool = False,
-        enable_thinking: Optional[bool] = None,
-        tools: Optional[list[dict[str, Any]]] = None,
+        enable_thinking: bool | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> tuple[list[int], list[int], list[int]]:
         """
         Process tokens for a single message or a group of messages.

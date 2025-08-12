@@ -15,7 +15,7 @@
 import asyncio
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
-from typing import Callable, Optional
+from typing import Callable
 
 import psutil
 import torch
@@ -107,7 +107,7 @@ class PrimeRewardManager:
         self,
         tokenizer: PreTrainedTokenizer,
         num_examine: int,
-        compute_score: Optional[Callable] = None,
+        compute_score: Callable | None = None,
         reward_fn_key: str = "data_source",
     ) -> None:
         self.tokenizer = tokenizer

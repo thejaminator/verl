@@ -18,7 +18,7 @@ import os
 import warnings
 from contextlib import contextmanager
 from importlib.metadata import version
-from typing import Any, Callable, ContextManager, Optional
+from typing import Any, Callable, ContextManager
 
 import numpy as np
 import torch
@@ -116,7 +116,7 @@ def test_conversion(megatron_model_provider, tfconfig, output_path, model):
 
 @torch.inference_mode()
 def convert_checkpoint_from_transformers_to_megatron(
-    hf_model, model, hf_config, layer_start_end: Optional[tuple[int, int]] = None
+    hf_model, model, hf_config, layer_start_end: tuple[int, int] | None = None
 ):
     if layer_start_end is None:
         layer_start_end = (0, len(model.decoder.layers))
@@ -316,7 +316,7 @@ def convert_checkpoint_from_transformers_to_megatron_dpskv3(
     model,
     hf_config,
     tfconfig,
-    layer_start_end: Optional[tuple[int, int]] = None,
+    layer_start_end: tuple[int, int] | None = None,
 ):
     warnings.warn("MTP model is not supported yet", stacklevel=2)
     if layer_start_end is None:

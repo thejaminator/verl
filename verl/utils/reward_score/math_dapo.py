@@ -14,10 +14,9 @@
 # Adapted from https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/tasks/hendrycks_math/utils.py
 
 import re
-from typing import Optional
 
 
-def last_boxed_only_string(string: str) -> Optional[str]:
+def last_boxed_only_string(string: str) -> str | None:
     """Extract the last LaTeX boxed expression from a string.
 
     Args:
@@ -191,8 +190,8 @@ def is_correct_minerva(
 
 
 def is_correct_strict_box(
-    pred: str, gt: str, pause_tokens_index: Optional[list[int]] = None
-) -> tuple[int, Optional[str]]:
+    pred: str, gt: str, pause_tokens_index: list[int] | None = None
+) -> tuple[int, str | None]:
     """Check if the prediction is correct using strict boxed answer criteria.
 
     Args:
@@ -218,7 +217,7 @@ def is_correct_strict_box(
 
 
 def verify(
-    solution_str: str, answer: str, strict_box_verify: bool = False, pause_tokens_index: Optional[list[int]] = None
+    solution_str: str, answer: str, strict_box_verify: bool = False, pause_tokens_index: list[int] | None = None
 ) -> bool:
     """Verify if the solution is correct.
 
@@ -243,7 +242,7 @@ def compute_score(
     solution_str: str,
     ground_truth: str,
     strict_box_verify: bool = False,
-    pause_tokens_index: Optional[list[int]] = None,
+    pause_tokens_index: list[int] | None = None,
 ) -> float:
     """Compute the reward score for a solution.
 

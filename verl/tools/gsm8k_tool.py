@@ -15,7 +15,7 @@
 
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 from uuid import uuid4
 
 from verl.utils.reward_score import gsm8k
@@ -64,7 +64,7 @@ class Gsm8kTool(BaseTool):
     def get_openai_tool_schema(self) -> OpenAIFunctionToolSchema:
         return self.tool_schema
 
-    async def create(self, instance_id: Optional[str] = None, ground_truth: Optional[str] = None, **kwargs) -> str:
+    async def create(self, instance_id: str | None = None, ground_truth: str | None = None, **kwargs) -> str:
         if instance_id is None:
             instance_id = str(uuid4())
         if ground_truth is None:

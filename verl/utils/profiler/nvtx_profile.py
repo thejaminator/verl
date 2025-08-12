@@ -15,7 +15,7 @@
 
 import functools
 from contextlib import contextmanager
-from typing import Callable, Optional
+from typing import Callable
 
 import nvtx
 import torch
@@ -24,10 +24,10 @@ from .profile import DistProfiler, ProfilerConfig
 
 
 def mark_start_range(
-    message: Optional[str] = None,
-    color: Optional[str] = None,
-    domain: Optional[str] = None,
-    category: Optional[str] = None,
+    message: str | None = None,
+    color: str | None = None,
+    domain: str | None = None,
+    category: str | None = None,
 ) -> None:
     """Start a mark range in the profiler.
 
@@ -55,10 +55,10 @@ def mark_end_range(range_id: str) -> None:
 
 
 def mark_annotate(
-    message: Optional[str] = None,
-    color: Optional[str] = None,
-    domain: Optional[str] = None,
-    category: Optional[str] = None,
+    message: str | None = None,
+    color: str | None = None,
+    domain: str | None = None,
+    category: str | None = None,
 ) -> Callable:
     """Decorate a function to annotate a mark range along with the function life cycle.
 
@@ -85,8 +85,8 @@ def marked_timer(
     name: str,
     timing_raw: dict[str, float],
     color: str = None,
-    domain: Optional[str] = None,
-    category: Optional[str] = None,
+    domain: str | None = None,
+    category: str | None = None,
 ):
     """Context manager for timing with NVTX markers.
 
@@ -113,7 +113,7 @@ def marked_timer(
 class NsightSystemsProfiler(DistProfiler):
     """Nsight system profiler. Installed in a worker to control the Nsight system profiler."""
 
-    def __init__(self, rank: int, config: Optional[ProfilerConfig], **kwargs):
+    def __init__(self, rank: int, config: ProfilerConfig | None, **kwargs):
         """Initialize the NsightSystemsProfiler.
 
         Args:
@@ -145,10 +145,10 @@ class NsightSystemsProfiler(DistProfiler):
 
     @staticmethod
     def annotate(
-        message: Optional[str] = None,
-        color: Optional[str] = None,
-        domain: Optional[str] = None,
-        category: Optional[str] = None,
+        message: str | None = None,
+        color: str | None = None,
+        domain: str | None = None,
+        category: str | None = None,
         **kwargs,
     ) -> Callable:
         """Decorate a Worker member function to profile the current rank in the current training step.

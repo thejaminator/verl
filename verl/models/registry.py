@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import importlib
-from typing import Optional
 
 import torch.nn as nn
 
@@ -38,7 +37,7 @@ _MODELS = {
 # return model class
 class ModelRegistry:
     @staticmethod
-    def load_model_cls(model_arch: str, value=False) -> Optional[type[nn.Module]]:
+    def load_model_cls(model_arch: str, value=False) -> type[nn.Module] | None:
         if model_arch not in _MODELS:
             return None
 

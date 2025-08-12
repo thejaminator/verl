@@ -27,7 +27,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from pprint import pprint
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import ray
@@ -218,7 +218,7 @@ def compute_advantage(
     lam: float = 1.0,
     num_repeat: int = 1,
     norm_adv_by_std_in_grpo: bool = True,
-    config: Optional[AlgoConfig] = None,
+    config: AlgoConfig | None = None,
 ) -> DataProto:
     """Compute advantage estimates for policy optimization.
 
@@ -311,10 +311,10 @@ class RayPPOTrainer:
         processor=None,
         reward_fn=None,
         val_reward_fn=None,
-        train_dataset: Optional[Dataset] = None,
-        val_dataset: Optional[Dataset] = None,
+        train_dataset: Dataset | None = None,
+        val_dataset: Dataset | None = None,
         collate_fn=None,
-        train_sampler: Optional[Sampler] = None,
+        train_sampler: Sampler | None = None,
         device_name=None,
     ):
         """
@@ -499,7 +499,7 @@ class RayPPOTrainer:
 
         print("[validate_config] All configuration checks passed successfully!")
 
-    def _create_dataloader(self, train_dataset, val_dataset, collate_fn, train_sampler: Optional[Sampler]):
+    def _create_dataloader(self, train_dataset, val_dataset, collate_fn, train_sampler: Sampler | None):
         """
         Creates the train and validation dataloaders.
         """
@@ -564,7 +564,7 @@ class RayPPOTrainer:
         print(f"Total training steps: {self.total_training_steps}")
 
         # Initialize rollouts table for wandb logging
-        self.rollouts_table: Optional[Any] = None  # wandb.Table or None
+        self.rollouts_table: Any | None = None  # wandb.Table or None
 
         try:
             OmegaConf.set_struct(self.config, True)

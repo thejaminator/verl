@@ -17,7 +17,7 @@ import os
 import threading
 from contextlib import ExitStack
 from enum import Enum
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, TypeVar
 from uuid import uuid4
 
 import ray
@@ -152,7 +152,7 @@ class SandboxFusionTool(BaseTool):
     def get_openai_tool_schema(self) -> OpenAIFunctionToolSchema:
         return self.tool_schema
 
-    async def create(self, instance_id: Optional[str] = None, ground_truth: Optional[str] = None, **kwargs) -> str:
+    async def create(self, instance_id: str | None = None, ground_truth: str | None = None, **kwargs) -> str:
         if instance_id is None:
             instance_id = str(uuid4())
         self._instance_dict[instance_id] = {

@@ -18,7 +18,6 @@ Apply monkey-patch function to models
 import importlib.metadata
 import sys
 from functools import lru_cache
-from typing import Optional
 
 import torch
 from packaging import version
@@ -52,7 +51,7 @@ def _ulysses_flash_attention_forward(
     key_states: torch.Tensor,
     value_states: torch.Tensor,
     *args,
-    position_ids: Optional[torch.Tensor] = None,
+    position_ids: torch.Tensor | None = None,
     **kwargs,
 ):
     """Insert all-to-all before and after flash attention.
@@ -320,7 +319,7 @@ def apply_monkey_patch(
 
 
 @lru_cache
-def is_transformers_version_in_range(min_version: Optional[str] = None, max_version: Optional[str] = None) -> bool:
+def is_transformers_version_in_range(min_version: str | None = None, max_version: str | None = None) -> bool:
     try:
         # Get the installed version of the transformers library
         transformers_version_str = importlib.metadata.version("transformers")

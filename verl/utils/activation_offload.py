@@ -20,7 +20,7 @@ from __future__ import annotations
 import functools
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 
 import torch
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -62,7 +62,7 @@ class CpuOffloadHookWithOffloadHandler:
     def __init__(
         self,
         offload_handler: OffloadHandler,
-        handler_extra_kwargs: Optional[dict[str, Any]] = None,
+        handler_extra_kwargs: dict[str, Any] | None = None,
     ) -> None:
         if handler_extra_kwargs is None:
             handler_extra_kwargs = {}

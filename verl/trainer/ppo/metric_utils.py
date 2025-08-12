@@ -17,7 +17,7 @@ Metrics related to the PPO trainer.
 
 from collections import defaultdict
 from functools import partial
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import numpy as np
 import torch
@@ -457,7 +457,7 @@ def process_validation_metrics(
     return data_src2var2metric2val
 
 
-def log_reward_manager_table(batch: DataProto, step: int, existing_table: Optional[Any] = None) -> Optional[Any]:
+def log_reward_manager_table(batch: DataProto, step: int, existing_table: Any | None = None) -> Any | None:
     """
     Log reward manager table data to wandb, appending to existing table if provided.
 
