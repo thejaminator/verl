@@ -532,10 +532,10 @@ if __name__ == "__main__":
     params = VerlParams(
         model_name="Qwen/Qwen3-4B",
         num_generations=8,  # Reduced from 16 for better efficiency
-        micro_batch=4,  # Increased from 16 (adjust based on GPU memory)
-        micro_batch_size_per_gpu=4,  # Optimized for single GPU
+        micro_batch=8,
+        micro_batch_size_per_gpu=8,  # Optimized for single GPU
         warmup_steps=5,
-        gradient_accumulation_steps=32,  # To achieve effective batch size of 4 * 16 = 64
+        gradient_accumulation_steps=16,  # To achieve effective batch size of 8 * 16 = 128
         max_seq_length=10_000,  # More reasonable for math problems
         max_prompt_length=1_000,  # Reduced from 6000, matching reference
         max_response_length=9_000,  # Reduced from 6000, matching reference
