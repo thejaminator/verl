@@ -545,8 +545,8 @@ if __name__ == "__main__":
         lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
         lora_alpha=128.0,  # Typically 2x lora_rank
         target_modules="all-linear",  # Apply LoRA to all linear layers
-        use_shm=True,  # Preload model for faster loading
-        layered_summon=True,  # Reduce GPU memory usage
+        use_shm=False,
+        layered_summon=False,
         max_steps=4000,
         output_dir="/workspace/verl_outputs_no_beta_lora",
         train_path="../math_only_train_filtered_noncot.jsonl",
