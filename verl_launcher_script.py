@@ -539,7 +539,7 @@ if __name__ == "__main__":
         max_seq_length=10_000,  # More reasonable for math problems
         max_prompt_length=1_000,  # Reduced from 6000, matching reference
         max_response_length=9_000,  # Reduced from 6000, matching reference
-        learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
+        learning_rate=1e-4,  # Increased by order of magnitude for LoRA (was 5e-6)
         beta=0,  # no beta for science!
         # LoRA configuration for 4B model (following best practices)
         lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
