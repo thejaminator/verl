@@ -40,9 +40,7 @@ class Gsm8kInteraction(BaseInteraction):
         super().__init__(config)
         self._instance_dict = {}
 
-    async def start_interaction(
-        self, instance_id: str | None = None, ground_truth: str | None = None, **kwargs
-    ) -> str:
+    async def start_interaction(self, instance_id: str | None = None, ground_truth: str | None = None, **kwargs) -> str:
         if instance_id is None:
             instance_id = str(uuid4())
         self._instance_dict[instance_id] = {

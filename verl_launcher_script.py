@@ -55,9 +55,15 @@ class VerlParams(BaseModel):
 
     # GRPO specific
     num_generations: int = 4
-    lora_rank: int = 32
     warmup_steps: int = 10
     beta: float = 0.005  # KL coefficient
+
+    # LoRA configuration
+    lora_rank: int = 32  # LoRA rank, set to 0 to disable LoRA
+    lora_alpha: float = 64.0  # LoRA alpha parameter (typically 2x lora_rank)
+    target_modules: str = "all-linear"  # Target modules for LoRA adaptation
+    use_shm: bool = True  # Preload model into /dev/shm for faster loading
+    layered_summon: bool = True  # Reduce GPU memory usage for large models
 
     # Output configuration
     output_dir: str = "./outputs"
@@ -303,8 +309,26 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         reward_file: Path to reward function file
     """
 
+    # Validate LoRA configuration
+    if params.lora_rank > 0:
+        if params.lora_alpha <= 0:
+            raise ValueError("lora_alpha must be positive when LoRA is enabled")
+        if not params.target_modules:
+            raise ValueError("target_modules must be specified when LoRA is enabled")
+        print(f"LoRA enabled: rank={params.lora_rank}, alpha={params.lora_alpha}, targets={params.target_modules}")
+        print("Note: Using safetensors load format and increased learning rate for LoRA")
+    else:
+        print("LoRA disabled - using full parameter training")
+
     # Construct the verl training command with Hydra overrides
     max_num_batched_tokens = params.max_prompt_length + params.max_response_length
+
+    # Set load format based on LoRA configuration
+    if params.lora_rank > 0:
+        load_format = "safetensors"
+    else:
+        load_format = "dummy_dtensor"
+
     cmd = [
         sys.executable,
         "-m",
@@ -333,66 +357,84 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         "actor_rollout_ref.model.enable_gradient_checkpointing=true",
         "actor_rollout_ref.model.trust_remote_code=false",
         "actor_rollout_ref.model.use_remove_padding=true",
-        # Actor configuration
-        "actor_rollout_ref.actor.strategy=fsdp2",
-        f"actor_rollout_ref.actor.ppo_mini_batch_size={params.micro_batch}",
-        f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
-        "actor_rollout_ref.actor.ppo_epochs=1",
-        "actor_rollout_ref.actor.grad_clip=0.5",
-        "actor_rollout_ref.actor.clip_ratio=0.2",
-        "actor_rollout_ref.actor.entropy_coeff=0.0",
-        "actor_rollout_ref.actor.use_kl_loss=true",
-        "actor_rollout_ref.actor.kl_loss_coef=0.001",
-        "actor_rollout_ref.actor.kl_loss_type=low_var_kl",
-        f"actor_rollout_ref.actor.optim.lr={params.learning_rate}",
-        f"actor_rollout_ref.actor.optim.lr_warmup_steps={params.warmup_steps}",
-        "actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.0",
-        f"actor_rollout_ref.actor.optim.total_training_steps={params.max_steps}",
-        "actor_rollout_ref.actor.fsdp_config.wrap_policy.min_num_params=0",
-        "actor_rollout_ref.actor.fsdp_config.param_offload=true",
-        "actor_rollout_ref.actor.fsdp_config.optimizer_offload=true",
-        # Reference model configuration
-        "actor_rollout_ref.ref.strategy=fsdp2",
-        "actor_rollout_ref.ref.fsdp_config.param_offload=true",
-        "actor_rollout_ref.ref.fsdp_config.wrap_policy.min_num_params=0",
-        f"actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
-        # Rollout configuration
-        "actor_rollout_ref.model.use_fused_kernels=true",
-        "actor_rollout_ref.rollout.name=vllm",
-        f"actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
-        "actor_rollout_ref.rollout.temperature=1.0",
-        "actor_rollout_ref.rollout.top_k=-1",
-        "actor_rollout_ref.rollout.top_p=1.0",
-        f"actor_rollout_ref.rollout.prompt_length={params.max_prompt_length}",
-        f"actor_rollout_ref.rollout.response_length={params.max_response_length}",
-        f"actor_rollout_ref.rollout.max_num_batched_tokens={max_num_batched_tokens}",
-        "actor_rollout_ref.rollout.dtype=bfloat16",
-        "actor_rollout_ref.rollout.gpu_memory_utilization=0.6",
-        "actor_rollout_ref.rollout.ignore_eos=false",
-        "actor_rollout_ref.rollout.enforce_eager=false",
-        "actor_rollout_ref.rollout.free_cache_engine=true",
-        "actor_rollout_ref.rollout.load_format=dummy_dtensor",
-        "actor_rollout_ref.rollout.tensor_model_parallel_size=1",
-        f"actor_rollout_ref.rollout.n={params.num_generations}",
-        "actor_rollout_ref.rollout.val_kwargs.temperature=1.0",
-        "actor_rollout_ref.rollout.val_kwargs.n=1",
-        "actor_rollout_ref.rollout.val_kwargs.do_sample=true",
-        # Reward model configuration
-        "reward_model.enable=false",
-        # Custom reward function
-        f"custom_reward_function.path={reward_file}",
-        f"custom_reward_function.name={params.reward_function_name}",
-        # Trainer configuration
-        "trainer.total_epochs=1",
-        f"trainer.project_name={params.wandb_project}",
-        f"trainer.experiment_name=grpo-{params.model_name.split('/')[-1]}",
-        "trainer.nnodes=1",
-        f"trainer.n_gpus_per_node={params.n_gpus}",
-        f"trainer.save_freq={params.save_steps}",
-        f"trainer.test_freq={params.save_steps}",
-        "trainer.val_before_train=false",
-        f"trainer.default_local_dir={params.output_dir}",
     ]
+
+    # Add LoRA parameters conditionally
+    if params.lora_rank > 0:
+        cmd.extend(
+            [
+                f"actor_rollout_ref.model.lora_rank={params.lora_rank}",
+                f"actor_rollout_ref.model.lora_alpha={params.lora_alpha}",
+                f"actor_rollout_ref.model.target_modules={params.target_modules}",
+                f"actor_rollout_ref.model.use_shm={str(params.use_shm).lower()}",
+                f"actor_rollout_ref.rollout.layered_summon={str(params.layered_summon).lower()}",
+            ]
+        )
+
+    # Continue with actor configuration
+    cmd.extend(
+        [
+            # Actor configuration
+            "actor_rollout_ref.actor.strategy=fsdp2",
+            f"actor_rollout_ref.actor.ppo_mini_batch_size={params.micro_batch}",
+            f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
+            "actor_rollout_ref.actor.ppo_epochs=1",
+            "actor_rollout_ref.actor.grad_clip=0.5",
+            "actor_rollout_ref.actor.clip_ratio=0.2",
+            "actor_rollout_ref.actor.entropy_coeff=0.0",
+            "actor_rollout_ref.actor.use_kl_loss=true",
+            "actor_rollout_ref.actor.kl_loss_coef=0.001",
+            "actor_rollout_ref.actor.kl_loss_type=low_var_kl",
+            f"actor_rollout_ref.actor.optim.lr={params.learning_rate}",
+            f"actor_rollout_ref.actor.optim.lr_warmup_steps={params.warmup_steps}",
+            "actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.0",
+            f"actor_rollout_ref.actor.optim.total_training_steps={params.max_steps}",
+            "actor_rollout_ref.actor.fsdp_config.wrap_policy.min_num_params=0",
+            "actor_rollout_ref.actor.fsdp_config.param_offload=true",
+            "actor_rollout_ref.actor.fsdp_config.optimizer_offload=true",
+            # Reference model configuration
+            "actor_rollout_ref.ref.strategy=fsdp2",
+            "actor_rollout_ref.ref.fsdp_config.param_offload=true",
+            "actor_rollout_ref.ref.fsdp_config.wrap_policy.min_num_params=0",
+            f"actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
+            # Rollout configuration
+            "actor_rollout_ref.model.use_fused_kernels=true",
+            "actor_rollout_ref.rollout.name=vllm",
+            f"actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
+            "actor_rollout_ref.rollout.temperature=1.0",
+            "actor_rollout_ref.rollout.top_k=-1",
+            "actor_rollout_ref.rollout.top_p=1.0",
+            f"actor_rollout_ref.rollout.prompt_length={params.max_prompt_length}",
+            f"actor_rollout_ref.rollout.response_length={params.max_response_length}",
+            f"actor_rollout_ref.rollout.max_num_batched_tokens={max_num_batched_tokens}",
+            "actor_rollout_ref.rollout.dtype=bfloat16",
+            "actor_rollout_ref.rollout.gpu_memory_utilization=0.6",
+            "actor_rollout_ref.rollout.ignore_eos=false",
+            "actor_rollout_ref.rollout.enforce_eager=false",
+            "actor_rollout_ref.rollout.free_cache_engine=true",
+            f"actor_rollout_ref.rollout.load_format={load_format}",
+            "actor_rollout_ref.rollout.tensor_model_parallel_size=1",
+            f"actor_rollout_ref.rollout.n={params.num_generations}",
+            "actor_rollout_ref.rollout.val_kwargs.temperature=1.0",
+            "actor_rollout_ref.rollout.val_kwargs.n=1",
+            "actor_rollout_ref.rollout.val_kwargs.do_sample=true",
+            # Reward model configuration
+            "reward_model.enable=false",
+            # Custom reward function
+            f"custom_reward_function.path={reward_file}",
+            f"custom_reward_function.name={params.reward_function_name}",
+            # Trainer configuration
+            "trainer.total_epochs=1",
+            f"trainer.project_name={params.wandb_project}",
+            f"trainer.experiment_name=grpo-{params.model_name.split('/')[-1]}",
+            "trainer.nnodes=1",
+            f"trainer.n_gpus_per_node={params.n_gpus}",
+            f"trainer.save_freq={params.save_steps}",
+            f"trainer.test_freq={params.save_steps}",
+            "trainer.val_before_train=false",
+            f"trainer.default_local_dir={params.output_dir}",
+        ]
+    )
 
     # Add logger configuration
     if params.use_wandb:
@@ -497,10 +539,14 @@ if __name__ == "__main__":
         max_seq_length=10_000,  # More reasonable for math problems
         max_prompt_length=1_000,  # Reduced from 6000, matching reference
         max_response_length=9_000,  # Reduced from 6000, matching reference
-        learning_rate=5e-6,  # reduced from 1e-5, simple rl uses 1e-5
-        # beta=1e-4,  # follows simple rl zoo https://github.com/hkust-nlp/simpleRL-reason
+        learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
         beta=0,  # no beta for science!
-        # lora_rank=32, # lora not implemented in this script yet. But should be easy
+        # LoRA configuration for 4B model (following best practices)
+        lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
+        lora_alpha=128.0,  # Typically 2x lora_rank
+        target_modules="all-linear",  # Apply LoRA to all linear layers
+        use_shm=True,  # Preload model for faster loading
+        layered_summon=True,  # Reduce GPU memory usage
         max_steps=4000,
         output_dir="/workspace/verl_outputs_no_beta",
         train_path="../math_only_train_filtered_noncot.jsonl",

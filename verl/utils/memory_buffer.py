@@ -15,7 +15,6 @@
 This file contains utilities to manipulate torch memory buffers
 """
 
-
 import torch
 from torch import nn
 

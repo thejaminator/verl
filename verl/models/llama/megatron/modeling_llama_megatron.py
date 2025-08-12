@@ -19,7 +19,6 @@
 # limitations under the License.
 """PyTorch LLaMA model with Megatron-style acceleration."""
 
-
 import torch
 import torch.utils.checkpoint
 from megatron.core import ModelParallelConfig, mpu, tensor_parallel

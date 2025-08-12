@@ -19,7 +19,6 @@
 # limitations under the License.
 """PyTorch Qwen2 model."""
 
-
 import torch
 import torch.utils.checkpoint
 from megatron.core import ModelParallelConfig, mpu, parallel_state, tensor_parallel
