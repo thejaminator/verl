@@ -532,7 +532,7 @@ if __name__ == "__main__":
     params = VerlParams(
         model_name="Qwen/Qwen3-4B",
         num_generations=8,  # Reduced from 16 for better efficiency
-        micro_batch=8,
+        micro_batch=8,  # 4 for full parameter, 8 for lora?
         micro_batch_size_per_gpu=8,  # Optimized for single GPU
         warmup_steps=5,
         gradient_accumulation_steps=16,  # To achieve effective batch size of 8 * 16 = 128
@@ -548,7 +548,7 @@ if __name__ == "__main__":
         use_shm=True,  # Preload model for faster loading
         layered_summon=True,  # Reduce GPU memory usage
         max_steps=4000,
-        output_dir="/workspace/verl_outputs_no_beta",
+        output_dir="/workspace/verl_outputs_no_beta_lora",
         train_path="../math_only_train_filtered_noncot.jsonl",
         eval_path="../math_only_test_level_2_and_above.jsonl",
         save_steps=10,
@@ -557,7 +557,7 @@ if __name__ == "__main__":
         wandb_project="gsm8k-verl-grpo",
         # HuggingFace Hub configuration (like your current script)
         push_to_hub=True,
-        hub_repo_id="thejaminator/math_22jul_verl",  # Updated with "_verl" suffix
+        hub_repo_id="thejaminator/math_verl_lora",  # Updated with "_verl" suffix
         hf_api_key=hf_api_key,
         reward_function_name="compute_score",
         wandb_api_key=wandb_key,
