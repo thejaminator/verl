@@ -162,10 +162,10 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
 
     # Find the latest checkpoint if step not specified
     if step is None:
-        checkpoint_base = os.path.join(params.output_dir, "checkpoints", project_name, experiment_name)
-        if os.path.exists(checkpoint_base):
+        # Look directly in output_dir for global_step directories
+        if os.path.exists(params.output_dir):
             # Find the highest global_step directory
-            step_dirs = [d for d in os.listdir(checkpoint_base) if d.startswith("global_step_")]
+            step_dirs = [d for d in os.listdir(params.output_dir) if d.startswith("global_step_")]
             if step_dirs:
                 step = max([int(d.split("_")[-1]) for d in step_dirs])
                 print(f"Found latest checkpoint at step {step}")
@@ -173,42 +173,50 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
                 print("❌ No checkpoints found!")
                 return
         else:
-            print(f"❌ Checkpoint directory not found: {checkpoint_base}")
+            print(f"❌ Output directory not found: {params.output_dir}")
             return
 
-    # Construct the checkpoint paths
-    actor_checkpoint_dir = os.path.join(
-        params.output_dir, "checkpoints", project_name, experiment_name, f"global_step_{step}", "actor"
-    )
-    hf_output_dir = os.path.join(
-        params.output_dir, "checkpoints", project_name, experiment_name, f"global_step_{step}", "actor", "huggingface"
-    )
+    # Construct the checkpoint paths - simplified structure
+    actor_checkpoint_dir = os.path.join(params.output_dir, f"global_step_{step}", "actor")
+    hf_output_dir = os.path.join(params.output_dir, f"global_step_{step}", "actor", "huggingface")
 
     if not os.path.exists(actor_checkpoint_dir):
         print(f"❌ Actor checkpoint not found: {actor_checkpoint_dir}")
         return
 
-    print("Converting verl checkpoint to HuggingFace format...")
-    print(f"Source: {actor_checkpoint_dir}")
-    print(f"Target: {hf_output_dir}")
+    # Check if this is a LoRA adapter checkpoint
+    lora_adapter_dir = os.path.join(actor_checkpoint_dir, "lora_adapter")
 
-    # Step 1: Convert verl checkpoint to HuggingFace format using verl model merger
-    merge_cmd = [
-        sys.executable,
-        "-m",
-        "verl.model_merger",
-        "merge",
-        "--backend",
-        "fsdp",
-        "--local_dir",
-        actor_checkpoint_dir,
-        "--target_dir",
-        hf_output_dir,
-    ]
+    if os.path.exists(lora_adapter_dir):
+        print("Found LoRA adapter - uploading LoRA adapter directly...")
+        print(f"LoRA adapter source: {lora_adapter_dir}")
 
-    print(f"Running model merger: {' '.join(merge_cmd)}")
-    subprocess.run(merge_cmd, capture_output=True, text=True, check=True)
-    print("✅ Successfully converted checkpoint to HuggingFace format")
+        # For LoRA adapters, use the lora_adapter directory directly
+        hf_output_dir = lora_adapter_dir
+        print("✅ Using LoRA adapter directory directly for upload")
+
+    else:
+        print("Converting full model checkpoint to HuggingFace format...")
+        print(f"Source: {actor_checkpoint_dir}")
+        print(f"Target: {hf_output_dir}")
+
+        # Step 1: Convert verl checkpoint to HuggingFace format using verl model merger
+        merge_cmd = [
+            sys.executable,
+            "-m",
+            "verl.model_merger",
+            "merge",
+            "--backend",
+            "fsdp",
+            "--local_dir",
+            actor_checkpoint_dir,
+            "--target_dir",
+            hf_output_dir,
+        ]
+
+        print(f"Running model merger: {' '.join(merge_cmd)}")
+        subprocess.run(merge_cmd, capture_output=True, text=True, check=True)
+        print("✅ Successfully converted checkpoint to HuggingFace format")
 
     # Determine repository name
     repo_name = f"{params.hub_repo_id}-step-{step}" if step else params.hub_repo_id
@@ -219,8 +227,81 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
     api = HfApi()
     api.create_repo(repo_name, token=params.hf_api_key, exist_ok=True, private=False)
 
+    # Determine if this is a LoRA adapter
+    is_lora_adapter = os.path.exists(lora_adapter_dir)
+
     # Create an enhanced README with training details
-    readme_content = f"""---
+    if is_lora_adapter:
+        readme_content = f"""---
+language: en
+license: apache-2.0
+tags:
+- verl
+- grpo
+- math
+- reasoning
+- rl
+- lora
+- peft
+base_model: {params.model_name}
+library_name: peft
+---
+
+# {repo_name}
+
+This is a LoRA adapter trained using [verl](https://github.com/volcengine/verl) with GRPO (Group Relative Policy Optimization) 
+on math reasoning tasks.
+
+## Training Details
+
+- **Base model**: {params.model_name}
+- **Framework**: verl GRPO
+- **Training steps**: {step}
+- **Dataset**: Math reasoning problems
+- **Batch size**: {params.micro_batch}
+- **Learning rate**: {params.learning_rate}
+- **LoRA rank**: {params.lora_rank}
+- **LoRA alpha**: {params.lora_alpha}
+- **Number of generations**: {params.num_generations}
+
+## Model Architecture
+
+This LoRA adapter uses GRPO for reinforcement learning from math problem solutions with:
+- Custom reward function for mathematical accuracy
+- Length penalty for concise reasoning
+- Format rewards for proper answer tags
+
+## Usage
+
+```python
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import PeftModel
+
+# Load base model
+base_model = AutoModelForCausalLM.from_pretrained("{params.model_name}")
+tokenizer = AutoTokenizer.from_pretrained("{params.model_name}")
+
+# Load LoRA adapter
+model = PeftModel.from_pretrained(base_model, "{repo_name}")
+
+# For math problems, use format:
+prompt = "Solve this problem step by step: What is 2+2?"
+inputs = tokenizer(prompt, return_tensors="pt")
+outputs = model.generate(**inputs, max_length=512)
+response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+```
+
+## Training Configuration
+
+- **Algorithm**: GRPO with KL regularization
+- **Strategy**: FSDP2 for efficient training
+- **Memory optimizations**: Parameter and optimizer offloading
+- **Data processing**: Filtered overlong prompts, padding removal
+
+Generated from verl LoRA checkpoint: `{lora_adapter_dir}`
+"""
+    else:
+        readme_content = f"""---
 language: en
 license: apache-2.0
 tags:
@@ -539,7 +620,7 @@ if __name__ == "__main__":
         max_seq_length=10_000,  # More reasonable for math problems
         max_prompt_length=1_000,  # Reduced from 6000, matching reference
         max_response_length=9_000,  # Reduced from 6000, matching reference
-        learning_rate=1e-4,  # Increased by order of magnitude for LoRA (was 5e-6)
+        learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
         beta=0,  # no beta for science!
         # LoRA configuration for 4B model (following best practices)
         lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
