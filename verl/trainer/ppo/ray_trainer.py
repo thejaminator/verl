@@ -1120,7 +1120,7 @@ class RayPPOTrainer:
 
                 # pass sae information to non_tensor_batch
                 if "sae" in batch.non_tensor_batch:
-                    print(f"Passing sae information to non_tensor_batch: {batch.non_tensor_batch['sae']}")
+                    # print(f"Passing sae information to non_tensor_batch: {batch.non_tensor_batch['sae']}")
                     gen_batch.non_tensor_batch["sae"] = batch.non_tensor_batch["sae"]
 
                 gen_batch = gen_batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
