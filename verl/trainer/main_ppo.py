@@ -150,13 +150,9 @@ class TaskRunner:
                 if config.actor_rollout_ref.rollout.mode == "async"
                 else ActorRolloutRefWorker
             )
-            # James: Switch to the hook if the config.actor_rollout_ref.actor.strategy == "feature_vector"
-            # if config.actor_rollout_ref.rollout.mode == "feature_vector":
-            #     actor_rollout_cls = FeatureVectorRolloutRefWorker
-            # elif config.actor_rollout_ref.rollout.mode == "async":
-            #     actor_rollout_cls = AsyncActorRolloutRefWorker
-            # else:
-            #     actor_rollout_cls = ActorRolloutRefWorker
+            # James: change this in config to use_feature_vector_steering
+            if config.actor_rollout_ref.use_feature_vector_steering == "feature_vector":
+                actor_rollout_cls = FeatureVectorRolloutRefWorker
 
             ray_worker_group_cls = RayWorkerGroup
 
