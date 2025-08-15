@@ -538,45 +538,59 @@ def compute_sae_activations_for_sentences(
     for i in range(0, len(sentences), batch_size):
         batch_sentences = sentences[i : i + batch_size]
 
-        for sentence in batch_sentences:
-            # Tokenize sentence
-            tokenized = tokenizer(
-                sentence,
-                return_tensors="pt",
-                add_special_tokens=False,
-                truncation=True,
-                max_length=512,
-            ).to(model.device)
+        # Batch tokenize all sentences at once
+        tokenized = tokenizer(
+            batch_sentences,
+            return_tensors="pt",
+            add_special_tokens=False,
+            truncation=True,
+            max_length=512,
+            padding=True,  # Pad to same length for batching
+        ).to(model.device)
 
-            with torch.no_grad():
-                # Get model activations at the SAE layer
+        with torch.no_grad():
+            try:
+                # Get model activations at the SAE layer for the whole batch
                 layer_acts_BLD = collect_activations(model, submodule, tokenized)
-
+                
                 # Encode through SAE
                 encoded_acts_BLF = sae.encode(layer_acts_BLD)
 
-                # Get activations for the target feature - shape: [batch, seq_len]
-                feature_acts = encoded_acts_BLF[0, :, target_feature_idx]  # [seq_len]
+                # Process each sentence in the batch
+                for batch_idx, sentence in enumerate(batch_sentences):
+                    # Get activations for this sentence and target feature
+                    feature_acts = encoded_acts_BLF[batch_idx, :, target_feature_idx]  # [seq_len]
 
-                # Convert to token activations
-                token_activations = []
-                token_ids = tokenized["input_ids"][0]  # [seq_len]
+                    # Convert to token activations
+                    token_activations = []
+                    token_ids = tokenized["input_ids"][batch_idx]  # [seq_len]
+                    attention_mask = tokenized["attention_mask"][batch_idx]  # [seq_len]
 
-                for i, (token_id, activation) in enumerate(zip(token_ids, feature_acts, strict=False)):
-                    token_str = tokenizer.decode([token_id.item()], skip_special_tokens=True)
-                    token_activations.append(
-                        TokenActivation(
-                            as_str=token_str,
-                            activation=activation.item(),
-                            token_id=token_id.item(),
+                    for token_idx, (token_id, activation, is_valid) in enumerate(zip(token_ids, feature_acts, attention_mask, strict=False)):
+                        if not is_valid:  # Skip padding tokens
+                            continue
+                            
+                        token_str = tokenizer.decode([token_id.item()], skip_special_tokens=True)
+                        token_activations.append(
+                            TokenActivation(
+                                as_str=token_str,
+                                activation=activation.item(),
+                                token_id=token_id.item(),
+                            )
                         )
-                    )
 
-                # Create SentenceInfo
-                max_activation = feature_acts.max().item()
-                sentence_info = SentenceInfo(max_activation=max_activation, tokens=token_activations, as_str=sentence)
+                    # Create SentenceInfo
+                    # Only consider non-padding tokens for max activation
+                    valid_activations = feature_acts[attention_mask.bool()]
+                    max_activation = valid_activations.max().item() if len(valid_activations) > 0 else 0.0
+                    sentence_info = SentenceInfo(max_activation=max_activation, tokens=token_activations, as_str=sentence)
 
-                sentence_infos.append(sentence_info)
+                    sentence_infos.append(sentence_info)
+                    
+            except Exception as e:
+                print(f"WARNING: Error processing batch: {e}")
+                print(f"Batch sentences: {batch_sentences}")
+                continue
 
     return sentence_infos
 
