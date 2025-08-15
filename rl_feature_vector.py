@@ -577,7 +577,7 @@ if __name__ == "__main__":
         hub_repo_id="thejaminator/grpo-feature-vector",  # Updated with "_verl" suffix
         hf_api_key=hf_api_key,
         reward_function_name="compute_score",
-        reward_function_file="math_reward_function.py",
+        reward_function_file="feature_vector_reward.py",
         wandb_api_key=wandb_key,
     )
 
