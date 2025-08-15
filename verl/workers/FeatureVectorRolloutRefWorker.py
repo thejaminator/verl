@@ -1,3 +1,4 @@
+import contextlib
 from typing import Callable, Sequence
 
 import torch
@@ -53,6 +54,7 @@ def get_activation_steering_hook(
 
         # Only touch the *prompt* forward pass (sequence length > 1)
         if L <= 1:
+            print(f"Skipping hook because sequence length is <= 1, shape resid_BLD: {resid_BLD.shape}")
             return (resid_BLD, *rest)
 
         print(
@@ -79,6 +81,14 @@ def get_activation_steering_hook(
 
     return hook_fn
 
+@contextlib.contextmanager
+def add_hook(module: torch.nn.Module, hook: Callable):
+    """Temporarily adds a forward hook to a model module."""
+    handle = module.register_forward_hook(hook)
+    try:
+        yield
+    finally:
+        handle.remove()
 
 class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
@@ -160,7 +170,8 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
                 positions.append([x_position])  # K=1, so wrap in list
 
             hook = get_activation_steering_hook(vectors, positions, steering_coefficient, device, dtype)
-            module_to_target.register_forward_hook(hook)
+            with add_hook(module_to_target, hook):
+                output = rollout.generate_sequences(prompts=prompts)
 
             """hook logic end"""
 
