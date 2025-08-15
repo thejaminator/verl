@@ -1,6 +1,6 @@
 import os
 
-from verl_launcher_script import VerlParams, verl_main
+from rl_feature_vector import VerlParams, verl_main
 
 if __name__ == "__main__":
     import dotenv
