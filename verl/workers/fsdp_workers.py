@@ -75,6 +75,9 @@ from verl.utils.profiler import DistProfiler, DistProfilerExtension, log_gpu_mem
 from verl.utils.profiler.performance import reduce_timing
 from verl.utils.py_functional import convert_to_regular_types
 from verl.workers.config import FSDPCriticConfig, FSDPEngineConfig
+from verl.workers.rollout.hf_rollout import HFRollout
+from verl.workers.rollout.sglang_rollout.sglang_rollout import SGLangRollout
+from verl.workers.rollout.vllm_rollout.vllm_rollout_spmd import vLLMAsyncRollout, vLLMRollout
 from verl.workers.sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
 
 logger = logging.getLogger(__file__)
@@ -632,7 +635,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             )
 
         if self._is_rollout:
-            self.rollout, self.rollout_sharding_manager = self._build_rollout(
+            self.rollout: HFRollout | vLLMAsyncRollout | vLLMRollout | SGLangRollout, self.rollout_sharding_manager = self._build_rollout(
                 trust_remote_code=self.config.model.get("trust_remote_code", False)
             )
 
@@ -932,7 +935,45 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
         print(
             f"FeatureVectorRolloutRefWorker: Calling generate_sequences. prompts non_tensor_batch: {prompts.non_tensor_batch}"
         )
-        return super().generate_sequences(prompts)
+        # Support all hardwares
+        prompts = prompts.to(get_device_id())
+
+        assert self._is_rollout
+
+        meta_info = {
+            "eos_token_id": self.generation_config.eos_token_id
+            if self.generation_config is not None
+            else self.tokenizer.eos_token_id,
+            "pad_token_id": self.generation_config.pad_token_id
+            if self.generation_config is not None
+            else self.tokenizer.pad_token_id,
+        }
+        prompts.meta_info.update(meta_info)
+        timing_generate = {}
+        with self.rollout_sharding_manager:
+            log_gpu_memory_usage("After entering rollout sharding manager", logger=logger)
+            rollout: vLLMRollout = self.rollout # type: ignore
+
+            prompts = self.rollout_sharding_manager.preprocess_data(prompts)
+            with simple_timer("generate_sequences", timing_generate):
+
+                # TODO(james): Add feature vector steering here.
+                output = rollout.generate_sequences(prompts=prompts)
+
+            log_gpu_memory_usage("After rollout generation", logger=logger)
+
+            output = self.rollout_sharding_manager.postprocess_data(output)
+
+        timing_generate.update(self.rollout_sharding_manager.timing)
+        # We calculate the average timing across all ranks
+        # to make sure meta_info["timing"] is the same
+        timing_generate = reduce_timing(timing_generate)
+        output.meta_info["timing"] = timing_generate
+        output = output.to("cpu")
+
+        # clear kv cache
+        get_torch_device().empty_cache()
+        return output
 
 
 class CriticWorker(Worker, DistProfilerExtension):
