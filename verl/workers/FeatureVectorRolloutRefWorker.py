@@ -128,8 +128,8 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
             """Hook logic begin"""
             layer = 9  # todo: DataProto may define this
             inference_model = rollout.inference_engine.llm_engine.model_executor.driver_worker.worker.model_runner.model
-            dtype = inference_model.dtype
-    
+            dtype = torch.bfloat16
+
             # This should get Gemma2DecoderLayer
             module_to_target = inference_model.model.layers[layer]
 
