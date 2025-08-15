@@ -25,15 +25,6 @@ from huggingface_hub import HfApi
 from pydantic import BaseModel
 
 
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-
-
-class RLSample(BaseModel):
-    messages: Sequence[ChatMessage]
-    answer: str
-
 
 class VerlParams(BaseModel):
     # Dataset paths

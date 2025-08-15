@@ -930,7 +930,23 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
 class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
     def generate_sequences(self, prompts: DataProto):
-        """Place where we do the hooking"""
+        """Place where we do the hooking.
+        DataProto should contain
+        "extra_info": {
+                        "prompt": X_PROMPT,
+                        "sae": {"feature_vector": feature_vector},
+                        "index": idx,
+        }
+        Where feature_vector is a list of floats.
+        class SAE(BaseModel):
+            sae_id: int
+            feature_vector: Sequence[float]
+            activations: SAEActivations
+            # Sentences that do not activate for the given sae_id. But come from a similar SAE
+            # Here the sae_id correspond to different similar SAEs.
+            # The activations are the activations w.r.t this SAE. And should be low.
+            hard_negatives: list[SAEActivations]
+        """
         print(
             f"FeatureVectorRolloutRefWorker: Calling generate_sequences. prompts non_tensor_batch: {prompts.non_tensor_batch}"
         )
@@ -952,7 +968,7 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
         with self.rollout_sharding_manager:
             log_gpu_memory_usage("After entering rollout sharding manager", logger=logger)
             rollout: vLLMRollout = self.rollout # type: ignore
-            """hook logic begin"""
+            """Hook logic begin"""
             layer = 9 # todo: DataProto may define this
             inference_model = (
                 rollout.inference_engine.llm_engine.model_executor.driver_worker.worker.model_runner.model
@@ -961,8 +977,13 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
             # print name
             print(f"Going to hook module_to_target name: {module_to_target.name}")
 
-
-
+            # DataProto should contain
+            try:
+                first_feature_vector = prompts.non_tensor_batch[0]["extra_info"]["sae"]["feature_vector"]
+                print(f"First feature vector: {first_feature_vector}")
+            except Exception as e:
+                print(f"Error getting feature vector: {e}")
+                raise ValueError("Feature vector not found in prompts")
             """hook logic end"""
 
 
