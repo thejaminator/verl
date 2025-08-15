@@ -75,9 +75,7 @@ from verl.utils.profiler import DistProfiler, DistProfilerExtension, log_gpu_mem
 from verl.utils.profiler.performance import reduce_timing
 from verl.utils.py_functional import convert_to_regular_types
 from verl.workers.config import FSDPCriticConfig, FSDPEngineConfig
-from verl.workers.rollout.hf_rollout import HFRollout
-from verl.workers.rollout.sglang_rollout.sglang_rollout import SGLangRollout
-from verl.workers.rollout.vllm_rollout.vllm_rollout_spmd import vLLMAsyncRollout, vLLMRollout
+from verl.workers.rollout.vllm_rollout.vllm_rollout_spmd import vLLMRollout
 from verl.workers.sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
 
 logger = logging.getLogger(__file__)
