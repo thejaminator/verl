@@ -87,6 +87,9 @@ def add_hook(module: torch.nn.Module, hook: Callable):
     handle = module.register_forward_hook(hook)
     try:
         yield
+    except Exception as e:
+        print(f"Error adding hook: {e}")
+        raise e
     finally:
         handle.remove()
 
@@ -170,15 +173,10 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
                 positions.append([x_position])  # K=1, so wrap in list
 
             hook = get_activation_steering_hook(vectors, positions, steering_coefficient, device, dtype)
-            with add_hook(module_to_target, hook):
-                output = rollout.generate_sequences(prompts=prompts)
-
-            """hook logic end"""
-
-            prompts = self.rollout_sharding_manager.preprocess_data(prompts)
+            processed_prompts = self.rollout_sharding_manager.preprocess_data(prompts)
             with simple_timer("generate_sequences", timing_generate):
-                # TODO(james): Add feature vector steering here.
-                output = rollout.generate_sequences(prompts=prompts)
+                with add_hook(module_to_target, hook):
+                    output = rollout.generate_sequences(prompts=processed_prompts)            
 
             log_gpu_memory_usage("After rollout generation", logger=logger)
 
