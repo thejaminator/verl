@@ -635,7 +635,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             )
 
         if self._is_rollout:
-            self.rollout: HFRollout | vLLMAsyncRollout | vLLMRollout | SGLangRollout, self.rollout_sharding_manager = self._build_rollout(
+            self.rollout, self.rollout_sharding_manager = self._build_rollout(
                 trust_remote_code=self.config.model.get("trust_remote_code", False)
             )
 
@@ -954,6 +954,20 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
         with self.rollout_sharding_manager:
             log_gpu_memory_usage("After entering rollout sharding manager", logger=logger)
             rollout: vLLMRollout = self.rollout # type: ignore
+            """hook logic begin"""
+            layer = 9 # todo: DataProto may define this
+            inference_model = (
+                rollout.inference_engine.llm_engine.model_executor.driver_worker.worker.model_runner.model
+            )
+            module_to_target = inference_model.model.layers[layer]
+            # print name
+            print(f"Going to hook module_to_target name: {module_to_target.name}")
+
+
+
+            """hook logic end"""
+
+
 
             prompts = self.rollout_sharding_manager.preprocess_data(prompts)
             with simple_timer("generate_sequences", timing_generate):
