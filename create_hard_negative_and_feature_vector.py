@@ -546,7 +546,7 @@ def compute_sae_activations_for_sentences(
                 add_special_tokens=False,
                 truncation=True,
                 max_length=512,
-            ).to(model.device, dtype=torch.Long)
+            ).to(model.device)
 
             with torch.no_grad():
                 # Get model activations at the SAE layer
@@ -677,11 +677,12 @@ def main(
             similar_max_acts = get_feature_max_activating_sentences(
                 acts_data, tokenizer, similar_feature.feature_idx, num_sentences
             )
-            similar_sentences = similar_max_acts.sentences
+            # sometimes empty??? 
+            candidate_similar_sentences = [s for s in similar_max_acts.sentences if s != ""]
 
             # Compute target feature activations on similar feature's sentences
             similar_sentence_infos = compute_sae_activations_for_sentences(
-                model, tokenizer, sae, submodule, similar_sentences, feature_idx, batch_size
+                model, tokenizer, sae, submodule, candidate_similar_sentences, feature_idx, batch_size
             )
 
             # Identify hard negatives
