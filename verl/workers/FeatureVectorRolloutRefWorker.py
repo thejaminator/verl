@@ -100,6 +100,7 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
     @DistProfiler.annotate(color="red", role="rollout_generate")
     def generate_sequences(self, prompts: DataProto):
         """Place where we do the hooking.
+        
         DataProto is
         batch: TensorDict = None
         non_tensor_batch: dict = field(default_factory=dict)
@@ -121,6 +122,7 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
         # print(
         #     f"FeatureVectorRolloutRefWorker: Calling generate_sequences. prompts non_tensor_batch: {prompts.non_tensor_batch}"
         # )
+        
         # Support all hardwares
         device: int = get_device_id()
         prompts = prompts.to(device)
@@ -178,18 +180,38 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
             for batch_idx in range(batch_size):
                 # Each feature vector becomes a single K=1 entry
                 feature_vec = torch.tensor(all_feature_vectors[batch_idx], dtype=dtype, device=device)
-                print(f"🔧 Feature vector {batch_idx} shape: {feature_vec.shape}")
                 vectors.append([feature_vec])  # K=1, so wrap in list
                 positions.append([x_position])  # K=1, so wrap in list
 
             hook = get_activation_steering_hook(vectors, positions, steering_coefficient, device, dtype)
+            
+            # Try hooking multiple modules to see which one gets called
+            def debug_hook(name):
+                def hook_fn(module, input, output):
+                    print(f"🔥 DEBUG: {name} module called! {type(module).__name__}")
+                return hook_fn
+            
+            # Hook multiple potential targets
+            debug_hooks = []
+            debug_hooks.append(module_to_target.register_forward_hook(debug_hook(f"layer_{layer}")))
+            
+            # Try hooking some submodules too
+            if hasattr(module_to_target, 'self_attn'):
+                debug_hooks.append(module_to_target.self_attn.register_forward_hook(debug_hook("self_attn")))
+            if hasattr(module_to_target, 'mlp'):
+                debug_hooks.append(module_to_target.mlp.register_forward_hook(debug_hook("mlp")))
                         
             processed_prompts = self.rollout_sharding_manager.preprocess_data(prompts)
             with simple_timer("generate_sequences", timing_generate):
-                with add_hook(module_to_target, hook):
-                    print("Hook registered, starting generation...")
-                    output = rollout.generate_sequences(prompts=processed_prompts)            
-                    print("Generation completed with hook")
+                try:
+                    with add_hook(module_to_target, hook):
+                        print("Hook registered, starting generation...")
+                        output = rollout.generate_sequences(prompts=processed_prompts)            
+                        print("Generation completed with hook")
+                finally:
+                    # Clean up debug hooks
+                    for h in debug_hooks:
+                        h.remove()
 
             log_gpu_memory_usage("After rollout generation", logger=logger)
 
