@@ -943,7 +943,12 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
     @DistProfiler.annotate(color="red", role="rollout_generate")
     def generate_sequences(self, prompts: DataProto):
         """Place where we do the hooking.
-        DataProto should contain
+        DataProto is
+        batch: TensorDict = None
+        non_tensor_batch: dict = field(default_factory=dict)
+        meta_info: dict = field(default_factory=dict)
+         
+        non_tensor_batch should 
         "extra_info": {
                         "prompt": X_PROMPT,
                         "sae": {"feature_vector": feature_vector},
@@ -987,12 +992,14 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
             module_to_target = inference_model.model.layers[layer]
             # DataProto should contain
             try:
-                first_feature_vector = prompts.non_tensor_batch[0]["extra_info"]["sae"]["feature_vector"]
+                first_feature_vector = prompts.non_tensor_batch["extra_info"]["sae"]["feature_vector"][0]
                 print(f"First feature vector: {first_feature_vector}")
             except Exception as e:
-                print(f"Error getting feature vector: {e}")
+                print(f"Error getting feature vector: {e} in prompts: {prompts}")
                 raise ValueError("Feature vector not found in prompts")
             all_feature_vectors: Sequence[Sequence[float]] = get_feature_vector(prompts)
+            x_position: int = 9 # Todo I forgot to add this to DataProto
+
             """hook logic end"""
 
             prompts = self.rollout_sharding_manager.preprocess_data(prompts)
