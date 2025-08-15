@@ -177,10 +177,10 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
                 print(f"Found latest checkpoint at step {step}")
             else:
                 print("❌ No checkpoints found!")
-                return
+                raise ValueError("No checkpoints found!")
         else:
             print(f"❌ Output directory not found: {params.output_dir}")
-            return
+            raise ValueError(f"Output directory not found: {params.output_dir}")
 
     # Construct the checkpoint paths - simplified structure
     actor_checkpoint_dir = os.path.join(params.output_dir, f"global_step_{step}", "actor")
@@ -188,7 +188,7 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
 
     if not os.path.exists(actor_checkpoint_dir):
         print(f"❌ Actor checkpoint not found: {actor_checkpoint_dir}")
-        return
+        raise ValueError(f"Actor checkpoint not found: {actor_checkpoint_dir}")
 
     # Check if this is a LoRA adapter checkpoint
     lora_adapter_dir = os.path.join(actor_checkpoint_dir, "lora_adapter")
@@ -270,39 +270,6 @@ on math reasoning tasks.
 - **LoRA alpha**: {params.lora_alpha}
 - **Number of generations**: {params.num_generations}
 
-## Model Architecture
-
-This LoRA adapter uses GRPO for reinforcement learning from math problem solutions with:
-- Custom reward function for mathematical accuracy
-- Length penalty for concise reasoning
-- Format rewards for proper answer tags
-
-## Usage
-
-```python
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from peft import PeftModel
-
-# Load base model
-base_model = AutoModelForCausalLM.from_pretrained("{params.model_name}")
-tokenizer = AutoTokenizer.from_pretrained("{params.model_name}")
-
-# Load LoRA adapter
-model = PeftModel.from_pretrained(base_model, "{repo_name}")
-
-# For math problems, use format:
-prompt = "Solve this problem step by step: What is 2+2?"
-inputs = tokenizer(prompt, return_tensors="pt")
-outputs = model.generate(**inputs, max_length=512)
-response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-```
-
-## Training Configuration
-
-- **Algorithm**: GRPO with KL regularization
-- **Strategy**: FSDP2 for efficient training
-- **Memory optimizations**: Parameter and optimizer offloading
-- **Data processing**: Filtered overlong prompts, padding removal
 
 Generated from verl LoRA checkpoint: `{lora_adapter_dir}`
 """
@@ -336,34 +303,7 @@ on math reasoning tasks.
 - **LoRA rank**: {params.lora_rank}
 - **Number of generations**: {params.num_generations}
 
-## Model Architecture
 
-This model uses GRPO for reinforcement learning from math problem solutions with:
-- Custom reward function for mathematical accuracy
-- Length penalty for concise reasoning
-- Format rewards for proper answer tags
-
-## Usage
-
-```python
-from transformers import AutoTokenizer, AutoModelForCausalLM
-
-tokenizer = AutoTokenizer.from_pretrained("{repo_name}")
-model = AutoModelForCausalLM.from_pretrained("{repo_name}")
-
-# For math problems, use format:
-prompt = "Solve this problem step by step: What is 2+2?"
-inputs = tokenizer(prompt, return_tensors="pt")
-outputs = model.generate(**inputs, max_length=512)
-response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-```
-
-## Training Configuration
-
-- **Algorithm**: GRPO with KL regularization
-- **Strategy**: FSDP2 for efficient training
-- **Memory optimizations**: Parameter and optimizer offloading
-- **Data processing**: Filtered overlong prompts, padding removal
 
 Generated using verl model merger from checkpoint: `{actor_checkpoint_dir}`
 """
@@ -626,7 +566,7 @@ if __name__ == "__main__":
         layered_summon=False,
         max_steps=4000,
         output_dir="/workspace/verl_outputs_feature_vector",
-        train_path="../hard_negatives_results.jsonl",
+        train_path="hard_negatives_results.jsonl",
         eval_path=None,
         save_steps=10,
         n_gpus=1,
