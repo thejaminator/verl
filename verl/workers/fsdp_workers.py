@@ -939,6 +939,8 @@ def get_feature_vector(prompts: DataProto) -> Sequence[Sequence[float]]:
 
 
 class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    @DistProfiler.annotate(color="red", role="rollout_generate")
     def generate_sequences(self, prompts: DataProto):
         """Place where we do the hooking.
         DataProto should contain
