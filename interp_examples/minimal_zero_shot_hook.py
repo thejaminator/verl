@@ -6,18 +6,19 @@ This script generates self-explanations for sparse autoencoder features using
 activation steering with the Gemma-2-9B-IT model.
 """
 
-import torch
 import contextlib
+import os
+from abc import ABC, abstractmethod
 from typing import Callable
+
+import einops
+import numpy as np
+import torch
+import torch.nn as nn
+from huggingface_hub import hf_hub_download
 from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.tokenization_utils import PreTrainedTokenizer
-import einops
-import numpy as np
-import torch.nn as nn
-from huggingface_hub import hf_hub_download
-import os
-from abc import ABC, abstractmethod
 
 
 class BaseSAE(nn.Module, ABC):

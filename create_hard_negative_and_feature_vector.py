@@ -552,7 +552,7 @@ def compute_sae_activations_for_sentences(
             try:
                 # Get model activations at the SAE layer for the whole batch
                 layer_acts_BLD = collect_activations(model, submodule, tokenized)
-                
+
                 # Encode through SAE
                 encoded_acts_BLF = sae.encode(layer_acts_BLD)
 
@@ -566,10 +566,12 @@ def compute_sae_activations_for_sentences(
                     token_ids = tokenized["input_ids"][batch_idx]  # [seq_len]
                     attention_mask = tokenized["attention_mask"][batch_idx]  # [seq_len]
 
-                    for token_idx, (token_id, activation, is_valid) in enumerate(zip(token_ids, feature_acts, attention_mask, strict=False)):
+                    for token_idx, (token_id, activation, is_valid) in enumerate(
+                        zip(token_ids, feature_acts, attention_mask, strict=False)
+                    ):
                         if not is_valid:  # Skip padding tokens
                             continue
-                            
+
                         token_str = tokenizer.decode([token_id.item()], skip_special_tokens=True)
                         token_activations.append(
                             TokenActivation(
@@ -583,10 +585,12 @@ def compute_sae_activations_for_sentences(
                     # Only consider non-padding tokens for max activation
                     valid_activations = feature_acts[attention_mask.bool()]
                     max_activation = valid_activations.max().item() if len(valid_activations) > 0 else 0.0
-                    sentence_info = SentenceInfo(max_activation=max_activation, tokens=token_activations, as_str=sentence)
+                    sentence_info = SentenceInfo(
+                        max_activation=max_activation, tokens=token_activations, as_str=sentence
+                    )
 
                     sentence_infos.append(sentence_info)
-                    
+
             except Exception as e:
                 print(f"WARNING: Error processing batch: {e}")
                 print(f"Batch sentences: {batch_sentences}")
@@ -691,7 +695,7 @@ def main(
             similar_max_acts = get_feature_max_activating_sentences(
                 acts_data, tokenizer, similar_feature.feature_idx, num_sentences
             )
-            # sometimes empty??? 
+            # sometimes empty???
             candidate_similar_sentences = [s for s in similar_max_acts.sentences if s != ""]
 
             # Compute target feature activations on similar feature's sentences

@@ -927,6 +927,14 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         self.profiler.stop()
 
 
+class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
+    def generate_sequences(self, prompts: DataProto):
+        print(
+            f"FeatureVectorRolloutRefWorker: Calling generate_sequences. prompts non_tensor_batch: {prompts.non_tensor_batch}"
+        )
+        return super().generate_sequences(prompts)
+
+
 class CriticWorker(Worker, DistProfilerExtension):
     def __init__(self, config: FSDPCriticConfig):
         Worker.__init__(self)

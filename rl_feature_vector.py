@@ -42,7 +42,7 @@ class VerlParams(BaseModel):
     reward_function_name: str = "compute_score"
     reward_function_file: str = "math_reward_function.py"
     experiment_name: str | None = None
-
+    actor_rollout_ref_strategy: str = "feature_vector"
     # Model configuration
     model_name: str = "google/gemma-2-9b-it"
 
@@ -383,6 +383,11 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         "actor_rollout_ref.model.trust_remote_code=false",
         "actor_rollout_ref.model.use_remove_padding=true",
     ]
+    if params.actor_rollout_ref_strategy == "feature_vector":
+        # use FeatureVectorRolloutRefWorker if we want to use feature vector steering.
+        cmd.append("actor_rollout_ref.actor.strategy=feature_vector")
+    else:
+        cmd.append("actor_rollout_ref.actor.strategy=sync")
 
     # Add LoRA parameters conditionally
     if params.lora_rank > 0:
@@ -577,6 +582,7 @@ if __name__ == "__main__":
         reward_function_name="compute_score",
         reward_function_file="feature_vector_reward.py",
         wandb_api_key=wandb_key,
+        actor_rollout_ref_strategy="feature_vector",
     )
 
     verl_main(params)

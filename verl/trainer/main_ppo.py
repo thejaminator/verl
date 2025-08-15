@@ -22,6 +22,7 @@ import hydra
 import ray
 from omegaconf import OmegaConf
 
+from recipe.feature_vector.fsdp_workers import FeatureVectorRolloutRefWorker
 from verl.experimental.dataset.sampler import AbstractSampler
 from verl.trainer.constants_ppo import get_ppo_ray_runtime_env
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
@@ -145,11 +146,19 @@ class TaskRunner:
             else:
                 raise ValueError(f"Invalid use_legacy_worker_impl: {use_legacy_worker_impl}")
 
-            actor_rollout_cls = (
-                AsyncActorRolloutRefWorker
-                if config.actor_rollout_ref.rollout.mode == "async"
-                else ActorRolloutRefWorker
-            )
+            # actor_rollout_cls = (
+            #     AsyncActorRolloutRefWorker
+            #     if config.actor_rollout_ref.rollout.mode == "async"
+            #     else ActorRolloutRefWorker
+            # )
+            # James: Switch to the hook if the config.actor_rollout_ref.actor.strategy == "feature_vector"
+            if config.actor_rollout_ref.actor.strategy == "feature_vector":
+                actor_rollout_cls = FeatureVectorRolloutRefWorker
+            elif config.actor_rollout_ref.actor.strategy == "async":
+                actor_rollout_cls = AsyncActorRolloutRefWorker
+            else:
+                actor_rollout_cls = ActorRolloutRefWorker
+
             ray_worker_group_cls = RayWorkerGroup
 
         elif config.actor_rollout_ref.actor.strategy == "megatron":
