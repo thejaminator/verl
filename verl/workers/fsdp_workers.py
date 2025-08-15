@@ -959,9 +959,9 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
             # The activations are the activations w.r.t this SAE. And should be low.
             hard_negatives: list[SAEActivations]
         """
-        print(
-            f"FeatureVectorRolloutRefWorker: Calling generate_sequences. prompts non_tensor_batch: {prompts.non_tensor_batch}"
-        )
+        # print(
+        #     f"FeatureVectorRolloutRefWorker: Calling generate_sequences. prompts non_tensor_batch: {prompts.non_tensor_batch}"
+        # )
         # Support all hardwares
         prompts = prompts.to(get_device_id())
 
@@ -983,10 +983,8 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
             """Hook logic begin"""
             layer = 9  # todo: DataProto may define this
             inference_model = rollout.inference_engine.llm_engine.model_executor.driver_worker.worker.model_runner.model
+            # This should get Gemma2DecoderLayer
             module_to_target = inference_model.model.layers[layer]
-            # print name
-            print(f"Going to hook module_to_target name: {module_to_target.name}")
-
             # DataProto should contain
             try:
                 first_feature_vector = prompts.non_tensor_batch[0]["extra_info"]["sae"]["feature_vector"]
