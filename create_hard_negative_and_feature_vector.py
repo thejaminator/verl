@@ -546,7 +546,7 @@ def compute_sae_activations_for_sentences(
                 add_special_tokens=False,
                 truncation=True,
                 max_length=512,
-            )
+            ).to(model.device, dtype=torch.Long)
 
             with torch.no_grad():
                 # Get model activations at the SAE layer
