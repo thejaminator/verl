@@ -40,6 +40,7 @@ class VerlParams(BaseModel):
     train_path: str
     eval_path: str | None = None
     reward_function_name: str = "compute_score"
+    reward_function_file: str = "math_reward_function.py"
     experiment_name: str | None = None
 
     # Model configuration
@@ -129,7 +130,10 @@ def load_and_convert_dataset(dataset_path: str, output_path: str, data_source: s
                     "data_source": data_source,
                     "prompt": [prompt_as_chat_dict],
                     "ability": "explanations",  # No idea what we need to edit this for, but verl requires it?
-                    "reward_model": {"style": "rule"},
+                    "reward_model": {
+                        "style": "rule",
+                        "ground_truth": "no ground truth",
+                    },  # verl requires passing something for ground truth?
                     "extra_info": {
                         "prompt": prompt,
                         "sae": sample.model_dump(),
@@ -576,26 +580,16 @@ def verl_main(params: VerlParams):
 
     # Convert datasets to parquet format
     train_parquet = os.path.join(params.output_dir, "train.parquet")
-    load_and_convert_dataset(params.train_path, train_parquet, data_source="math_training_data")
+    load_and_convert_dataset(params.train_path, train_parquet)
 
     eval_parquet = None
     if params.eval_path:
         eval_parquet = os.path.join(params.output_dir, "eval.parquet")
-        load_and_convert_dataset(params.eval_path, eval_parquet, data_source="math_eval_data")
+        load_and_convert_dataset(params.eval_path, eval_parquet)
 
     # Use math reward function directly
-    reward_file = "math_reward_function.py"
-
-    if os.path.exists(reward_file):
-        print(f"Using math reward function: {reward_file}")
-        print("Reward function includes:")
-        print("  - Format rewards (0.5 + 0.5 + 1.0 points)")
-        print("  - Correctness reward (8.0 points)")
-        print("  - Length penalty (up to 4.0 points when correct)")
-        print("  - Total possible: ~14.0 points")
-    else:
-        print(f"❌ Error: Could not find reward function file at {reward_file}")
-        sys.exit(1)
+    reward_file = params.reward_function_file
+    assert os.path.exists(reward_file), f"Reward function file not found: {reward_file}"
 
     # Launch training
     print("\nLaunching verl training...")
@@ -643,6 +637,7 @@ if __name__ == "__main__":
         hub_repo_id="thejaminator/grpo-feature-vector",  # Updated with "_verl" suffix
         hf_api_key=hf_api_key,
         reward_function_name="compute_score",
+        reward_function_file="math_reward_function.py",
         wandb_api_key=wandb_key,
     )
 
