@@ -68,16 +68,26 @@ def get_activation_steering_hook(
             bad = pos_BK[pos_BK >= L].min().item()
             raise IndexError(f"position {bad} is out of bounds for length {L}")
 
-        # ---- compute norms of original activations at the target slots ----
-        batch_idx_B1 = torch.arange(B, device=device).unsqueeze(1)  # (B, 1) → (B, K)
-        orig_BKD = resid_BLD[batch_idx_B1, pos_BK]  # (B, K, d)
+        # # ---- compute norms of original activations at the target slots ----
+        # batch_idx_B1 = torch.arange(B, device=device).unsqueeze(1)  # (B, 1) → (B, K)
+        # orig_BKD = resid_BLD[batch_idx_B1, pos_BK]  # (B, K, d)
+        # norms_BK1 = orig_BKD.norm(dim=-1, keepdim=True)  # (B, K, 1)
+
+        # # ---- build steered vectors ----
+        # steered_BKD = torch.nn.functional.normalize(vec_BKD, dim=-1) * norms_BK1 * steering_coefficient  # (B, K, d)
+
+        # # ---- in-place replacement via advanced indexing ----
+        # resid_BLD[batch_idx_B1, pos_BK] = steered_BKD
+
+        batch_idx_BK = torch.arange(B, device=device).unsqueeze(1).expand(B, K)  # (B, K)
+        orig_BKD = resid_BLD[batch_idx_BK, pos_BK]  # (B, K, d)
         norms_BK1 = orig_BKD.norm(dim=-1, keepdim=True)  # (B, K, 1)
 
         # ---- build steered vectors ----
         steered_BKD = torch.nn.functional.normalize(vec_BKD, dim=-1) * norms_BK1 * steering_coefficient  # (B, K, d)
 
         # ---- in-place replacement via advanced indexing ----
-        resid_BLD[batch_idx_B1, pos_BK] = steered_BKD
+        resid_BLD[batch_idx_BK, pos_BK] = steered_BKD
 
         return (resid_BLD, *rest)
 
