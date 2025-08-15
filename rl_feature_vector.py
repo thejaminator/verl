@@ -442,7 +442,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             "actor_rollout_ref.rollout.dtype=bfloat16",
             "actor_rollout_ref.rollout.gpu_memory_utilization=0.6",
             "actor_rollout_ref.rollout.ignore_eos=false",
-            "actor_rollout_ref.rollout.enforce_eager=false",
+            "actor_rollout_ref.rollout.enforce_eager=true",
             "actor_rollout_ref.rollout.free_cache_engine=true",
             f"actor_rollout_ref.rollout.load_format={load_format}",
             "actor_rollout_ref.rollout.tensor_model_parallel_size=1",

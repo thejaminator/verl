@@ -184,34 +184,14 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
                 positions.append([x_position])  # K=1, so wrap in list
 
             hook = get_activation_steering_hook(vectors, positions, steering_coefficient, device, dtype)
-            
-            # Try hooking multiple modules to see which one gets called
-            def debug_hook(name):
-                def hook_fn(module, input, output):
-                    print(f"🔥 DEBUG: {name} module called! {type(module).__name__}")
-                return hook_fn
-            
-            # Hook multiple potential targets
-            debug_hooks = []
-            debug_hooks.append(module_to_target.register_forward_hook(debug_hook(f"layer_{layer}")))
-            
-            # Try hooking some submodules too
-            if hasattr(module_to_target, 'self_attn'):
-                debug_hooks.append(module_to_target.self_attn.register_forward_hook(debug_hook("self_attn")))
-            if hasattr(module_to_target, 'mlp'):
-                debug_hooks.append(module_to_target.mlp.register_forward_hook(debug_hook("mlp")))
                         
             processed_prompts = self.rollout_sharding_manager.preprocess_data(prompts)
+            # NOTE: Need to enforce eager
             with simple_timer("generate_sequences", timing_generate):
-                try:
-                    with add_hook(module_to_target, hook):
-                        print("Hook registered, starting generation...")
-                        output = rollout.generate_sequences(prompts=processed_prompts)            
-                        print("Generation completed with hook")
-                finally:
-                    # Clean up debug hooks
-                    for h in debug_hooks:
-                        h.remove()
+                with add_hook(module_to_target, hook):
+                    print("Hook registered, starting generation...")
+                    output = rollout.generate_sequences(prompts=processed_prompts)            
+                    print("Generation completed with hook")
 
             log_gpu_memory_usage("After rollout generation", logger=logger)
 
