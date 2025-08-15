@@ -932,6 +932,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
 class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
     def generate_sequences(self, prompts: DataProto):
+        """Place where we do the hooking"""
         print(
             f"FeatureVectorRolloutRefWorker: Calling generate_sequences. prompts non_tensor_batch: {prompts.non_tensor_batch}"
         )
