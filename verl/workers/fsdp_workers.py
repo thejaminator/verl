@@ -934,8 +934,9 @@ def get_feature_vector(prompts: DataProto) -> Sequence[Sequence[float]]:
     """
     output: list[Sequence[float]] = []
     for item in prompts.non_tensor_batch:
-        output.append(item["extra_info"]["sae"]["feature_vector"]) # type: ignore
+        output.append(item["extra_info"]["sae"]["feature_vector"])  # type: ignore
     return output
+
 
 class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
     def generate_sequences(self, prompts: DataProto):
@@ -976,12 +977,10 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
         timing_generate = {}
         with self.rollout_sharding_manager:
             log_gpu_memory_usage("After entering rollout sharding manager", logger=logger)
-            rollout: vLLMRollout = self.rollout # type: ignore
+            rollout: vLLMRollout = self.rollout  # type: ignore
             """Hook logic begin"""
-            layer = 9 # todo: DataProto may define this
-            inference_model = (
-                rollout.inference_engine.llm_engine.model_executor.driver_worker.worker.model_runner.model
-            )
+            layer = 9  # todo: DataProto may define this
+            inference_model = rollout.inference_engine.llm_engine.model_executor.driver_worker.worker.model_runner.model
             module_to_target = inference_model.model.layers[layer]
             # print name
             print(f"Going to hook module_to_target name: {module_to_target.name}")
@@ -996,11 +995,8 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
             all_feature_vectors: Sequence[Sequence[float]] = get_feature_vector(prompts)
             """hook logic end"""
 
-
-
             prompts = self.rollout_sharding_manager.preprocess_data(prompts)
             with simple_timer("generate_sequences", timing_generate):
-
                 # TODO(james): Add feature vector steering here.
                 output = rollout.generate_sequences(prompts=prompts)
 

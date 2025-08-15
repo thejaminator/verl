@@ -16,14 +16,12 @@ from create_hard_negative_and_feature_vector import SAE
 os.environ["HF_HOME"] = "/workspace"
 import subprocess
 import sys
-from typing import Sequence
 
 import wandb
 
 # Step 2: Push to HuggingFace Hub
 from huggingface_hub import HfApi
 from pydantic import BaseModel
-
 
 
 class VerlParams(BaseModel):
@@ -33,7 +31,7 @@ class VerlParams(BaseModel):
     reward_function_name: str = "compute_score"
     reward_function_file: str = "math_reward_function.py"
     experiment_name: str | None = None
-    actor_rollout_ref_strategy: str = "feature_vector"
+    use_feature_vector: bool = True
     # Model configuration
     model_name: str = "google/gemma-2-9b-it"
 
@@ -374,7 +372,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         "actor_rollout_ref.model.trust_remote_code=false",
         "actor_rollout_ref.model.use_remove_padding=true",
     ]
-    if params.actor_rollout_ref_strategy == "feature_vector":
+    if params.use_feature_vector:
         # use FeatureVectorRolloutRefWorker if we want to use feature vector steering.
         # Note: don't override actor_rollout_ref.rollout.mode because verl's code depends on it being set to sync in a few places.
         # I made a new key in ppo_trainer.yaml to allow this.

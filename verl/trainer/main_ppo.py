@@ -130,7 +130,11 @@ class TaskRunner:
         if config.actor_rollout_ref.actor.strategy in {"fsdp", "fsdp2"}:
             assert config.critic.strategy in {"fsdp", "fsdp2"}
             from verl.single_controller.ray import RayWorkerGroup
-            from verl.workers.fsdp_workers import ActorRolloutRefWorker, AsyncActorRolloutRefWorker, FeatureVectorRolloutRefWorker
+            from verl.workers.fsdp_workers import (
+                ActorRolloutRefWorker,
+                AsyncActorRolloutRefWorker,
+                FeatureVectorRolloutRefWorker,
+            )
 
             use_legacy_worker_impl = config.trainer.get("use_legacy_worker_impl", "auto")
             if use_legacy_worker_impl in ["auto", "enable"]:
@@ -151,7 +155,9 @@ class TaskRunner:
                 else ActorRolloutRefWorker
             )
             # James: change this in config to use_feature_vector_steering
-            if config.actor_rollout_ref.use_feature_vector_steering == "feature_vector":
+            use_feature_vector = config.actor_rollout_ref.use_feature_vector_steering
+            print(f"use_feature_vector: {use_feature_vector}")
+            if use_feature_vector is True:
                 actor_rollout_cls = FeatureVectorRolloutRefWorker
 
             ray_worker_group_cls = RayWorkerGroup
