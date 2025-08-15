@@ -152,7 +152,8 @@ class TaskRunner:
             # )
             # James: Switch to the hook if the config.actor_rollout_ref.actor.strategy == "feature_vector"
             if config.actor_rollout_ref.rollout.mode == "feature_vector":
-                actor_rollout_cls = FeatureVectorRolloutRefWorker
+                # actor_rollout_cls = FeatureVectorRolloutRefWorker
+                actor_rollout_cls = ActorRolloutRefWorker
             elif config.actor_rollout_ref.rollout.mode == "async":
                 actor_rollout_cls = AsyncActorRolloutRefWorker
             else:

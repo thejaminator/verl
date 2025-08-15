@@ -20,7 +20,7 @@ import logging
 import os
 import warnings
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 import psutil
@@ -928,6 +928,15 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         self.profiler.stop()
 
 
+def get_feature_vector(prompts: DataProto) -> Sequence[Sequence[float]]:
+    """
+    Get the feature vector from the prompts.
+    """
+    output: list[Sequence[float]] = []
+    for item in prompts.non_tensor_batch:
+        output.append(item["extra_info"]["sae"]["feature_vector"]) # type: ignore
+    return output
+
 class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
     def generate_sequences(self, prompts: DataProto):
         """Place where we do the hooking.
@@ -984,6 +993,7 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
             except Exception as e:
                 print(f"Error getting feature vector: {e}")
                 raise ValueError("Feature vector not found in prompts")
+            all_feature_vectors: Sequence[Sequence[float]] = get_feature_vector(prompts)
             """hook logic end"""
 
 
