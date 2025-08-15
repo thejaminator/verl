@@ -49,8 +49,10 @@ def get_activation_steering_hook(
     pos_BK = pos_BK.to(device)
 
     def hook_fn(module, _input, output):
+        print(f"🔥 HOOK CALLED! Module: {type(module).__name__}")
         resid_BLD, *rest = output  # Gemma returns (resid, hidden_states, ...)
         L = resid_BLD.shape[1]
+        print(f"🔥 Hook processing: sequence length {L}, batch shape {resid_BLD.shape}")
 
         # Only touch the *prompt* forward pass (sequence length > 1)
         if L <= 1:
@@ -140,8 +142,15 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
             rollout: vLLMRollout = self.rollout  # type: ignore
             """Hook logic begin"""
             layer = 9  # todo: DataProto may define this
-            inference_model = rollout.inference_engine.llm_engine.model_executor.driver_worker.worker.model_runner.model
+            # Try the path from vllm_hook_demo.py
+            inference_model = rollout.inference_engine.llm_engine.model_executor.driver_worker.model_runner.model
             dtype = torch.bfloat16
+
+            # Debug model structure
+            print(f"🔍 Inference model type: {type(inference_model)}")
+            print(f"🔍 Model layers type: {type(inference_model.model.layers)}")
+            print(f"🔍 Total layers: {len(inference_model.model.layers)}")
+            print(f"🔍 Target layer type: {type(inference_model.model.layers[layer])}")
 
             # This should get Gemma2DecoderLayer
             module_to_target = inference_model.model.layers[layer]
@@ -169,14 +178,18 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
             for batch_idx in range(batch_size):
                 # Each feature vector becomes a single K=1 entry
                 feature_vec = torch.tensor(all_feature_vectors[batch_idx], dtype=dtype, device=device)
+                print(f"🔧 Feature vector {batch_idx} shape: {feature_vec.shape}")
                 vectors.append([feature_vec])  # K=1, so wrap in list
                 positions.append([x_position])  # K=1, so wrap in list
 
             hook = get_activation_steering_hook(vectors, positions, steering_coefficient, device, dtype)
+                        
             processed_prompts = self.rollout_sharding_manager.preprocess_data(prompts)
             with simple_timer("generate_sequences", timing_generate):
                 with add_hook(module_to_target, hook):
+                    print("Hook registered, starting generation...")
                     output = rollout.generate_sequences(prompts=processed_prompts)            
+                    print("Generation completed with hook")
 
             log_gpu_memory_usage("After rollout generation", logger=logger)
 
