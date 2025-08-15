@@ -49,17 +49,22 @@ def get_activation_steering_hook(
 
     def hook_fn(module, _input, output):
         print(f"🔥 HOOK CALLED! Module: {type(module).__name__}")
-        resid_BLD, *rest = output  # Gemma returns (resid, hidden_states, ...)
-        L = resid_BLD.shape[1]
-        print(f"🔥 Hook processing: sequence length {L}, batch shape {resid_BLD.shape}")
+        resid_flat, *rest = output  # vLLM uses flattened layout: (batch_size * seq_len, d_model)
+        total_tokens, d_model = resid_flat.shape
+        print(f"🔥 Hook processing: total_tokens {total_tokens}, d_model {d_model}, shape {resid_flat.shape}")
+
+        # vLLM flattens (B, L) -> (B*L), so we need to infer L from total_tokens
+        # Assuming all sequences have the same length L
+        L = total_tokens // B
+        print(f"🔥 Inferred: batch_size={B}, seq_len={L}")
 
         # Only touch the *prompt* forward pass (sequence length > 1)
         if L <= 1:
-            print(f"Skipping hook because sequence length is <= 1, shape resid_BLD: {resid_BLD.shape}")
-            return (resid_BLD, *rest)
+            print(f"Skipping hook because sequence length is <= 1, total_tokens: {total_tokens}")
+            return (resid_flat, *rest)
 
         print(
-            f"Applying feature vector on module {type(module).__name__}. Sequence length: {L}, Batch size: {resid_BLD.shape[0]}"
+            f"Applying feature vector on module {type(module).__name__}. Sequence length: {L}, Batch size: {B}"
         )
 
         # Safety: make sure every position is inside current sequence
@@ -67,18 +72,22 @@ def get_activation_steering_hook(
             bad = pos_B[pos_B >= L].min().item()
             raise IndexError(f"position {bad} is out of bounds for length {L}")
 
+        # ---- compute flat indices for vLLM's layout ----
+        # For batch b at position p: flat_index = b * L + p
+        batch_offsets = torch.arange(B, device=device) * L  # (B,)
+        flat_indices = batch_offsets + pos_B  # (B,)
+        
         # ---- compute norms of original activations at the target slots ----
-        batch_idx_B = torch.arange(B, device=device)  # (B,)
-        orig_BD = resid_BLD[batch_idx_B, pos_B, :]  # (B, d_model) - explicit last dimension
+        orig_BD = resid_flat[flat_indices]  # (B, d_model)
         norms_B1 = orig_BD.norm(dim=-1, keepdim=True)  # (B, 1)
 
         # ---- build steered vectors ----
         steered_BD = torch.nn.functional.normalize(vec_BD, dim=-1) * norms_B1 * steering_coefficient  # (B, d_model)
 
-        # ---- in-place replacement via advanced indexing ----
-        resid_BLD[batch_idx_B, pos_B, :] = steered_BD
+        # ---- in-place replacement via flat indexing ----
+        resid_flat[flat_indices] = steered_BD
 
-        return (resid_BLD, *rest)
+        return (resid_flat, *rest)
 
     return hook_fn
 
