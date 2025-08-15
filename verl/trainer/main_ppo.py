@@ -158,7 +158,9 @@ class TaskRunner:
             use_feature_vector = config.actor_rollout_ref.use_feature_vector_steering
             print(f"use_feature_vector: {use_feature_vector}")
             if use_feature_vector is True:
-                actor_rollout_cls = FeatureVectorRolloutRefWorker
+                # actor_rollout_cls = FeatureVectorRolloutRefWorker
+                # Somehow normal subclassing doesn't work. So we do this evil monkey patch.
+                ActorRolloutRefWorker.generate_sequences = FeatureVectorRolloutRefWorker.generate_sequences # type: ignore
 
             ray_worker_group_cls = RayWorkerGroup
 
