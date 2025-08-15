@@ -385,10 +385,8 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
     ]
     if params.actor_rollout_ref_strategy == "feature_vector":
         # use FeatureVectorRolloutRefWorker if we want to use feature vector steering.
-        cmd.append("actor_rollout_ref.actor.strategy=feature_vector")
-    else:
-        cmd.append("actor_rollout_ref.actor.strategy=sync")
-
+        cmd.append("actor_rollout_ref.rollout.mode=feature_vector")
+        
     # Add LoRA parameters conditionally
     if params.lora_rank > 0:
         cmd.extend(
