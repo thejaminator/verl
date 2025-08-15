@@ -933,8 +933,8 @@ def get_feature_vector(prompts: DataProto) -> Sequence[Sequence[float]]:
     Get the feature vector from the prompts.
     """
     output: list[Sequence[float]] = []
-    for item in prompts.non_tensor_batch:
-        output.append(item["extra_info"]["sae"]["feature_vector"])  # type: ignore
+    for item in prompts.non_tensor_batch["sae"]:
+        output.append(item["feature_vector"])  # type: ignore
     return output
 
 
@@ -989,12 +989,12 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
             module_to_target = inference_model.model.layers[layer]
             # DataProto should contain
             try:
-                first_feature_vector = prompts.non_tensor_batch["sae"]["feature_vector"][0]
-                print(f"First feature vector: {first_feature_vector}")
+                all_feature_vectors: Sequence[Sequence[float]] = get_feature_vector(prompts)
+                print(f"First feature vector: {all_feature_vectors[0]}")
             except Exception as e:
                 print(f"Error getting feature vector: {e} in prompts: {prompts}")
                 raise ValueError("Feature vector not found in prompts")
-            all_feature_vectors: Sequence[Sequence[float]] = get_feature_vector(prompts)
+            
             x_position: int = 9  # Todo I forgot to add this to DataProto
 
             """hook logic end"""
