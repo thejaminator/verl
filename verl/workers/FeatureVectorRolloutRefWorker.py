@@ -107,7 +107,8 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
         #     f"FeatureVectorRolloutRefWorker: Calling generate_sequences. prompts non_tensor_batch: {prompts.non_tensor_batch}"
         # )
         # Support all hardwares
-        prompts = prompts.to(get_device_id())
+        device: int = get_device_id()
+        prompts = prompts.to(device)
 
         assert self._is_rollout
 
@@ -127,7 +128,8 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
             """Hook logic begin"""
             layer = 9  # todo: DataProto may define this
             inference_model = rollout.inference_engine.llm_engine.model_executor.driver_worker.worker.model_runner.model
-
+            dtype = inference_model.dtype
+    
             # This should get Gemma2DecoderLayer
             module_to_target = inference_model.model.layers[layer]
 
@@ -144,9 +146,6 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
             # Hardcoded for "Can you explain to me what 'X' means? Format your final answer with <explanation>" in chat format.
             x_position: int = 11  # TODO: I forgot to add this to DataProto.
             steering_coefficient = 2.0  # TODO: Let DataProto define this.
-
-            device = module_to_target.device
-            dtype = module_to_target.dtype
 
             # Convert feature vectors to tensor format expected by the hook
             # [B][K, d_model] - assuming d_model matches the feature vector dimension
