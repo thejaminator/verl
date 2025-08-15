@@ -20,7 +20,7 @@ import logging
 import os
 import warnings
 from dataclasses import asdict
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 import psutil
@@ -75,7 +75,6 @@ from verl.utils.profiler import DistProfiler, DistProfilerExtension, log_gpu_mem
 from verl.utils.profiler.performance import reduce_timing
 from verl.utils.py_functional import convert_to_regular_types
 from verl.workers.config import FSDPCriticConfig, FSDPEngineConfig
-from verl.workers.rollout.vllm_rollout.vllm_rollout_spmd import vLLMRollout
 from verl.workers.sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
 
 logger = logging.getLogger(__file__)
@@ -926,98 +925,6 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     def stop_profile(self) -> None:
         """Stop profiling for the current rank in the current training step."""
         self.profiler.stop()
-
-
-def get_feature_vector(prompts: DataProto) -> Sequence[Sequence[float]]:
-    """
-    Get the feature vector from the prompts.
-    """
-    output: list[Sequence[float]] = []
-    for item in prompts.non_tensor_batch["sae"]:
-        output.append(item["feature_vector"])  # type: ignore
-    return output
-
-
-class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
-    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    @DistProfiler.annotate(color="red", role="rollout_generate")
-    def generate_sequences(self, prompts: DataProto):
-        """Place where we do the hooking.
-        DataProto is
-        batch: TensorDict = None
-        non_tensor_batch: dict = field(default_factory=dict)
-        meta_info: dict = field(default_factory=dict)
-
-        non_tensor_batch should  have "sae": {"feature_vector": feature_vector}
-        Where feature_vector is a list of floats.
-
-        This is the class we use to pass the sae information to the rollout worker.
-        class SAE(BaseModel):
-            sae_id: int
-            feature_vector: Sequence[float]
-            activations: SAEActivations
-            # Sentences that do not activate for the given sae_id. But come from a similar SAE
-            # Here the sae_id correspond to different similar SAEs.
-            # The activations are the activations w.r.t this SAE. And should be low.
-            hard_negatives: list[SAEActivations]
-        """
-        # print(
-        #     f"FeatureVectorRolloutRefWorker: Calling generate_sequences. prompts non_tensor_batch: {prompts.non_tensor_batch}"
-        # )
-        # Support all hardwares
-        prompts = prompts.to(get_device_id())
-
-        assert self._is_rollout
-
-        meta_info = {
-            "eos_token_id": self.generation_config.eos_token_id
-            if self.generation_config is not None
-            else self.tokenizer.eos_token_id,
-            "pad_token_id": self.generation_config.pad_token_id
-            if self.generation_config is not None
-            else self.tokenizer.pad_token_id,
-        }
-        prompts.meta_info.update(meta_info)
-        timing_generate = {}
-        with self.rollout_sharding_manager:
-            log_gpu_memory_usage("After entering rollout sharding manager", logger=logger)
-            rollout: vLLMRollout = self.rollout  # type: ignore
-            """Hook logic begin"""
-            layer = 9  # todo: DataProto may define this
-            inference_model = rollout.inference_engine.llm_engine.model_executor.driver_worker.worker.model_runner.model
-            # This should get Gemma2DecoderLayer
-            module_to_target = inference_model.model.layers[layer]
-            # DataProto should contain
-            try:
-                all_feature_vectors: Sequence[Sequence[float]] = get_feature_vector(prompts)
-                print(f"First feature vector: {all_feature_vectors[0]}")
-            except Exception as e:
-                print(f"Error getting feature vector: {e} in prompts: {prompts}")
-                raise ValueError("Feature vector not found in prompts")
-            
-            x_position: int = 9  # Todo I forgot to add this to DataProto
-
-            """hook logic end"""
-
-            prompts = self.rollout_sharding_manager.preprocess_data(prompts)
-            with simple_timer("generate_sequences", timing_generate):
-                # TODO(james): Add feature vector steering here.
-                output = rollout.generate_sequences(prompts=prompts)
-
-            log_gpu_memory_usage("After rollout generation", logger=logger)
-
-            output = self.rollout_sharding_manager.postprocess_data(output)
-
-        timing_generate.update(self.rollout_sharding_manager.timing)
-        # We calculate the average timing across all ranks
-        # to make sure meta_info["timing"] is the same
-        timing_generate = reduce_timing(timing_generate)
-        output.meta_info["timing"] = timing_generate
-        output = output.to("cpu")
-
-        # clear kv cache
-        get_torch_device().empty_cache()
-        return output
 
 
 class CriticWorker(Worker, DistProfilerExtension):

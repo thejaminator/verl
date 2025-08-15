@@ -28,6 +28,7 @@ from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 from verl.trainer.ppo.reward import load_reward_manager
 from verl.utils.device import is_cuda_available
 from verl.utils.import_utils import load_extern_type
+from verl.workers.FeatureVectorRolloutRefWorker import FeatureVectorRolloutRefWorker
 
 
 @hydra.main(config_path="config", config_name="ppo_trainer", version_base=None)
@@ -133,7 +134,6 @@ class TaskRunner:
             from verl.workers.fsdp_workers import (
                 ActorRolloutRefWorker,
                 AsyncActorRolloutRefWorker,
-                FeatureVectorRolloutRefWorker,
             )
 
             use_legacy_worker_impl = config.trainer.get("use_legacy_worker_impl", "auto")

@@ -279,6 +279,7 @@ def nuclear_hook(module, _input, output):
 
 
 def get_activation_steering_hook(
+    # K = number of feature/steering vectors per batch item
     vectors: list[list[torch.Tensor]],  # [B][K, d_model]  or [K, d_model] if B==1
     positions: list[list[int]],  # [B][K]
     steering_coefficient: float,
