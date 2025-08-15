@@ -728,4 +728,6 @@ def main(
 
 if __name__ == "__main__":
     # Example usage - customize the feature_idxs and other parameters as needed
-    main(target_features=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+    # first 500 features
+    target_features = list(range(500))
+    main(target_features=target_features)
