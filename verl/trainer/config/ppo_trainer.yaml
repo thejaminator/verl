@@ -40,6 +40,8 @@ actor_rollout_ref:
   # Whether it's a hybrid engine, currently only supports hybrid engine
   hybrid_engine: true
 
+  use_feature_vector_steering: false
+
   # common configs for the model
   model:
 

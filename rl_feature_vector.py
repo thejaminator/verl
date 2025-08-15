@@ -376,7 +376,10 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
     ]
     if params.actor_rollout_ref_strategy == "feature_vector":
         # use FeatureVectorRolloutRefWorker if we want to use feature vector steering.
-        cmd.append("actor_rollout_ref.rollout.use_feature_vector_steering=true")
+        # Note: don't override actor_rollout_ref.rollout.mode because verl's code depends on it being set to sync in a few places.
+        # I made a new key in ppo_trainer.yaml to allow this.
+        # I HATE HYDRA AND YAML.
+        cmd.append("actor_rollout_ref.use_feature_vector_steering=true")
 
     # Add LoRA parameters conditionally
     if params.lora_rank > 0:
