@@ -386,7 +386,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
     if params.actor_rollout_ref_strategy == "feature_vector":
         # use FeatureVectorRolloutRefWorker if we want to use feature vector steering.
         cmd.append("actor_rollout_ref.rollout.mode=feature_vector")
-        
+
     # Add LoRA parameters conditionally
     if params.lora_rank > 0:
         cmd.extend(
@@ -548,7 +548,9 @@ if __name__ == "__main__":
 
     # Configuration (optimized based on reference GRPO setup)
     params = VerlParams(
-        model_name="google/gemma-2-9b-it",
+        # model_name="google/gemma-2-9b-it",
+        # smaller model for testing
+        model_name="google/gemma-2-2b-it",
         num_generations=16,  # Bigger group size since noisy explanations
         micro_batch=8,
         micro_batch_size_per_gpu=8,
