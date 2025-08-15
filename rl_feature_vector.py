@@ -94,6 +94,17 @@ def load_and_convert_dataset(dataset_path: str, output_path: str, data_source: s
 
     Returns:
         Number of samples processed
+
+
+    class SAE(BaseModel):
+        sae_id: int
+        feature_vector: Sequence[float]
+        activations: SAEActivations
+        # Sentences that do not activate for the given sae_id. But come from a similar SAE
+        # Here the sae_id correspond to different similar SAEs.
+        # The activations are the activations w.r.t this SAE. And should be low.
+        hard_negatives: list[SAEActivations]
+
     """
     import pandas as pd
     # Each line in jsonl should be SAE object
@@ -123,9 +134,10 @@ def load_and_convert_dataset(dataset_path: str, output_path: str, data_source: s
                     },  # verl requires passing something for ground truth?
                     "extra_info": {
                         "prompt": X_PROMPT,
-                        "sae": sample.model_dump(),
                         "index": idx,
                     },
+                    # sae information which we modify the PPO trainer to pass during rollouts
+                    "sae": sample.model_dump(),
                 }
                 data.append(structured_data)
 

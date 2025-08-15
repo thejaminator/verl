@@ -947,14 +947,11 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
         batch: TensorDict = None
         non_tensor_batch: dict = field(default_factory=dict)
         meta_info: dict = field(default_factory=dict)
-         
-        non_tensor_batch should 
-        "extra_info": {
-                        "prompt": X_PROMPT,
-                        "sae": {"feature_vector": feature_vector},
-                        "index": idx,
-        }
+
+        non_tensor_batch should  have "sae": {"feature_vector": feature_vector}
         Where feature_vector is a list of floats.
+
+        This is the class we use to pass the sae information to the rollout worker.
         class SAE(BaseModel):
             sae_id: int
             feature_vector: Sequence[float]
@@ -992,13 +989,13 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
             module_to_target = inference_model.model.layers[layer]
             # DataProto should contain
             try:
-                first_feature_vector = prompts.non_tensor_batch["extra_info"]["sae"]["feature_vector"][0]
+                first_feature_vector = prompts.non_tensor_batch["sae"]["feature_vector"][0]
                 print(f"First feature vector: {first_feature_vector}")
             except Exception as e:
                 print(f"Error getting feature vector: {e} in prompts: {prompts}")
                 raise ValueError("Feature vector not found in prompts")
             all_feature_vectors: Sequence[Sequence[float]] = get_feature_vector(prompts)
-            x_position: int = 9 # Todo I forgot to add this to DataProto
+            x_position: int = 9  # Todo I forgot to add this to DataProto
 
             """hook logic end"""
 
