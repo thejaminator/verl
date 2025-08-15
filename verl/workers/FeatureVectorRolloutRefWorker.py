@@ -69,14 +69,14 @@ def get_activation_steering_hook(
 
         # ---- compute norms of original activations at the target slots ----
         batch_idx_B = torch.arange(B, device=device)  # (B,)
-        orig_BD = resid_BLD[batch_idx_B, pos_B]  # (B, d_model)
+        orig_BD = resid_BLD[batch_idx_B, pos_B, :]  # (B, d_model) - explicit last dimension
         norms_B1 = orig_BD.norm(dim=-1, keepdim=True)  # (B, 1)
 
         # ---- build steered vectors ----
         steered_BD = torch.nn.functional.normalize(vec_BD, dim=-1) * norms_B1 * steering_coefficient  # (B, d_model)
 
         # ---- in-place replacement via advanced indexing ----
-        resid_BLD[batch_idx_B, pos_B] = steered_BD
+        resid_BLD[batch_idx_B, pos_B, :] = steered_BD
 
         return (resid_BLD, *rest)
 
