@@ -58,7 +58,6 @@ class NaiveRewardManager:
         # First pass: collect all response lengths grouped by prompt_ids
         prompt_to_lengths: dict[tuple[int], list[int]] = defaultdict(list)
         prompt_id_to_key = {}  # Map from data index to prompt key
-        corrects: list[bool] = []
 
         # Collect data for logging table - one entry per batch item
         table_data: list[dict] = []
@@ -105,10 +104,10 @@ class NaiveRewardManager:
                 print("[prompt]" + prompt_str + "\n")
                 print("[response]" + response_str + "\n")
                 # lengths for this prompt
-                prompt_key = prompt_id_to_key[i]
-                print("[lengths]" + str(prompt_to_lengths[prompt_key]) + "\n")
-                print("[response_length]" + str(valid_response_length) + "\n")
-                print("[ground_truth]" + ground_truth + "\n")
+                # prompt_key = prompt_id_to_key[i]
+                # print("[lengths]" + str(prompt_to_lengths[prompt_key]) + "\n")
+                # print("[response_length]" + str(valid_response_length) + "\n")
+                # print("[ground_truth]" + ground_truth + "\n")
 
             data_source = data_item.non_tensor_batch[self.reward_fn_key]
             extra_info = data_item.non_tensor_batch.get("extra_info", {})
@@ -179,7 +178,6 @@ class NaiveRewardManager:
                     print("[score]", score)
         # Add table data and batch accuracy to reward_extra_info for logging in training loop
         reward_extra_info["table_data"] = table_data  # List of individual row dicts
-        reward_extra_info["batch_accuracy"] = corrects  # List of booleans per batch item
 
         if return_dict:
             return {

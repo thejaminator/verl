@@ -28,3 +28,4 @@ math_verify
 pydantic
 regex
 dotenv
+slist

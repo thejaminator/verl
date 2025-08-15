@@ -178,11 +178,11 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         metrics["num_turns/max"] = num_turns.max()
         metrics["num_turns/mean"] = num_turns.mean()
 
-    # Add batch accuracy from reward manager
-    if "batch_accuracy" in batch.non_tensor_batch:
-        batch_accuracy_list = batch.non_tensor_batch["batch_accuracy"]  # List of booleans
-        batch_accuracy = np.mean(batch_accuracy_list).item()  # Compute mean accuracy
-        metrics["critic/batch_accuracy"] = batch_accuracy
+    # # Add batch accuracy from reward manager
+    # if "batch_accuracy" in batch.non_tensor_batch:
+    #     batch_accuracy_list = batch.non_tensor_batch["batch_accuracy"]  # List of booleans
+    #     batch_accuracy = np.mean(batch_accuracy_list).item()  # Compute mean accuracy
+    #     metrics["critic/batch_accuracy"] = batch_accuracy
 
     return metrics
 

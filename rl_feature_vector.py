@@ -110,10 +110,10 @@ def load_and_convert_dataset(dataset_path: str, output_path: str, data_source: s
     # Each line in jsonl should be SAE object
 
     print(f"Loading dataset from: {dataset_path}")
-    prompt = ""
+    X_PROMPT = "Can you explain to me what 'X' means? Format your final answer with <explanation>"
     prompt_as_chat_dict = {
         "role": "user",
-        "content": prompt,
+        "content": X_PROMPT,
     }
 
     data = []
@@ -122,8 +122,6 @@ def load_and_convert_dataset(dataset_path: str, output_path: str, data_source: s
             if line.strip():
                 sample_dict = json.loads(line)
                 sample = SAE.model_validate(sample_dict)
-
-                prompt = ""
 
                 # Create structured data following the pattern
                 structured_data = {
@@ -135,7 +133,7 @@ def load_and_convert_dataset(dataset_path: str, output_path: str, data_source: s
                         "ground_truth": "no ground truth",
                     },  # verl requires passing something for ground truth?
                     "extra_info": {
-                        "prompt": prompt,
+                        "prompt": X_PROMPT,
                         "sae": sample.model_dump(),
                         "index": idx,
                     },
