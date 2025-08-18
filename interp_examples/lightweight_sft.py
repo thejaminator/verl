@@ -1321,36 +1321,12 @@ def train_model(
                             dtype=dtype,
                         )
                         all_feature_results_this_eval_step.extend(feature_results)
-                        for res in feature_results:
-                            # Convert SentenceMetrics objects back to dicts for aggregation
-                            for metric in res.sentence_metrics:
-                                all_sentence_metrics.append(metric.model_dump())
 
                     save_logs(
                         eval_results_path="eval_logs.json",
                         global_step=global_step,
                         all_feature_results_this_eval_step=all_feature_results_this_eval_step,
                     )
-
-                    if all_sentence_metrics:
-                        aggregated_metrics = {}
-                        metric_keys = all_sentence_metrics[0].keys()
-                        for key in metric_keys:
-                            avg_val = sum(m[key] for m in all_sentence_metrics) / len(
-                                all_sentence_metrics
-                            )
-                            aggregated_metrics[key] = avg_val
-
-                        wandb_log_dict = {
-                            f"eval/{k}": v for k, v in aggregated_metrics.items()
-                        }
-
-                        if use_wandb:
-                            wandb.log(wandb_log_dict, step=global_step)
-                        if verbose:
-                            print(
-                                f"Step {global_step} eval metrics: {aggregated_metrics}"
-                            )
 
                 model.train()
 
