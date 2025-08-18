@@ -63,9 +63,7 @@ def get_activation_steering_hook(
             print(f"Skipping hook because sequence length is <= 1, total_tokens: {total_tokens}")
             return (resid_flat, *rest)
 
-        print(
-            f"Applying feature vector on module {type(module).__name__}. Sequence length: {L}, Batch size: {B}"
-        )
+        print(f"Applying feature vector on module {type(module).__name__}. Sequence length: {L}, Batch size: {B}")
 
         # Safety: make sure every position is inside current sequence
         if (pos_B >= L).any():
@@ -76,7 +74,7 @@ def get_activation_steering_hook(
         # For batch b at position p: flat_index = b * L + p
         batch_offsets = torch.arange(B, device=device) * L  # (B,)
         flat_indices = batch_offsets + pos_B  # (B,)
-        
+
         # ---- compute norms of original activations at the target slots ----
         orig_BD = resid_flat[flat_indices]  # (B, d_model)
         norms_B1 = orig_BD.norm(dim=-1, keepdim=True)  # (B, 1)
@@ -91,6 +89,7 @@ def get_activation_steering_hook(
 
     return hook_fn
 
+
 @contextlib.contextmanager
 def add_hook(module: torch.nn.Module, hook: Callable):
     """Temporarily adds a forward hook to a model module."""
@@ -103,12 +102,13 @@ def add_hook(module: torch.nn.Module, hook: Callable):
     finally:
         handle.remove()
 
+
 class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     @DistProfiler.annotate(color="red", role="rollout_generate")
     def generate_sequences(self, prompts: DataProto):
         """Place where we do the hooking.
-        
+
         DataProto is
         batch: TensorDict = None
         non_tensor_batch: dict = field(default_factory=dict)
@@ -130,7 +130,7 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
         # print(
         #     f"FeatureVectorRolloutRefWorker: Calling generate_sequences. prompts non_tensor_batch: {prompts.non_tensor_batch}"
         # )
-        
+
         # Support all hardwares
         device: int = get_device_id()
         prompts = prompts.to(device)
@@ -191,13 +191,13 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
                 positions.append(x_position)
 
             hook = get_activation_steering_hook(vectors, positions, steering_coefficient, device, dtype)
-                        
+
             processed_prompts = self.rollout_sharding_manager.preprocess_data(prompts)
             # NOTE: Need to enforce eager
             with simple_timer("generate_sequences", timing_generate):
                 with add_hook(module_to_target, hook):
                     print("Hook registered, starting generation...")
-                    output = rollout.generate_sequences(prompts=processed_prompts)            
+                    output = rollout.generate_sequences(prompts=processed_prompts)
                     print("Generation completed with hook")
 
             log_gpu_memory_usage("After rollout generation", logger=logger)

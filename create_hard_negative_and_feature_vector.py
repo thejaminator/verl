@@ -24,7 +24,6 @@ import torch
 import torch.nn.functional as F
 from pydantic import BaseModel
 from slist import Slist
-from verl.workers.reward_manager import batch
 
 try:
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -691,7 +690,7 @@ def main(
         print(f"📝 Collecting sentences from {len(similar_features)} similar features...")
         all_similar_sentences = []
         similar_feature_mapping = []  # Track which sentences belong to which similar feature
-        
+
         for similar_feature in similar_features:
             # Get sentences for this similar feature
             similar_max_acts = get_feature_max_activating_sentences(
@@ -699,18 +698,20 @@ def main(
             )
             # sometimes empty???
             candidate_similar_sentences = [s for s in similar_max_acts.sentences if s != ""]
-            
+
             # Track the range of sentences for this feature
             start_idx = len(all_similar_sentences)
             all_similar_sentences.extend(candidate_similar_sentences)
             end_idx = len(all_similar_sentences)
-            
-            similar_feature_mapping.append({
-                'feature': similar_feature,
-                'start_idx': start_idx,
-                'end_idx': end_idx,
-                'num_sentences': len(candidate_similar_sentences)
-            })
+
+            similar_feature_mapping.append(
+                {
+                    "feature": similar_feature,
+                    "start_idx": start_idx,
+                    "end_idx": end_idx,
+                    "num_sentences": len(candidate_similar_sentences),
+                }
+            )
 
         # Compute target feature activations on ALL similar feature sentences in batches
         print(f"🧮 Computing SAE activations for {len(all_similar_sentences)} sentences from similar features...")
@@ -720,14 +721,14 @@ def main(
 
         # Process results by similar feature and rebuild SAEActivations
         for feature_info in similar_feature_mapping:
-            similar_feature = feature_info['feature']
-            start_idx = feature_info['start_idx']
-            end_idx = feature_info['end_idx']
-            
+            similar_feature = feature_info["feature"]
+            start_idx = feature_info["start_idx"]
+            end_idx = feature_info["end_idx"]
+
             print(
                 f"📝 Analyzing similar feature {similar_feature.feature_idx} (similarity: {similar_feature.similarity_score:.4f})..."
             )
-            
+
             # Extract sentence infos for this specific similar feature
             similar_sentence_infos = all_similar_sentence_infos[start_idx:end_idx]
 
@@ -776,6 +777,6 @@ def main(
 if __name__ == "__main__":
     # Example usage - customize the feature_idxs and other parameters as needed
     # first 500 features
-    target_features = list(range(500))
+    target_features = list(range(1200))
     # actually we want 32, but sometimes it fails, so need some buffer.
-    main(target_features=target_features, top_k_similar_features=34,batch_size=1024, num_sentences=32)
+    main(target_features=target_features, top_k_similar_features=34, batch_size=1024, num_sentences=32)

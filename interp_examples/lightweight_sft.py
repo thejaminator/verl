@@ -1293,7 +1293,7 @@ def main(explanations_file: str):
         generation_kwargs={
             "do_sample": False,
             "temperature": 1.0,
-            "max_new_tokens": 400,
+            "max_new_tokens": 600,
         },
         steering_coefficient=2.0,
         # LoRA settings

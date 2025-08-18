@@ -558,10 +558,10 @@ if __name__ == "__main__":
         num_generations=16,  # Bigger group size since noisy explanations
         # micro_batch=8,
         # micro_batch_size_per_gpu=8,
-        micro_batch=2, # for test purposes, usually 4
-        micro_batch_size_per_gpu=2, # for test purposes, usually 4
+        micro_batch=2,  # for test purposes, usually 4
+        micro_batch_size_per_gpu=2,  # for test purposes, usually 4
         warmup_steps=5,
-        gradient_accumulation_steps=1, # for test purposes, usually 4
+        gradient_accumulation_steps=1,  # for test purposes, usually 4
         max_seq_length=8_000,  # More reasonable for math problems
         max_prompt_length=2_000,  # Reduced from 6000, matching reference
         max_response_length=6_000,  # Reduced from 6000, matching reference
