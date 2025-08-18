@@ -89,7 +89,7 @@ class SelfInterpTrainingConfig:
     # --- Fields with defaults (must come after fields without defaults) ---
     sae_filename: str = field(init=False)
     eval_features: list[int] = field(default_factory=list)
-    positive_negative_examples: bool = False
+    positive_negative_examples: bool = True
 
     def __post_init__(self):
         """Called after the dataclass is initialized."""
@@ -182,7 +182,6 @@ class EvalStepResult(BaseModel):
 @dataclass
 class TrainingDataPoint:
     """Training data point with tensors."""
-
     input_ids: list[int]
     labels: list[int]  # Can contain -100 for ignored tokens
     steering_vectors: list[torch.Tensor]
@@ -850,12 +849,8 @@ def eval_features_batch(
         # What feature number is this?
         feature_idx = eval_batch.feature_indices[i]
         print(f"Feature index: {feature_idx}")
-        parsed_result = parse_generated_explanation(output)
         print(f"Generated output: {output}")
-        if parsed_result:
-            explanations.append(parsed_result.explanation)
-        else:
-            explanations.append("")
+        explanations.append(parse_generated_explanation(output))
 
     feature_results = []
 
@@ -1209,7 +1204,9 @@ def train_model(
             range(0, len(training_data), cfg.train_batch_size),
             desc=f"Training epoch {epoch + 1}",
         ):
-            t_batch = training_data[i : i + cfg.train_batch_size]
+            t_batch: list[TrainingDataPoint] = training_data[i : i + cfg.train_batch_size]
+          
+
             t_batch = construct_batch(t_batch, tokenizer, device)
 
             if i % 100 == 0:
@@ -1353,7 +1350,7 @@ def main(explanations_file: str):
 
     train_eval_prompt = build_training_prompt()
 
-    training_data = construct_train_dataset(
+    training_data: list[TrainingDataPoint] = construct_train_dataset(
         cfg,
         len(training_examples),
         # dataset_size,
@@ -1362,6 +1359,12 @@ def main(explanations_file: str):
         sae,
         tokenizer,
     )
+    # print the first 2 sentences
+    for j, example in enumerate(training_data):
+        print(f"Example {j}: {example.input_ids}")
+        # decode the first 2 sentences
+        print(f"Decoded: {tokenizer.decode(example.input_ids[:2], skip_special_tokens=True)}")
+        print("-" * 100)
 
     eval_data = construct_eval_dataset(
         cfg,
