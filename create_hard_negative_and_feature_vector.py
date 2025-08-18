@@ -751,4 +751,4 @@ if __name__ == "__main__":
     # first 500 features
     target_features = list(range(500))
     # actually we want 32, but sometimes it fails, so need some buffer.
-    main(target_features=target_features, top_k_similar_features=34,batch_size=10)
+    main(target_features=target_features, top_k_similar_features=34,batch_size=20)
