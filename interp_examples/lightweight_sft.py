@@ -1128,7 +1128,7 @@ def load_model(
 ) -> AutoModelForCausalLM:
     print(f"Loading model: {cfg.model_name}...")
     model = AutoModelForCausalLM.from_pretrained(
-        cfg.model_name, device_map="auto", torch_dtype=dtype
+        cfg.model_name, device_map="auto", torch_dtype=dtype, attn_implementation='eager'
     )
 
     if use_lora:
