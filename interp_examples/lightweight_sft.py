@@ -1207,13 +1207,13 @@ def get_feature_activations(
         encoded_pos_acts_BLF = sae.encode(pos_acts_BLD)
 
     if ignore_bos:
-        bos_mask = tokenized_strs.input_ids == tokenizer.bos_token_id
+        bos_mask = tokenized_strs["input_ids"] == tokenizer.bos_token_id
         # Note: I use >=, not ==, because occasionally prompts will contain a BOS token
         assert bos_mask.sum() >= encoded_pos_acts_BLF.shape[0], (
             f"Expected at least {encoded_pos_acts_BLF.shape[0]} BOS tokens, but found {bos_mask.sum()}"
         )
 
-        mask = get_bos_eos_pad_mask(tokenizer, tokenized_strs.input_ids)
+        mask = get_bos_eos_pad_mask(tokenizer, tokenized_strs["input_ids"])
         encoded_pos_acts_BLF[mask] = 0
 
     return encoded_pos_acts_BLF
@@ -1229,6 +1229,47 @@ def has_active_lora(model: AutoModelForCausalLM) -> bool:
         and getattr(model, "active_adapter", None)  # an adapter is currently selected
     )
 
+
+
+def run_evaluation(
+    cfg: SelfInterpTrainingConfig,
+    eval_data: List[TrainingDataPoint],
+    model: AutoModelForCausalLM,
+    tokenizer: PreTrainedTokenizer,
+    submodule: torch.nn.Module,
+    sae: BaseSAE,
+    device: torch.device,
+    dtype: torch.dtype,
+    global_step: int,
+):
+    """Run evaluation and save results."""
+    model.eval()
+    with torch.no_grad():
+        all_feature_results_this_eval_step = []
+        for i in tqdm(
+            range(0, len(eval_data), cfg.eval_batch_size),
+            desc="Evaluating model",
+        ):
+            e_batch = eval_data[i : i + cfg.eval_batch_size]
+            e_batch = construct_batch(e_batch, tokenizer, device)
+
+            feature_results = eval_features_batch(
+                cfg=cfg,
+                eval_batch=e_batch,
+                model=model,
+                submodule=submodule,
+                sae=sae,
+                tokenizer=tokenizer,
+                device=device,
+                dtype=dtype,
+            )
+            all_feature_results_this_eval_step.extend(feature_results)
+
+        save_logs(
+            eval_results_path="eval_logs.json",
+            global_step=global_step,
+            all_feature_results_this_eval_step=all_feature_results_this_eval_step,
+        )
 
 
 def train_model(
@@ -1255,7 +1296,8 @@ def train_model(
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr)
 
     total_training_steps = cfg.num_epochs * len(training_data)
-    warmup_steps = 200
+    # 10 percent
+    warmup_steps = int(total_training_steps * 0.1)
     scheduler = get_linear_schedule_with_warmup(
         optimizer,
         num_warmup_steps=warmup_steps,
@@ -1299,35 +1341,17 @@ def train_model(
 
             # -------------------------------- evaluation --------------------------------
             if global_step % cfg.eval_steps == 0 and global_step > 0:
-                model.eval()
-                with torch.no_grad():
-                    all_sentence_metrics = []
-                    all_feature_results_this_eval_step = []
-                    for i in tqdm(
-                        range(0, len(eval_data), cfg.eval_batch_size),
-                        desc="Evaluating model",
-                    ):
-                        e_batch = eval_data[i : i + cfg.eval_batch_size]
-                        e_batch = construct_batch(e_batch, tokenizer, device)
-
-                        feature_results = eval_features_batch(
-                            cfg=cfg,
-                            eval_batch=e_batch,
-                            model=model,
-                            submodule=submodule,
-                            sae=sae,
-                            tokenizer=tokenizer,
-                            device=device,
-                            dtype=dtype,
-                        )
-                        all_feature_results_this_eval_step.extend(feature_results)
-
-                    save_logs(
-                        eval_results_path="eval_logs.json",
-                        global_step=global_step,
-                        all_feature_results_this_eval_step=all_feature_results_this_eval_step,
-                    )
-
+                run_evaluation(
+                    cfg=cfg,
+                    eval_data=eval_data,
+                    model=model,
+                    tokenizer=tokenizer,
+                    submodule=submodule,
+                    sae=sae,
+                    device=device,
+                    dtype=dtype,
+                    global_step=global_step,
+                )
                 model.train()
 
             if global_step % cfg.save_steps == 0:
@@ -1336,6 +1360,25 @@ def train_model(
             global_step += 1
 
     print("Training complete.")
+    
+    # Final evaluation
+    print("Running final evaluation...")
+    run_evaluation(
+        cfg=cfg,
+        eval_data=eval_data,
+        model=model,
+        tokenizer=tokenizer,
+        submodule=submodule,
+        sae=sae,
+        device=device,
+        dtype=dtype,
+        global_step=global_step,
+    )
+    
+    # Save final model
+    print("Saving final model...")
+    model.save_pretrained(f"{cfg.save_dir}/final")
+    
     wandb.finish()
 
 
