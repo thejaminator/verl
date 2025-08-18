@@ -684,25 +684,52 @@ def main(
             model, tokenizer, sae, submodule, target_sentences, feature_idx, batch_size
         )
 
-        # Analyze similar features and collect hard negatives
+        # Analyze similar features and collect hard negatives - OPTIMIZED WITH BATCHING
         hard_negatives_list = []
 
+        # Collect all sentences from similar features first
+        print(f"📝 Collecting sentences from {len(similar_features)} similar features...")
+        all_similar_sentences = []
+        similar_feature_mapping = []  # Track which sentences belong to which similar feature
+        
         for similar_feature in similar_features:
-            print(
-                f"📝 Analyzing similar feature {similar_feature.feature_idx} (similarity: {similar_feature.similarity_score:.4f})..."
-            )
-
             # Get sentences for this similar feature
             similar_max_acts = get_feature_max_activating_sentences(
                 acts_data, tokenizer, similar_feature.feature_idx, num_sentences
             )
             # sometimes empty???
             candidate_similar_sentences = [s for s in similar_max_acts.sentences if s != ""]
+            
+            # Track the range of sentences for this feature
+            start_idx = len(all_similar_sentences)
+            all_similar_sentences.extend(candidate_similar_sentences)
+            end_idx = len(all_similar_sentences)
+            
+            similar_feature_mapping.append({
+                'feature': similar_feature,
+                'start_idx': start_idx,
+                'end_idx': end_idx,
+                'num_sentences': len(candidate_similar_sentences)
+            })
 
-            # Compute target feature activations on similar feature's sentences
-            similar_sentence_infos = compute_sae_activations_for_sentences(
-                model, tokenizer, sae, submodule, candidate_similar_sentences, feature_idx, batch_size
+        # Compute target feature activations on ALL similar feature sentences in batches
+        print(f"🧮 Computing SAE activations for {len(all_similar_sentences)} sentences from similar features...")
+        all_similar_sentence_infos = compute_sae_activations_for_sentences(
+            model, tokenizer, sae, submodule, all_similar_sentences, feature_idx, batch_size
+        )
+
+        # Process results by similar feature and rebuild SAEActivations
+        for feature_info in similar_feature_mapping:
+            similar_feature = feature_info['feature']
+            start_idx = feature_info['start_idx']
+            end_idx = feature_info['end_idx']
+            
+            print(
+                f"📝 Analyzing similar feature {similar_feature.feature_idx} (similarity: {similar_feature.similarity_score:.4f})..."
             )
+            
+            # Extract sentence infos for this specific similar feature
+            similar_sentence_infos = all_similar_sentence_infos[start_idx:end_idx]
 
             # Identify hard negatives
             hard_negatives = identify_hard_negatives(similar_sentence_infos, hard_negative_threshold, batch_size)
@@ -751,4 +778,4 @@ if __name__ == "__main__":
     # first 500 features
     target_features = list(range(500))
     # actually we want 32, but sometimes it fails, so need some buffer.
-    main(target_features=target_features, top_k_similar_features=34,batch_size=20)
+    main(target_features=target_features, top_k_similar_features=34,batch_size=80)
