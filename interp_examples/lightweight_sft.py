@@ -1465,6 +1465,6 @@ if __name__ == "__main__":
         explanations_file = sys.argv[1]
     else:
         # Default filename - update this to your actual file
-        explanations_file = "sae_explanations.jsonl"
+        explanations_file = "sae_explanations_gpt5_mini_100.jsonl"
 
     main(explanations_file)
