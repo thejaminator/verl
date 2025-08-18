@@ -1306,7 +1306,7 @@ def main(explanations_file: str):
         lora_target_modules="all-linear",
         # Training settings
         num_epochs=2,
-        lr=5e-5,
+        lr=2e-5,
         eval_steps=1000,
         save_steps=2000,
         save_dir="checkpoints",
