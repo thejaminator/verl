@@ -456,9 +456,12 @@ class TopKSAE(BaseSAE):
 # ==============================================================================
 
 
-def build_training_prompt() -> str:
+def build_training_prompt(positive_negative_examples: bool = True) -> str:
     """Build the training prompt for SAE explanations."""
-    question = """Can you explain to me what 'X' means? Format your final answer with <explanation>"""
+    if positive_negative_examples:
+        question = """Can you explain to me the concept of what 'X' means? Give positive and negative examples of what the concept would activate on. Format your final answer with <explanation>."""
+    else:
+        question = """Can you explain to me what 'X' means? Format your final answer with <explanation>"""
     return question
 
 
