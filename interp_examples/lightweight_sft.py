@@ -1368,8 +1368,8 @@ def main(explanations_file: str):
 
     # Use a subset of training features for evaluation
     available_features = list(train_features)
-    # 0 to 100
-    cfg.eval_features = available_features[:100]
+    # 0 to 50, then 500 to 550
+    cfg.eval_features = [i for i in range(50)] + [i for i in range(500, 550)]
 
     print(f"Using {len(cfg.eval_features)} features for evaluation")
 
