@@ -11,7 +11,6 @@ from transformers.tokenization_utils import PreTrainedTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 from dataclasses import dataclass, field, asdict
 from pydantic import BaseModel
-from rapidfuzz.distance import Levenshtein as lev
 from tqdm import tqdm
 import wandb
 from torch.nn.utils import clip_grad_norm_
