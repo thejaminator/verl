@@ -161,7 +161,7 @@ class TrainingDataPoint:
     labels: List[int]  # Can contain -100 for ignored tokens
     steering_vectors: List[torch.Tensor]
     positions: List[int]
-    feature_indices: List[int]
+    feature_idx: int
 
 
 @dataclass
@@ -173,7 +173,7 @@ class BatchData:
     attention_mask: torch.Tensor
     steering_vectors: List[List[torch.Tensor]]
     positions: List[List[int]]
-    feature_indices: List[List[int]]
+    feature_indices: List[int]
 
 
 # ==============================================================================
@@ -634,13 +634,11 @@ def construct_train_dataset(
 
         # 2. Prepare feature vectors for steering
         # We use decoder weights (W_dec) as they map from the feature space back to the residual stream.
-        all_feature_indices = [target_feature_idx]
-
         # .clone() because otherwise we will save the entire W_dec in pickle for each training example
         if cfg.use_decoder_vectors:
-            feature_vectors = [sae.W_dec[i].clone() for i in all_feature_indices]
+            feature_vector = sae.W_dec[target_feature_idx].clone()
         else:
-            feature_vectors = [sae.W_enc[:, i].clone() for i in all_feature_indices]
+            feature_vector = sae.W_enc[:, target_feature_idx].clone()
 
         assistant_start_idx = len(input_prompt_ids)
 
@@ -657,9 +655,9 @@ def construct_train_dataset(
         training_data_point = TrainingDataPoint(
             input_ids=full_prompt_ids,
             labels=labels,
-            steering_vectors=feature_vectors,
+            steering_vectors=[feature_vector],
             positions=positions,
-            feature_indices=all_feature_indices,
+            feature_idx=target_feature_idx,
         )
 
         training_data.append(training_data_point)
@@ -705,12 +703,10 @@ def construct_eval_dataset(
 
         # 2. Prepare feature vectors for steering
         # We use decoder weights (W_dec) as they map from the feature space back to the residual stream.
-        all_feature_indices = [target_feature_idx]
-
         if cfg.use_decoder_vectors:
-            feature_vectors = [sae.W_dec[i].clone() for i in all_feature_indices]
+            feature_vector = sae.W_dec[target_feature_idx].clone()
         else:
-            feature_vectors = [sae.W_enc[:, i].clone() for i in all_feature_indices]
+            feature_vector = sae.W_enc[:, target_feature_idx].clone()
 
         positions = []
         for i in range(orig_prompt_length):
@@ -729,9 +725,9 @@ def construct_eval_dataset(
         eval_data_point = TrainingDataPoint(
             input_ids=input_prompt_ids,
             labels=labels,
-            steering_vectors=feature_vectors,
+            steering_vectors=[feature_vector],
             positions=positions,
-            feature_indices=all_feature_indices,
+            feature_idx=target_feature_idx,
         )
 
         eval_data.append(eval_data_point)
@@ -776,7 +772,7 @@ def construct_batch(
 
         batch_positions.append(positions)
         batch_steering_vectors.append(data_point.steering_vectors)
-        batch_feature_indices.append(data_point.feature_indices)
+        batch_feature_indices.append(data_point.feature_idx)
 
     return BatchData(
         input_ids=torch.stack(batch_tokens),
@@ -865,7 +861,7 @@ def eval_features_batch(
 
     for i, output in enumerate(decoded_output):
         # What feature number is this?
-        feature_idx = eval_batch.feature_indices[i][0]
+        feature_idx = eval_batch.feature_indices[i]
         print(f"Feature index: {feature_idx}")
         parsed_result = parse_generated_explanation(output)
         print(f"Generated output: {output}")
@@ -874,19 +870,10 @@ def eval_features_batch(
         else:
             explanations.append("")
 
-    # Flatten feature_indices from List[List[int]] to List[int]
-    flattened_feature_indices = [
-        idx for batch_indices in eval_batch.feature_indices for idx in batch_indices
-    ]
-
-
     feature_results = []
 
-
     for i, output in enumerate(decoded_output):
-        feature_idx = eval_batch.feature_indices[i][
-            0
-        ]  # Get first (and only) feature index
+        feature_idx = eval_batch.feature_indices[i]
 
 
 
@@ -1329,8 +1316,8 @@ def main(explanations_file: str):
         use_decoder_vectors=True,
         generation_kwargs={
             "do_sample": False,
-            "temperature": 0.0,
-            "max_new_tokens": 1_000,
+            "temperature": 1.0,
+            "max_new_tokens": 400,
         },
         steering_coefficient=2.0,
         
@@ -1381,9 +1368,8 @@ def main(explanations_file: str):
 
     # Use a subset of training features for evaluation
     available_features = list(train_features)
-    cfg.eval_features = available_features[
-        : min(cfg.eval_set_size, len(available_features))
-    ]
+    # 0 to 100
+    cfg.eval_features = available_features[:100]
 
     print(f"Using {len(cfg.eval_features)} features for evaluation")
 
@@ -1411,15 +1397,10 @@ def main(explanations_file: str):
 
     print(f"training data: {len(training_data)}, eval data: {len(eval_data)}")
 
-    # training_data = training_data[:100]
-    # temp_eval_data = eval_data[:10]
-
-    temp_eval_data = eval_data[:250]
-
     train_model(
         cfg,
         training_data,
-        temp_eval_data,
+        eval_data,
         model,
         tokenizer,
         submodule,
