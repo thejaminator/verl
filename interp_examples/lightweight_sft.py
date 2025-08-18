@@ -56,79 +56,39 @@ def get_sae_info(sae_repo_id: str) -> tuple[int, int, int, str]:
 class SelfInterpTrainingConfig:
     """Configuration settings for the script."""
 
-    # --- Foundational Settings ---
-    model_name: str = "google/gemma-2-9b-it"
-    train_batch_size: int = 4
-    eval_batch_size: int = 4
-
-    max_acts_ratio_threshold: float = 0.1
-    max_distance_threshold: float = 0.2
-    max_activation_percentage_required: float = 0.01
-    max_activation_required: float = 0.0
+    # --- Model Settings ---
+    model_name: str
+    train_batch_size: int
+    eval_batch_size: int
 
     # --- SAE (Sparse Autoencoder) Settings ---
-    sae_repo_id: str = "google/gemma-scope-9b-it-res"
-    sae_layer: int = 9
-    sae_width: int = 16  # For loading the correct max acts file
-    layer_percent: int = 25  # For loading the correct max acts file
-    test_set_size: int = 1000
-
-    # max acts settings
-    context_length: int = 32
-    num_tokens: int = 60_000_000
-    max_acts_batch_size: int = 128
-
-    # API Interp Settings
-    # --- API and Generation Settings ---
-    api_num_features_to_run: int = 200  # How many random features to analyze
-    api_num_sentences_per_feature: int = (
-        5  # How many top-activating examples to use per feature
-    )
-    api_model_name: str = "gpt-4.1-mini"
-    # Use a default_factory for mutable types like dicts
-    api_generation_kwargs: dict[str, Any] = field(
-        default_factory=lambda: {
-            "temperature": 1.0,
-            "max_tokens": 2000,
-            "max_par": 200,  # Max parallel requests
-        }
-    )
-
-    sae_filename: str = field(init=False)
-    training_data_filename: str = "contrastive_rewriting_results_10k.pkl"
+    sae_repo_id: str
+    sae_layer: int
+    sae_width: int
 
     # --- Experiment Settings ---
-    eval_set_size: int = 200  # How many random features to analyze
-
-    random_seed: int = 42  # For reproducible feature selection
-    use_decoder_vectors: bool = False
-    prefill_original_sentences: bool = False
-
-    # Use a default_factory for mutable types like dicts
-    generation_kwargs: dict[str, Any] = field(
-        default_factory=lambda: {
-            "do_sample": False,
-            "temperature": 0.0,
-            "max_new_tokens": 200,
-        }
-    )
-
-    eval_features: list[int] = field(default_factory=list)
-    steering_coefficient: float = 2.0
+    eval_set_size: int
+    use_decoder_vectors: bool
+    generation_kwargs: dict[str, Any]
+    steering_coefficient: float
 
     # --- LoRA Settings ---
-    use_lora: bool = True
-    lora_r: int = 16
-    lora_alpha: int = 32
-    lora_dropout: float = 0.05
-    lora_target_modules: str = "all-linear"
+    use_lora: bool
+    lora_r: int
+    lora_alpha: int
+    lora_dropout: float
+    lora_target_modules: str
 
-    # training settings
-    num_epochs: int = 2
-    lr: float = 5e-6
-    eval_steps: int = 1000
-    save_steps: int = 1000
-    save_dir: str = "checkpoints"
+    # --- Training Settings ---
+    num_epochs: int
+    lr: float
+    eval_steps: int
+    save_steps: int
+    save_dir: str
+    
+    # --- Fields with defaults (must come after fields without defaults) ---
+    sae_filename: str = field(init=False)
+    eval_features: list[int] = field(default_factory=list)
 
     def __post_init__(self):
         """Called after the dataclass is initialized."""
@@ -715,7 +675,6 @@ def construct_eval_dataset(
     api_data: dict,
     sae: BaseSAE,
     tokenizer: PreTrainedTokenizer,
-    prefill_original_sentences: bool = False,
 ) -> List[TrainingDataPoint]:
     """Every prompt is exactly the same - the only difference is the steering vectors."""
 
@@ -743,39 +702,6 @@ def construct_eval_dataset(
 
     for i in tqdm(range(dataset_size), desc="Constructing eval dataset"):
         target_feature_idx = eval_feature_indices[i]
-
-        if prefill_original_sentences:
-            sentence_data = None
-            for i, feature_result in enumerate(api_data["results"]):
-                # just getting the first sentence data for now
-                # TODO: Ensure comparison with api data is correct
-                if feature_result["feature_idx"] != target_feature_idx:
-                    continue
-                sentence_data = feature_result["sentence_data"][0]
-                break
-
-            assert sentence_data is not None, "No sentence data found for feature index"
-
-            target_response = f"Positive example: {sentence_data['original_sentence']}\n\nNegative example:"
-
-            input_messages = [
-                {"role": "user", "content": input_prompt},
-                {"role": "assistant", "content": target_response},
-            ]
-
-            input_prompt_ids = tokenizer.apply_chat_template(
-                input_messages,
-                tokenize=True,
-                add_generation_prompt=False,
-                continue_final_message=True,
-                return_tensors=None,
-                padding=False,
-                enable_thinking=False,
-            )
-            if not isinstance(input_prompt_ids, list):
-                raise TypeError("Expected list of token ids from tokenizer")
-
-            labels = input_prompt_ids.copy()
 
         # 2. Prepare feature vectors for steering
         # We use decoder weights (W_dec) as they map from the feature space back to the residual stream.
@@ -1225,8 +1151,8 @@ def has_active_lora(model: AutoModelForCausalLM) -> bool:
     """
     return (
         hasattr(model, "peft_config")  # it's a PeftModel
-        and model.peft_config  # at least one adapter is configured
-        and getattr(model, "active_adapter", None)  # an adapter is currently selected
+        and bool(model.peft_config)  # at least one adapter is configured
+        and bool(getattr(model, "active_adapter", None))  # an adapter is currently selected
     )
 
 
@@ -1384,16 +1310,42 @@ def train_model(
 
 def main(explanations_file: str):
     """Main script logic."""
-    cfg = SelfInterpTrainingConfig()
-
-    cfg.eval_set_size = 100
-    cfg.save_steps = 2000
-    cfg.steering_coefficient = 2.0
-    cfg.train_batch_size = 8
-    cfg.eval_batch_size = cfg.train_batch_size * 16
-    cfg.lr = 5e-6
+    cfg = SelfInterpTrainingConfig(
+        # Model settings
+        model_name="google/gemma-2-9b-it",
+        train_batch_size=4,
+        eval_batch_size=128,  # 8 * 16
+        
+        # SAE settings
+        sae_repo_id="google/gemma-scope-9b-it-res",
+        sae_layer=9,
+        sae_width=16,
+        
+        # Experiment settings
+        eval_set_size=100,
+        use_decoder_vectors=True,
+        generation_kwargs={
+            "do_sample": False,
+            "temperature": 0.0,
+            "max_new_tokens": 200,
+        },
+        steering_coefficient=2.0,
+        
+        # LoRA settings
+        use_lora=True,
+        lora_r=16,
+        lora_alpha=32,
+        lora_dropout=0.05,
+        lora_target_modules="all-linear",
+        
+        # Training settings
+        num_epochs=2,
+        lr=5e-6,
+        eval_steps=1000,
+        save_steps=2000,
+        save_dir="checkpoints",
+    )
     verbose = True
-    cfg.use_decoder_vectors = True
 
     print(asdict(cfg))
     dtype = torch.bfloat16
