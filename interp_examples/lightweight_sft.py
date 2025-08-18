@@ -1298,7 +1298,7 @@ def train_model(
                 print(f"Step {global_step} loss: {loss.item()}")
 
             # -------------------------------- evaluation --------------------------------
-            if global_step % cfg.eval_steps == 0:
+            if global_step % cfg.eval_steps == 0 and global_step > 0:
                 model.eval()
                 with torch.no_grad():
                     all_sentence_metrics = []
