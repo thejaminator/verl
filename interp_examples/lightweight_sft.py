@@ -1,0 +1,1470 @@
+import os
+
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+import torch
+import contextlib
+from typing import Callable, List, Optional, Any
+from transformers.models.auto.modeling_auto import AutoModelForCausalLM
+from transformers.models.auto.tokenization_auto import AutoTokenizer
+from transformers.tokenization_utils import PreTrainedTokenizer
+from transformers.optimization import get_linear_schedule_with_warmup
+from dataclasses import dataclass, field, asdict
+from pydantic import BaseModel
+from rapidfuzz.distance import Levenshtein as lev
+from tqdm import tqdm
+import wandb
+from torch.nn.utils import clip_grad_norm_
+from peft import LoraConfig, get_peft_model
+import json
+import gc
+
+# All necessary imports are now included above
+from abc import ABC, abstractmethod
+import numpy as np
+import torch.nn as nn
+from huggingface_hub import hf_hub_download
+import safetensors.torch
+
+
+# ==============================================================================
+# 2. CONFIGURATION
+# ==============================================================================
+
+
+def get_sae_info(sae_repo_id: str) -> tuple[int, int, int, str]:
+    sae_layer = 9
+    sae_layer_percent = 25
+
+    if sae_repo_id == "google/gemma-scope-9b-it-res":
+        sae_width = 131
+
+        if sae_width == 16:
+            sae_filename = f"layer_{sae_layer}/width_16k/average_l0_88/params.npz"
+        elif sae_width == 131:
+            sae_filename = f"layer_{sae_layer}/width_131k/average_l0_121/params.npz"
+        else:
+            raise ValueError(f"Unknown SAE width: {sae_width}")
+    elif sae_repo_id == "fnlp/Llama3_1-8B-Base-LXR-32x":
+        sae_width = 32
+        sae_filename = ""
+    else:
+        raise ValueError(f"Unknown SAE repo ID: {sae_repo_id}")
+    return sae_width, sae_layer, sae_layer_percent, sae_filename
+
+
+@dataclass
+class SelfInterpTrainingConfig:
+    """Configuration settings for the script."""
+
+    # --- Foundational Settings ---
+    model_name: str = "google/gemma-2-9b-it"
+    train_batch_size: int = 4
+    eval_batch_size: int = 4
+
+    max_acts_ratio_threshold: float = 0.1
+    max_distance_threshold: float = 0.2
+    max_activation_percentage_required: float = 0.01
+    max_activation_required: float = 0.0
+
+    # --- SAE (Sparse Autoencoder) Settings ---
+    sae_repo_id: str = "google/gemma-scope-9b-it-res"
+    sae_layer: int = 9
+    sae_width: int = 16  # For loading the correct max acts file
+    layer_percent: int = 25  # For loading the correct max acts file
+    test_set_size: int = 1000
+
+    # max acts settings
+    context_length: int = 32
+    num_tokens: int = 60_000_000
+    max_acts_batch_size: int = 128
+
+    # API Interp Settings
+    # --- API and Generation Settings ---
+    api_num_features_to_run: int = 200  # How many random features to analyze
+    api_num_sentences_per_feature: int = (
+        5  # How many top-activating examples to use per feature
+    )
+    api_model_name: str = "gpt-4.1-mini"
+    # Use a default_factory for mutable types like dicts
+    api_generation_kwargs: dict[str, Any] = field(
+        default_factory=lambda: {
+            "temperature": 1.0,
+            "max_tokens": 2000,
+            "max_par": 200,  # Max parallel requests
+        }
+    )
+
+    sae_filename: str = field(init=False)
+    training_data_filename: str = "contrastive_rewriting_results_10k.pkl"
+
+    # --- Experiment Settings ---
+    eval_set_size: int = 200  # How many random features to analyze
+
+    random_seed: int = 42  # For reproducible feature selection
+    use_decoder_vectors: bool = False
+    prefill_original_sentences: bool = False
+
+    # Use a default_factory for mutable types like dicts
+    generation_kwargs: dict[str, Any] = field(
+        default_factory=lambda: {
+            "do_sample": False,
+            "temperature": 0.0,
+            "max_new_tokens": 200,
+        }
+    )
+
+    eval_features: list[int] = field(default_factory=list)
+    steering_coefficient: float = 2.0
+
+    # --- LoRA Settings ---
+    use_lora: bool = True
+    lora_r: int = 16
+    lora_alpha: int = 32
+    lora_dropout: float = 0.05
+    lora_target_modules: str = "all-linear"
+
+    # training settings
+    num_epochs: int = 2
+    lr: float = 5e-6
+    eval_steps: int = 1000
+    save_steps: int = 1000
+    save_dir: str = "checkpoints"
+
+    def __post_init__(self):
+        """Called after the dataclass is initialized."""
+        self.sae_width, self.sae_layer, self.sae_layer_percent, self.sae_filename = (
+            get_sae_info(self.sae_repo_id)
+        )
+
+
+# ==============================================================================
+# 3. DATA MODELS
+# ==============================================================================
+
+
+class SAEExplained(BaseModel):
+    """SAE explanation from JSONL file."""
+
+    sae_id: int
+    explanation: str
+
+
+class ExplanationResult(BaseModel):
+    """Parsed explanation from model generation."""
+
+    explanation: str
+
+
+class TrainingExample(BaseModel):
+    """Training example with explanation and metadata."""
+
+    explanation: str
+    feature_idx: int
+
+
+class SentenceData(BaseModel):
+    """Data about a sentence pair."""
+
+    original_sentence: str
+    rewritten_sentence: str
+
+
+class SentenceMetrics(BaseModel):
+    """Metrics for sentence evaluation."""
+
+    original_max_activation: float
+    rewritten_max_activation: float
+    sentence_distance: float
+
+
+class FeatureResult(BaseModel):
+    """Result for a single feature evaluation."""
+
+    feature_idx: int
+    api_response: str
+    prompt: str
+    explanation: str
+
+
+class EvalStepResult(BaseModel):
+    """Results from a single evaluation step."""
+
+    step: int
+    results: List[FeatureResult]
+
+
+@dataclass
+class TrainingDataPoint:
+    """Training data point with tensors."""
+
+    input_ids: List[int]
+    labels: List[int]  # Can contain -100 for ignored tokens
+    steering_vectors: List[torch.Tensor]
+    positions: List[int]
+    feature_indices: List[int]
+
+
+@dataclass
+class BatchData:
+    """Batch of training data with tensors."""
+
+    input_ids: torch.Tensor
+    labels: torch.Tensor
+    attention_mask: torch.Tensor
+    steering_vectors: List[List[torch.Tensor]]
+    positions: List[List[int]]
+    feature_indices: List[List[int]]
+
+
+# ==============================================================================
+# 4. MODEL UTILITIES
+# ==============================================================================
+
+
+def get_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = False):
+    """Gets the residual stream submodule"""
+    model_name = model.config._name_or_path
+
+    if use_lora:
+        if "pythia" in model_name:
+            raise ValueError("Need to determine how to get submodule for LoRA")
+        elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name:
+            return model.base_model.model.model.layers[layer]
+        else:
+            raise ValueError(f"Please add submodule for model {model_name}")
+
+    if "pythia" in model_name:
+        return model.gpt_neox.layers[layer]
+    elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name:
+        return model.model.layers[layer]
+    else:
+        raise ValueError(f"Please add submodule for model {model_name}")
+
+
+class EarlyStopException(Exception):
+    """Custom exception for stopping model forward pass early."""
+
+    pass
+
+
+def collect_activations(
+    model: AutoModelForCausalLM,
+    submodule: torch.nn.Module,
+    inputs_BL: dict[str, torch.Tensor],
+    use_no_grad: bool = True,
+) -> torch.Tensor:
+    """
+    Collects activations from a specific submodule (layer) during model forward pass.
+
+    Args:
+        model: The transformer model
+        submodule: The specific layer/module to collect activations from
+        inputs_BL: Tokenized inputs (batch, length)
+        use_no_grad: Whether to use torch.no_grad() for efficiency
+
+    Returns:
+        activations_BLD: Activations tensor (batch, length, hidden_dim)
+    """
+    activations_BLD = None
+
+    def hook(module, input, output):
+        nonlocal activations_BLD
+        if isinstance(output, tuple):
+            activations_BLD = output[0]  # For models that return tuples
+        else:
+            activations_BLD = output
+        # Stop computation early if we only need activations
+        raise EarlyStopException()
+
+    # Register hook
+    handle = submodule.register_forward_hook(hook)
+
+    try:
+        ctx = torch.no_grad() if use_no_grad else contextlib.nullcontext()
+        with ctx:
+            try:
+                model(**inputs_BL)
+            except EarlyStopException:
+                pass  # Expected - we stopped early to collect activations
+    finally:
+        handle.remove()
+
+    if activations_BLD is None:
+        raise RuntimeError("Failed to collect activations")
+
+    return activations_BLD
+
+
+# ==============================================================================
+# 5. SAE CLASSES
+# ==============================================================================
+
+
+class BaseSAE(nn.Module, ABC):
+    def __init__(
+        self,
+        d_in: int,
+        d_sae: int,
+        model_name: str,
+        hook_layer: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        hook_name: str | None = None,
+    ):
+        super().__init__()
+
+        # Required parameters
+        self.W_enc = nn.Parameter(torch.zeros(d_in, d_sae))
+        self.W_dec = nn.Parameter(torch.zeros(d_sae, d_in))
+
+        self.b_enc = nn.Parameter(torch.zeros(d_sae))
+        self.b_dec = nn.Parameter(torch.zeros(d_in))
+
+        # Required attributes
+        self.device: torch.device = device
+        self.dtype: torch.dtype = dtype
+        self.hook_layer = hook_layer
+
+        hook_name = hook_name or f"blocks.{hook_layer}.hook_resid_post"
+        self.to(dtype=self.dtype, device=self.device)
+
+    @abstractmethod
+    def encode(self, x: torch.Tensor):
+        """Must be implemented by child classes"""
+        raise NotImplementedError("Encode method must be implemented by child classes")
+
+    @abstractmethod
+    def decode(self, feature_acts: torch.Tensor):
+        """Must be implemented by child classes"""
+        raise NotImplementedError("Encode method must be implemented by child classes")
+
+    @abstractmethod
+    def forward(self, x: torch.Tensor):
+        """Must be implemented by child classes"""
+        raise NotImplementedError("Encode method must be implemented by child classes")
+
+    def to(self, *args, **kwargs):
+        """Handle device and dtype updates"""
+        super().to(*args, **kwargs)
+        device = kwargs.get("device", None)
+        dtype = kwargs.get("dtype", None)
+
+        if device:
+            self.device = device
+        if dtype:
+            self.dtype = dtype
+        return self
+
+    @torch.no_grad()
+    def check_decoder_norms(self) -> bool:
+        """
+        It's important to check that the decoder weights are normalized.
+        """
+        norms = torch.norm(self.W_dec, dim=1).to(dtype=self.dtype, device=self.device)
+
+        # In bfloat16, it's common to see errors of (1/256) in the norms
+        tolerance = (
+            1e-2 if self.W_dec.dtype in [torch.bfloat16, torch.float16] else 1e-5
+        )
+
+        if torch.allclose(norms, torch.ones_like(norms), atol=tolerance):
+            return True
+        else:
+            max_diff = torch.max(torch.abs(norms - torch.ones_like(norms)))
+            print(f"Decoder weights are not normalized. Max diff: {max_diff.item()}")
+            return False
+
+
+class JumpReluSAE(BaseSAE):
+    def __init__(
+        self,
+        d_in: int,
+        d_sae: int,
+        model_name: str,
+        hook_layer: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        hook_name: str | None = None,
+    ):
+        hook_name = hook_name or f"blocks.{hook_layer}.hook_resid_post"
+        super().__init__(d_in, d_sae, model_name, hook_layer, device, dtype, hook_name)
+
+        self.threshold = nn.Parameter(torch.zeros(d_sae, dtype=dtype, device=device))
+        self.d_sae = d_sae
+        self.d_in = d_in
+
+    def encode(self, x: torch.Tensor):
+        pre_acts = x @ self.W_enc + self.b_enc
+        mask = pre_acts > self.threshold
+        acts = mask * torch.nn.functional.relu(pre_acts)
+        return acts
+
+    def decode(self, feature_acts: torch.Tensor):
+        return feature_acts @ self.W_dec + self.b_dec
+
+    def forward(self, x: torch.Tensor):
+        x = self.encode(x)
+        recon = self.decode(x)
+        return recon
+
+
+class TopKSAE(BaseSAE):
+    def __init__(
+        self,
+        d_in: int,
+        d_sae: int,
+        k: int,
+        model_name: str,
+        hook_layer: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        use_threshold: bool = False,
+        hook_name: str | None = None,
+    ):
+        hook_name = hook_name or f"blocks.{hook_layer}.hook_resid_post"
+        super().__init__(d_in, d_sae, model_name, hook_layer, device, dtype, hook_name)
+
+        assert isinstance(k, int) and k > 0
+        self.register_buffer("k", torch.tensor(k, dtype=torch.int, device=device))
+        self.d_sae = d_sae
+        self.d_in = d_in
+        self.pre_encoder_bias = False
+
+        self.use_threshold = use_threshold
+        if use_threshold:
+            # Optional global threshold to use during inference. Must be positive.
+            self.register_buffer(
+                "threshold", torch.tensor(-1.0, dtype=dtype, device=device)
+            )
+
+    def encode(self, x: torch.Tensor):
+        """Note: x can be either shape (B, F) or (B, L, F)"""
+        pre_acts = x @ self.W_enc + self.b_enc
+
+        # Get top-k activations
+        top_acts, top_indices = torch.topk(pre_acts, self.k.item(), dim=-1)
+
+        # Create sparse representation
+        acts = torch.zeros_like(pre_acts)
+        if len(acts.shape) == 2:  # (B, F)
+            batch_indices = torch.arange(acts.shape[0], device=acts.device).unsqueeze(1)
+            acts[batch_indices, top_indices] = torch.nn.functional.relu(top_acts)
+        else:  # (B, L, F)
+            batch_indices = (
+                torch.arange(acts.shape[0], device=acts.device)
+                .unsqueeze(1)
+                .unsqueeze(2)
+            )
+            seq_indices = (
+                torch.arange(acts.shape[1], device=acts.device)
+                .unsqueeze(0)
+                .unsqueeze(2)
+            )
+            acts[batch_indices, seq_indices, top_indices] = torch.nn.functional.relu(
+                top_acts
+            )
+
+        if self.use_threshold and hasattr(self, "threshold"):
+            acts = acts * (acts > self.threshold)
+
+        return acts
+
+    def decode(self, feature_acts: torch.Tensor):
+        return feature_acts @ self.W_dec + self.b_dec
+
+    def forward(self, x: torch.Tensor):
+        x = self.encode(x)
+        recon = self.decode(x)
+        return recon
+
+
+# ==============================================================================
+# 6. UTILITY FUNCTIONS
+# ==============================================================================
+
+
+def build_training_prompt() -> str:
+    """Build the training prompt for SAE explanations."""
+    question = """Can you explain to me what 'X' means? Format your final answer with <explanation>"""
+    return question
+
+
+def parse_generated_explanation(text: str) -> Optional[ExplanationResult]:
+    """
+    Extract the explanation from a model-generated block of text formatted as:
+    <explanation>...</explanation>
+
+    If the tag is missing, return None.
+    """
+    # Normalise leading / trailing whitespace
+    text = text.strip()
+
+    # Look for <explanation> tags
+    start_tag = "<explanation>"
+    end_tag = "</explanation>"
+
+    start_idx = text.find(start_tag)
+    if start_idx == -1:
+        return None
+
+    end_idx = text.find(end_tag, start_idx + len(start_tag))
+    if end_idx == -1:
+        return None
+
+    # Extract content between tags
+    explanation = text[start_idx + len(start_tag) : end_idx].strip()
+
+    if not explanation:
+        return None
+
+    return ExplanationResult(
+        explanation=explanation,
+    )
+
+
+def load_explanations_from_jsonl(filepath: str) -> List[SAEExplained]:
+    """Load SAE explanations from a JSONL file."""
+    explanations = []
+    with open(filepath, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                data = json.loads(line)
+                explanations.append(SAEExplained(**data))
+    return explanations
+
+
+def convert_explanations_to_training_examples(
+    explanations: List[SAEExplained],
+) -> List[TrainingExample]:
+    """Convert SAEExplained models to TrainingExample models."""
+    training_examples = []
+    for exp in explanations:
+        training_examples.append(
+            TrainingExample(
+                explanation=exp.explanation,
+                feature_idx=exp.sae_id,
+            )
+        )
+    return training_examples
+
+
+# ==============================================================================
+# 3. HOOKING MECHANISM FOR ACTIVATION STEERING
+# ==============================================================================
+
+
+@contextlib.contextmanager
+def add_hook(module: torch.nn.Module, hook: Callable):
+    """Temporarily adds a forward hook to a model module."""
+    handle = module.register_forward_hook(hook)
+    try:
+        yield
+    finally:
+        handle.remove()
+
+
+def get_activation_steering_hook(
+    vectors: list[list[torch.Tensor]],  # [B][K, d_model]  or [K, d_model] if B==1
+    positions: list[list[int]],  # [B][K]
+    steering_coefficient: float,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> Callable:
+    """
+    Returns a forward hook that *replaces* specified residual-stream activations
+    during the initial prompt pass of `model.generate`.
+
+    • vectors[b][k]  – feature vector to inject for batch b, slot k
+    • coeffs[b][k]   – scale factor (usually small, e.g. 0.3)
+    • positions[b][k]– token index (0-based, within prompt only)
+    """
+
+    # ---- pack Python lists → torch tensors once, outside the hook ----
+    vec_BKD = torch.stack([torch.stack(v) for v in vectors])  # (B, K, d)
+    pos_BK = torch.tensor(positions, dtype=torch.long)  # (B, K)
+
+    B, K, d_model = vec_BKD.shape
+    assert pos_BK.shape == (B, K)
+
+    vec_BKD = vec_BKD.to(device, dtype)
+    pos_BK = pos_BK.to(device)
+
+    def hook_fn(module, _input, output):
+        resid_BLD, *rest = output  # Gemma returns (resid, hidden_states, ...)
+        L = resid_BLD.shape[1]
+
+        # Only touch the *prompt* forward pass (sequence length > 1)
+        if L <= 1:
+            return (resid_BLD, *rest)
+
+        # Safety: make sure every position is inside current sequence
+        if (pos_BK >= L).any():
+            bad = pos_BK[pos_BK >= L].min().item()
+            raise IndexError(f"position {bad} is out of bounds for length {L}")
+
+        # ---- compute norms of original activations at the target slots ----
+        batch_idx_B1 = torch.arange(B, device=device).unsqueeze(1)  # (B, 1) → (B, K)
+        orig_BKD = resid_BLD[batch_idx_B1, pos_BK]  # (B, K, d)
+        norms_BK1 = orig_BKD.norm(dim=-1, keepdim=True).detach()  # (B, K, 1)
+
+        # ---- build steered vectors ----
+        steered_BKD = (
+            torch.nn.functional.normalize(vec_BKD, dim=-1)
+            * norms_BK1
+            * steering_coefficient
+        )  # (B, K, d)
+
+        # ---- in-place replacement via advanced indexing ----
+        resid_BLD[batch_idx_B1, pos_BK] = steered_BKD
+
+        return (resid_BLD, *rest)
+
+    return hook_fn
+
+
+# Note: collect_training_examples removed - we now read explanations from JSONL files
+
+
+@torch.no_grad()
+def construct_train_dataset(
+    cfg: SelfInterpTrainingConfig,
+    dataset_size: int,
+    input_prompt: str,
+    training_examples: List[TrainingExample],
+    sae: BaseSAE,
+    tokenizer: PreTrainedTokenizer,
+) -> List[TrainingDataPoint]:
+    input_messages = [{"role": "user", "content": input_prompt}]
+
+    input_prompt_ids = tokenizer.apply_chat_template(
+        input_messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_tensors=None,
+        padding=False,
+        enable_thinking=False,
+    )
+    if not isinstance(input_prompt_ids, list):
+        raise TypeError("Expected list of token ids from tokenizer")
+    x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
+
+    training_data = []
+
+    for i in tqdm(range(dataset_size), desc="Constructing training dataset"):
+        target_response = (
+            f"<explanation>{training_examples[i].explanation}</explanation>"
+        )
+
+        full_messages = input_messages + [
+            {"role": "assistant", "content": target_response}
+        ]
+
+        full_prompt_ids = tokenizer.apply_chat_template(
+            full_messages,
+            tokenize=True,
+            add_generation_prompt=False,
+            return_tensors=None,
+            padding=False,
+            enable_thinking=False,
+        )
+        if not isinstance(full_prompt_ids, list):
+            raise TypeError("Expected list of token ids from tokenizer")
+        target_feature_idx = training_examples[i].feature_idx
+
+        # 2. Prepare feature vectors for steering
+        # We use decoder weights (W_dec) as they map from the feature space back to the residual stream.
+        all_feature_indices = [target_feature_idx]
+
+        # .clone() because otherwise we will save the entire W_dec in pickle for each training example
+        if cfg.use_decoder_vectors:
+            feature_vectors = [sae.W_dec[i].clone() for i in all_feature_indices]
+        else:
+            feature_vectors = [sae.W_enc[:, i].clone() for i in all_feature_indices]
+
+        assistant_start_idx = len(input_prompt_ids)
+
+        labels = full_prompt_ids.copy()
+        for i in range(assistant_start_idx):
+            labels[i] = -100
+
+        positions = []
+        for i in range(assistant_start_idx):
+            if full_prompt_ids[i] == x_token_id:
+                positions.append(i)
+        assert len(positions) == 1, "Expected exactly one X token"
+
+        training_data_point = TrainingDataPoint(
+            input_ids=full_prompt_ids,
+            labels=labels,
+            steering_vectors=feature_vectors,
+            positions=positions,
+            feature_indices=all_feature_indices,
+        )
+
+        training_data.append(training_data_point)
+
+    return training_data
+
+
+def construct_eval_dataset(
+    cfg: SelfInterpTrainingConfig,
+    dataset_size: int,
+    input_prompt: str,
+    eval_feature_indices: List[int],
+    api_data: dict,
+    sae: BaseSAE,
+    tokenizer: PreTrainedTokenizer,
+    prefill_original_sentences: bool = False,
+) -> List[TrainingDataPoint]:
+    """Every prompt is exactly the same - the only difference is the steering vectors."""
+
+    input_messages = [{"role": "user", "content": input_prompt}]
+
+    input_prompt_ids = tokenizer.apply_chat_template(
+        input_messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_tensors=None,
+        padding=False,
+        enable_thinking=False,
+    )
+    if not isinstance(input_prompt_ids, list):
+        raise TypeError("Expected list of token ids from tokenizer")
+    labels = input_prompt_ids.copy()
+
+    orig_prompt_length = len(input_prompt_ids)
+
+    x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
+
+    eval_data = []
+
+    first_position = None
+
+    for i in tqdm(range(dataset_size), desc="Constructing eval dataset"):
+        target_feature_idx = eval_feature_indices[i]
+
+        if prefill_original_sentences:
+            sentence_data = None
+            for i, feature_result in enumerate(api_data["results"]):
+                # just getting the first sentence data for now
+                # TODO: Ensure comparison with api data is correct
+                if feature_result["feature_idx"] != target_feature_idx:
+                    continue
+                sentence_data = feature_result["sentence_data"][0]
+                break
+
+            assert sentence_data is not None, "No sentence data found for feature index"
+
+            target_response = f"Positive example: {sentence_data['original_sentence']}\n\nNegative example:"
+
+            input_messages = [
+                {"role": "user", "content": input_prompt},
+                {"role": "assistant", "content": target_response},
+            ]
+
+            input_prompt_ids = tokenizer.apply_chat_template(
+                input_messages,
+                tokenize=True,
+                add_generation_prompt=False,
+                continue_final_message=True,
+                return_tensors=None,
+                padding=False,
+                enable_thinking=False,
+            )
+            if not isinstance(input_prompt_ids, list):
+                raise TypeError("Expected list of token ids from tokenizer")
+
+            labels = input_prompt_ids.copy()
+
+        # 2. Prepare feature vectors for steering
+        # We use decoder weights (W_dec) as they map from the feature space back to the residual stream.
+        all_feature_indices = [target_feature_idx]
+
+        if cfg.use_decoder_vectors:
+            feature_vectors = [sae.W_dec[i].clone() for i in all_feature_indices]
+        else:
+            feature_vectors = [sae.W_enc[:, i].clone() for i in all_feature_indices]
+
+        positions = []
+        for i in range(orig_prompt_length):
+            if input_prompt_ids[i] == x_token_id:
+                positions.append(i)
+
+        assert len(positions) == 1, "Expected exactly one X token"
+
+        if first_position is None:
+            first_position = positions[0]
+        else:
+            assert positions[0] == first_position, (
+                "Expected all positions to be the same"
+            )
+
+        eval_data_point = TrainingDataPoint(
+            input_ids=input_prompt_ids,
+            labels=labels,
+            steering_vectors=feature_vectors,
+            positions=positions,
+            feature_indices=all_feature_indices,
+        )
+
+        eval_data.append(eval_data_point)
+
+    return eval_data
+
+
+def construct_batch(
+    training_data: List[TrainingDataPoint],
+    tokenizer: PreTrainedTokenizer,
+    device: torch.device,
+) -> BatchData:
+    max_length = 0
+    for data_point in training_data:
+        max_length = max(max_length, len(data_point.input_ids))
+
+    batch_tokens = []
+    batch_labels = []
+    batch_attn_masks = []
+    batch_positions = []
+    batch_steering_vectors = []
+    batch_feature_indices = []
+
+    for data_point in training_data:
+        padding_length = max_length - len(data_point.input_ids)
+        padding_tokens = [tokenizer.pad_token_id] * padding_length
+        padded_input_ids = padding_tokens + data_point.input_ids
+        padded_labels = [-100] * padding_length + data_point.labels
+
+        input_ids = torch.tensor(padded_input_ids, dtype=torch.long).to(device)
+        labels = torch.tensor(padded_labels, dtype=torch.long).to(device)
+        attn_mask = torch.ones_like(input_ids, dtype=torch.bool).to(device)
+
+        attn_mask[:padding_length] = False
+
+        batch_tokens.append(input_ids)
+        batch_labels.append(labels)
+        batch_attn_masks.append(attn_mask)
+
+        positions = data_point.positions
+        positions = [p + padding_length for p in positions]
+
+        batch_positions.append(positions)
+        batch_steering_vectors.append(data_point.steering_vectors)
+        batch_feature_indices.append(data_point.feature_indices)
+
+    return BatchData(
+        input_ids=torch.stack(batch_tokens),
+        labels=torch.stack(batch_labels),
+        attention_mask=torch.stack(batch_attn_masks),
+        steering_vectors=batch_steering_vectors,
+        positions=batch_positions,
+        feature_indices=batch_feature_indices,
+    )
+
+
+def train_features_batch(
+    cfg: SelfInterpTrainingConfig,
+    training_batch: BatchData,
+    model: AutoModelForCausalLM,
+    submodule: torch.nn.Module,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    """
+    Trains the model on a single batch of data.
+    """
+
+    batch_steering_vectors = training_batch.steering_vectors
+    batch_positions = training_batch.positions
+
+    # 3. Create and apply the activation steering hook
+    hook_fn = get_activation_steering_hook(
+        vectors=batch_steering_vectors,
+        positions=batch_positions,
+        steering_coefficient=cfg.steering_coefficient,
+        device=device,
+        dtype=dtype,
+    )
+
+    tokenized_input = {
+        "input_ids": training_batch.input_ids,
+        "attention_mask": training_batch.attention_mask,
+    }
+
+    with add_hook(submodule, hook_fn):
+        loss = model(**tokenized_input, labels=training_batch.labels).loss
+
+    return loss
+
+
+@torch.no_grad()
+def eval_features_batch(
+    cfg: SelfInterpTrainingConfig,
+    eval_batch: BatchData,
+    model: AutoModelForCausalLM,
+    submodule: torch.nn.Module,
+    sae: BaseSAE,
+    tokenizer: PreTrainedTokenizer,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> List[FeatureResult]:
+    batch_steering_vectors = eval_batch.steering_vectors
+    batch_positions = eval_batch.positions
+
+    # 3. Create and apply the activation steering hook
+    hook_fn = get_activation_steering_hook(
+        vectors=batch_steering_vectors,
+        positions=batch_positions,
+        steering_coefficient=cfg.steering_coefficient,
+        device=device,
+        dtype=dtype,
+    )
+
+    tokenized_input = {
+        "input_ids": eval_batch.input_ids,
+        "attention_mask": eval_batch.attention_mask,
+    }
+
+    with add_hook(submodule, hook_fn):
+        output_ids = model.generate(**tokenized_input, **cfg.generation_kwargs)
+
+    # Decode only the newly generated tokens
+    generated_tokens = output_ids[:, eval_batch.input_ids.shape[1] :]
+    decoded_output = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+
+    explanations = []
+
+    prompt_tokens = eval_batch.input_ids[:, : eval_batch.input_ids.shape[1]]
+    decoded_prompts = tokenizer.batch_decode(prompt_tokens, skip_special_tokens=False)
+
+    for i, output in enumerate(decoded_output):
+        parsed_result = parse_generated_explanation(output)
+        print(f"Generated output: {output}")
+        if parsed_result:
+            explanations.append(parsed_result.explanation)
+        else:
+            explanations.append("")
+
+    # Flatten feature_indices from List[List[int]] to List[int]
+    flattened_feature_indices = [
+        idx for batch_indices in eval_batch.feature_indices for idx in batch_indices
+    ]
+
+
+    feature_results = []
+
+
+    for i, output in enumerate(decoded_output):
+        feature_idx = eval_batch.feature_indices[i][
+            0
+        ]  # Get first (and only) feature index
+
+
+
+        feature_result = FeatureResult(
+            feature_idx=feature_idx,
+            api_response=output,
+            prompt=decoded_prompts[i],
+            explanation=explanations[i],
+        )
+
+        feature_results.append(feature_result)
+
+    return feature_results
+
+
+def save_logs(
+    eval_results_path: str,
+    global_step: int,
+    all_feature_results_this_eval_step: List[FeatureResult],
+):
+    # Load existing data, append new results, and save
+    try:
+        with open(eval_results_path, "r") as f:
+            all_run_results = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        all_run_results = []
+
+    # Add results from the current evaluation step
+    eval_step_result = EvalStepResult(
+        step=global_step,
+        results=all_feature_results_this_eval_step,
+    )
+    all_run_results.append(eval_step_result.model_dump())
+
+    with open(eval_results_path, "w") as f:
+        json.dump(all_run_results, f, indent=2)
+
+
+# ==============================================================================
+# 7. SAE LOADING FUNCTIONS
+# ==============================================================================
+
+
+def load_gemma_scope_jumprelu_sae(
+    repo_id: str,
+    filename: str,
+    layer: int,
+    model_name: str,
+    device: torch.device,
+    dtype: torch.dtype,
+    local_dir: str = "downloaded_saes",
+) -> JumpReluSAE:
+    path_to_params = hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        force_download=False,
+        local_dir=local_dir,
+    )
+    pytorch_path = path_to_params.replace(".npz", ".pt")
+
+    # Doing this because npz files are often insanely slow to load
+    if not os.path.exists(pytorch_path):
+        params = np.load(path_to_params)
+        pt_params = {k: torch.from_numpy(v) for k, v in params.items()}
+        torch.save(pt_params, pytorch_path)
+
+    pt_params = torch.load(pytorch_path)
+
+    d_in = pt_params["W_enc"].shape[0]
+    d_sae = pt_params["W_enc"].shape[1]
+
+    assert d_sae >= d_in
+
+    sae = JumpReluSAE(d_in, d_sae, model_name, layer, device, dtype)
+    sae.load_state_dict(pt_params)
+    sae.to(dtype=dtype, device=device)
+
+    normalized = sae.check_decoder_norms()
+    if not normalized:
+        raise ValueError(
+            "Decoder norms are not normalized. Implement a normalization method."
+        )
+
+    return sae
+
+
+def load_llama_scope_topk_sae(
+    model_name: str,
+    device: torch.device,
+    dtype: torch.dtype,
+    layer: int,
+    expansion_factor: int,
+) -> TopKSAE:
+    repo_id = f"fnlp/Llama3_1-8B-Base-LXR-{expansion_factor}x"
+    config_filename = f"Llama3_1-8B-Base-L{layer}R-{expansion_factor}x/hyperparams.json"
+    filename = (
+        f"Llama3_1-8B-Base-L{layer}R-{expansion_factor}x/checkpoints/final.safetensors"
+    )
+
+    path_to_params = hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        force_download=False,
+        local_dir="downloaded_saes",
+    )
+
+    path_to_config = hf_hub_download(
+        repo_id=repo_id,
+        filename=config_filename,
+        force_download=False,
+        local_dir="downloaded_saes",
+    )
+
+    with open(path_to_config) as f:
+        config = json.load(f)
+
+    threshold = config["jump_relu_threshold"]
+    k = config["top_k"]
+
+    pt_params = safetensors.torch.load_file(path_to_params)
+
+    key_mapping = {
+        "encoder.weight": "W_enc",
+        "decoder.weight": "W_dec",
+        "encoder.bias": "b_enc",
+        "decoder.bias": "b_dec",
+    }
+
+    renamed_params = {key_mapping.get(k, k): v for k, v in pt_params.items()}
+    renamed_params["W_enc"] = renamed_params["W_enc"].T
+    renamed_params["W_dec"] = renamed_params["W_dec"].T
+    renamed_params["k"] = torch.tensor(k, dtype=torch.int, device=device)
+    renamed_params["threshold"] = torch.tensor(threshold, dtype=dtype, device=device)
+
+    sae = TopKSAE(
+        d_in=renamed_params["b_dec"].shape[0],
+        d_sae=renamed_params["b_enc"].shape[0],
+        k=k,
+        model_name=model_name,
+        hook_layer=layer,
+        device=device,
+        dtype=dtype,
+        use_threshold=True,
+    )
+
+    sae.load_state_dict(renamed_params)
+    sae.to(device=device, dtype=dtype)
+
+    # https://github.com/OpenMOSS/Language-Model-SAEs/blob/25180e32e82176924b62ab30a75fffd234260a9e/src/lm_saes/sae.py#L172
+    # openmoss scaling strategy
+    dataset_average_activation_norm = config["dataset_average_activation_norm"]
+    input_norm_factor = sae.d_in**0.5 / dataset_average_activation_norm["in"]
+    sae.b_enc.data /= input_norm_factor
+
+    return sae
+
+
+# ==============================================================================
+# 8. INTROSPECTION UTILITIES
+# ==============================================================================
+
+
+def load_model(
+    cfg: SelfInterpTrainingConfig,
+    device: torch.device,
+    dtype: torch.dtype,
+    use_lora: bool,
+) -> AutoModelForCausalLM:
+    print(f"Loading model: {cfg.model_name}...")
+    model = AutoModelForCausalLM.from_pretrained(
+        cfg.model_name, device_map="auto", torch_dtype=dtype
+    )
+
+    if use_lora:
+        lora_config = LoraConfig(
+            r=cfg.lora_r,
+            lora_alpha=cfg.lora_alpha,
+            lora_dropout=cfg.lora_dropout,
+            target_modules=cfg.lora_target_modules,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+
+        model = get_peft_model(model, lora_config)
+        model.print_trainable_parameters()
+
+    return model
+
+
+def load_sae(
+    cfg: SelfInterpTrainingConfig,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> BaseSAE:
+    # Note: There's some duplication here with saes.sae_loading_utils.py
+    print(f"Loading SAE for layer {cfg.sae_layer} from {cfg.sae_repo_id}...")
+
+    if cfg.sae_repo_id == "google/gemma-scope-9b-it-res":
+        sae = load_gemma_scope_jumprelu_sae(
+            repo_id=cfg.sae_repo_id,
+            filename=cfg.sae_filename,
+            layer=cfg.sae_layer,
+            model_name=cfg.model_name,
+            device=device,
+            dtype=dtype,
+        )
+    elif cfg.sae_repo_id == "fnlp/Llama3_1-8B-Base-LXR-32x":
+        sae = load_llama_scope_topk_sae(
+            model_name=cfg.model_name,
+            device=device,
+            dtype=dtype,
+            layer=cfg.sae_layer,
+            expansion_factor=cfg.sae_width,
+        )
+    else:
+        raise ValueError(f"Unknown SAE repo ID: {cfg.sae_repo_id}")
+
+    return sae
+
+
+def get_bos_eos_pad_mask(
+    tokenizer: PreTrainedTokenizer, token_ids: torch.Tensor
+) -> torch.Tensor:
+    """Create mask for BOS, EOS, and PAD tokens"""
+    mask = torch.zeros_like(token_ids, dtype=torch.bool)
+
+    if tokenizer.bos_token_id is not None:
+        mask |= token_ids == tokenizer.bos_token_id
+    if tokenizer.eos_token_id is not None:
+        mask |= token_ids == tokenizer.eos_token_id
+    if tokenizer.pad_token_id is not None:
+        mask |= token_ids == tokenizer.pad_token_id
+
+    return mask
+
+
+def get_feature_activations(
+    model: AutoModelForCausalLM,
+    tokenizer: PreTrainedTokenizer,
+    submodule: torch.nn.Module,
+    sae: JumpReluSAE,
+    tokenized_strs: dict[str, torch.Tensor],
+    ignore_bos: bool = True,
+) -> torch.Tensor:
+    with torch.no_grad():
+        pos_acts_BLD = collect_activations(model, submodule, tokenized_strs)
+        encoded_pos_acts_BLF = sae.encode(pos_acts_BLD)
+
+    if ignore_bos:
+        bos_mask = tokenized_strs.input_ids == tokenizer.bos_token_id
+        # Note: I use >=, not ==, because occasionally prompts will contain a BOS token
+        assert bos_mask.sum() >= encoded_pos_acts_BLF.shape[0], (
+            f"Expected at least {encoded_pos_acts_BLF.shape[0]} BOS tokens, but found {bos_mask.sum()}"
+        )
+
+        mask = get_bos_eos_pad_mask(tokenizer, tokenized_strs.input_ids)
+        encoded_pos_acts_BLF[mask] = 0
+
+    return encoded_pos_acts_BLF
+
+
+def has_active_lora(model: AutoModelForCausalLM) -> bool:
+    """
+    True ⇢ model is a PEFT/PeftModel object *and* at least one adapter is enabled.
+    """
+    return (
+        hasattr(model, "peft_config")  # it's a PeftModel
+        and model.peft_config  # at least one adapter is configured
+        and getattr(model, "active_adapter", None)  # an adapter is currently selected
+    )
+
+
+
+def train_model(
+    cfg: SelfInterpTrainingConfig,
+    training_data: List[TrainingDataPoint],
+    eval_data: List[TrainingDataPoint],
+    model: AutoModelForCausalLM,
+    tokenizer: PreTrainedTokenizer,
+    submodule: torch.nn.Module,
+    sae: BaseSAE,
+    device: torch.device,
+    dtype: torch.dtype,
+    verbose: bool = False,
+    use_wandb: bool = True,
+):
+    max_grad_norm = 1.0
+    wandb_project = "sae_introspection"
+    run_name = f"{cfg.model_name}-layer{cfg.sae_layer}-decoder-shorter-prompt"
+
+    if use_wandb:
+        wandb.init(project=wandb_project, name=run_name, config=asdict(cfg))
+
+    model.train()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr)
+
+    total_training_steps = cfg.num_epochs * len(training_data)
+    warmup_steps = 200
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=warmup_steps,
+        num_training_steps=total_training_steps,
+    )
+    # --------------------------------------------------------------
+
+    global_step = 0
+
+    if os.path.exists("eval_logs.json"):
+        os.remove("eval_logs.json")
+
+    for epoch in range(cfg.num_epochs):
+        for i in tqdm(
+            range(0, len(training_data), cfg.train_batch_size),
+            desc=f"Training epoch {epoch + 1}",
+        ):
+            t_batch = training_data[i : i + cfg.train_batch_size]
+            t_batch = construct_batch(t_batch, tokenizer, device)
+
+            if i % 100 == 0:
+                torch.cuda.empty_cache()
+                gc.collect()
+            loss = train_features_batch(cfg, t_batch, model, submodule, device, dtype)
+            loss.backward()
+            clip_grad_norm_(model.parameters(), max_grad_norm)
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
+
+            if use_wandb:
+                wandb.log(
+                    {
+                        "train/loss": loss.item(),
+                        "train/learning_rate": scheduler.get_last_lr()[0],
+                    },
+                    step=global_step,
+                )
+            if verbose:
+                print(f"Step {global_step} loss: {loss.item()}")
+
+            # -------------------------------- evaluation --------------------------------
+            if global_step % cfg.eval_steps == 0:
+                model.eval()
+                with torch.no_grad():
+                    all_sentence_metrics = []
+                    all_feature_results_this_eval_step = []
+                    for i in tqdm(
+                        range(0, len(eval_data), cfg.eval_batch_size),
+                        desc="Evaluating model",
+                    ):
+                        e_batch = eval_data[i : i + cfg.eval_batch_size]
+                        e_batch = construct_batch(e_batch, tokenizer, device)
+
+                        feature_results = eval_features_batch(
+                            cfg=cfg,
+                            eval_batch=e_batch,
+                            model=model,
+                            submodule=submodule,
+                            sae=sae,
+                            tokenizer=tokenizer,
+                            device=device,
+                            dtype=dtype,
+                        )
+                        all_feature_results_this_eval_step.extend(feature_results)
+                        for res in feature_results:
+                            # Convert SentenceMetrics objects back to dicts for aggregation
+                            for metric in res.sentence_metrics:
+                                all_sentence_metrics.append(metric.model_dump())
+
+                    save_logs(
+                        eval_results_path="eval_logs.json",
+                        global_step=global_step,
+                        all_feature_results_this_eval_step=all_feature_results_this_eval_step,
+                    )
+
+                    if all_sentence_metrics:
+                        aggregated_metrics = {}
+                        metric_keys = all_sentence_metrics[0].keys()
+                        for key in metric_keys:
+                            avg_val = sum(m[key] for m in all_sentence_metrics) / len(
+                                all_sentence_metrics
+                            )
+                            aggregated_metrics[key] = avg_val
+
+                        wandb_log_dict = {
+                            f"eval/{k}": v for k, v in aggregated_metrics.items()
+                        }
+
+                        if use_wandb:
+                            wandb.log(wandb_log_dict, step=global_step)
+                        if verbose:
+                            print(
+                                f"Step {global_step} eval metrics: {aggregated_metrics}"
+                            )
+
+                model.train()
+
+            if global_step % cfg.save_steps == 0:
+                model.save_pretrained(f"{cfg.save_dir}/step_{global_step}")
+
+            global_step += 1
+
+    print("Training complete.")
+    wandb.finish()
+
+
+def main(explanations_file: str):
+    """Main script logic."""
+    cfg = SelfInterpTrainingConfig()
+
+    cfg.eval_set_size = 100
+    cfg.save_steps = 2000
+    cfg.steering_coefficient = 2.0
+    cfg.train_batch_size = 8
+    cfg.eval_batch_size = cfg.train_batch_size * 16
+    cfg.lr = 5e-6
+    verbose = True
+    cfg.use_decoder_vectors = True
+
+    print(asdict(cfg))
+    dtype = torch.bfloat16
+    device = torch.device("cuda")
+
+
+    explanations = load_explanations_from_jsonl(explanations_file)
+    training_examples = convert_explanations_to_training_examples(explanations)
+
+    print(f"Loaded {len(training_examples)} training examples from {explanations_file}")
+
+    model = load_model(cfg, device, dtype, use_lora=cfg.use_lora)
+    tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
+    sae = load_sae(cfg, device, dtype)
+    submodule = get_submodule(model, cfg.sae_layer, cfg.use_lora)
+
+    if not tokenizer.pad_token:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+
+    train_features = set()
+
+    for example in training_examples:
+        train_features.add(example.feature_idx)
+
+    # For evaluation, we'll use a subset of the training features
+    # In a real scenario, you might want to load a separate eval set
+    print(f"train examples: {len(training_examples)}")
+    print(f"Train features: {len(train_features)}")
+
+    # Use a subset of training features for evaluation
+    available_features = list(train_features)
+    cfg.eval_features = available_features[
+        : min(cfg.eval_set_size, len(available_features))
+    ]
+
+    print(f"Using {len(cfg.eval_features)} features for evaluation")
+
+    train_eval_prompt = build_training_prompt()
+
+    training_data = construct_train_dataset(
+        cfg,
+        len(training_examples),
+        # dataset_size,
+        train_eval_prompt,
+        training_examples,
+        sae,
+        tokenizer,
+    )
+
+    eval_data = construct_eval_dataset(
+        cfg,
+        len(cfg.eval_features),
+        train_eval_prompt,
+        cfg.eval_features,
+        {},  # Empty dict since we don't use api_data anymore
+        sae,
+        tokenizer,
+    )
+
+    print(f"training data: {len(training_data)}, eval data: {len(eval_data)}")
+
+    # training_data = training_data[:100]
+    # temp_eval_data = eval_data[:10]
+
+    temp_eval_data = eval_data[:250]
+
+    train_model(
+        cfg,
+        training_data,
+        temp_eval_data,
+        model,
+        tokenizer,
+        submodule,
+        sae,
+        device,
+        dtype,
+        verbose=True,
+        use_wandb=True,
+    )
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 1:
+        explanations_file = sys.argv[1]
+    else:
+        # Default filename - update this to your actual file
+        explanations_file = "sae_explanations.jsonl"
+
+    main(explanations_file)
