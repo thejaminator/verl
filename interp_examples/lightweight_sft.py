@@ -122,16 +122,18 @@ class TrainingExample(BaseModel):
 
     @classmethod
     def with_positive_and_negative_examples(cls, sae_explanation: SAEExplained) -> "TrainingExample":
-        prompt = f"""<positive_example>{sae_explanation.positive_examples[0]}</positive_example>
-<positive_example>{sae_explanation.positive_examples[1]}</positive_example>
-<positive_example>{sae_explanation.positive_examples[2]}</positive_example>
-<positive_example>{sae_explanation.positive_examples[3]}</positive_example>
-<positive_example>{sae_explanation.positive_examples[4]}</positive_example>
-<negative_example>{sae_explanation.negative_examples[0]}</negative_example>
-<negative_example>{sae_explanation.negative_examples[1]}</negative_example>
-<negative_example>{sae_explanation.negative_examples[2]}</negative_example>
-<negative_example>{sae_explanation.negative_examples[3]}</negative_example>
-<negative_example>{sae_explanation.negative_examples[4]}</negative_example>
+        positive_examples_text = "".join(
+            f"<positive_example>{example}</positive_example>\n"
+            for example in sae_explanation.positive_examples
+        )
+        
+        negative_examples_text = "".join(
+            f"<negative_example>{example}</negative_example>\n"
+            for example in sae_explanation.negative_examples
+        )
+        
+        prompt = f"""{positive_examples_text.rstrip()}
+{negative_examples_text.rstrip()}
 <explanation>{sae_explanation.explanation}</explanation>"""
 
         return TrainingExample(
