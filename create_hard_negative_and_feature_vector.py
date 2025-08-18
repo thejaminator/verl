@@ -24,6 +24,7 @@ import torch
 import torch.nn.functional as F
 from pydantic import BaseModel
 from slist import Slist
+from verl.workers.reward_manager import batch
 
 try:
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -749,4 +750,5 @@ if __name__ == "__main__":
     # Example usage - customize the feature_idxs and other parameters as needed
     # first 500 features
     target_features = list(range(500))
-    main(target_features=target_features, top_k_similar_features=34)
+    # actually we want 32, but sometimes it fails, so need some buffer.
+    main(target_features=target_features, top_k_similar_features=34,batch_size=10)
