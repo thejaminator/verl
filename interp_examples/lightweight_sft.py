@@ -456,7 +456,7 @@ class TopKSAE(BaseSAE):
 # ==============================================================================
 
 
-def build_training_prompt(positive_negative_examples: bool = True) -> str:
+def build_training_prompt(positive_negative_examples: bool) -> str:
     """Build the training prompt for SAE explanations."""
     if positive_negative_examples:
         question = """Can you explain to me the concept of what 'X' means? Give positive and negative examples of what the concept would activate on. Format your final answer with <explanation>."""
@@ -612,6 +612,12 @@ def construct_train_dataset(
         target_response = training_examples[i].explanation
 
         full_messages = input_messages + [{"role": "assistant", "content": target_response}]
+
+        if i == 0:
+            # Fully print the first example
+            print(f"First training example:")
+            print(full_messages)
+            print("-" * 100)
 
         full_prompt_ids = tokenizer.apply_chat_template(
             full_messages,
@@ -1347,13 +1353,12 @@ def main(explanations_file: str):
     print(f"Train features: {len(train_features)}")
 
     # Use a subset of training features for evaluation
-    available_features = list(train_features)
     # 0 to 50, then 500 to 550
     cfg.eval_features = [i for i in range(50)] + [i for i in range(500, 550)]
 
     print(f"Using {len(cfg.eval_features)} features for evaluation")
 
-    train_eval_prompt = build_training_prompt()
+    train_eval_prompt = build_training_prompt(cfg.positive_negative_examples)
 
     training_data: list[TrainingDataPoint] = construct_train_dataset(
         cfg,
@@ -1364,12 +1369,6 @@ def main(explanations_file: str):
         sae,
         tokenizer,
     )
-    # print the first 2 sentences
-    for j, example in enumerate(training_data):
-        print(f"Example {j}: {example.input_ids}")
-        # decode the first 2 sentences
-        print(f"Decoded: {tokenizer.decode(example.input_ids[:2], skip_special_tokens=True)}")
-        print("-" * 100)
 
     eval_data = construct_eval_dataset(
         cfg,
