@@ -1340,7 +1340,7 @@ def main(explanations_file: str):
         
         # Training settings
         num_epochs=2,
-        lr=5e-6,
+        lr=5e-5,
         eval_steps=1000,
         save_steps=2000,
         save_dir="checkpoints",
