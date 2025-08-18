@@ -749,4 +749,4 @@ if __name__ == "__main__":
     # Example usage - customize the feature_idxs and other parameters as needed
     # first 500 features
     target_features = list(range(500))
-    main(target_features=target_features)
+    main(target_features=target_features, top_k_similar_features=30)
