@@ -864,6 +864,9 @@ def eval_features_batch(
     decoded_prompts = tokenizer.batch_decode(prompt_tokens, skip_special_tokens=False)
 
     for i, output in enumerate(decoded_output):
+        # What feature number is this?
+        feature_idx = eval_batch.feature_indices[i][0]
+        print(f"Feature index: {feature_idx}")
         parsed_result = parse_generated_explanation(output)
         print(f"Generated output: {output}")
         if parsed_result:
@@ -1327,7 +1330,7 @@ def main(explanations_file: str):
         generation_kwargs={
             "do_sample": False,
             "temperature": 0.0,
-            "max_new_tokens": 200,
+            "max_new_tokens": 1_000,
         },
         steering_coefficient=2.0,
         
