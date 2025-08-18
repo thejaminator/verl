@@ -2,29 +2,29 @@ import os
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-import torch
 import contextlib
-from typing import Callable, List, Optional, Any
-from transformers.models.auto.modeling_auto import AutoModelForCausalLM
-from transformers.models.auto.tokenization_auto import AutoTokenizer
-from transformers.tokenization_utils import PreTrainedTokenizer
-from transformers.optimization import get_linear_schedule_with_warmup
-from dataclasses import dataclass, field, asdict
-from pydantic import BaseModel
-from tqdm import tqdm
-import wandb
-from torch.nn.utils import clip_grad_norm_
-from peft import LoraConfig, get_peft_model
-import json
 import gc
+import json
 
 # All necessary imports are now included above
 from abc import ABC, abstractmethod
-import numpy as np
-import torch.nn as nn
-from huggingface_hub import hf_hub_download
-import safetensors.torch
+from dataclasses import asdict, dataclass, field
+from typing import Any, Callable, Optional
 
+import numpy as np
+import safetensors.torch
+import torch
+import torch.nn as nn
+import wandb
+from huggingface_hub import hf_hub_download
+from peft import LoraConfig, get_peft_model
+from pydantic import BaseModel
+from torch.nn.utils import clip_grad_norm_
+from tqdm import tqdm
+from transformers.models.auto.modeling_auto import AutoModelForCausalLM
+from transformers.models.auto.tokenization_auto import AutoTokenizer
+from transformers.optimization import get_linear_schedule_with_warmup
+from transformers.tokenization_utils import PreTrainedTokenizer
 
 # ==============================================================================
 # 2. CONFIGURATION
@@ -85,16 +85,15 @@ class SelfInterpTrainingConfig:
     eval_steps: int
     save_steps: int
     save_dir: str
-    
+
     # --- Fields with defaults (must come after fields without defaults) ---
     sae_filename: str = field(init=False)
     eval_features: list[int] = field(default_factory=list)
+    positive_negative_examples: bool = False
 
     def __post_init__(self):
         """Called after the dataclass is initialized."""
-        self.sae_width, self.sae_layer, self.sae_layer_percent, self.sae_filename = (
-            get_sae_info(self.sae_repo_id)
-        )
+        self.sae_width, self.sae_layer, self.sae_layer_percent, self.sae_filename = get_sae_info(self.sae_repo_id)
 
 
 # ==============================================================================
@@ -103,10 +102,10 @@ class SelfInterpTrainingConfig:
 
 
 class SAEExplained(BaseModel):
-    """SAE explanation from JSONL file."""
-
     sae_id: int
     explanation: str
+    positive_examples: list[str]
+    negative_examples: list[str]
 
 
 class ExplanationResult(BaseModel):
@@ -120,6 +119,33 @@ class TrainingExample(BaseModel):
 
     explanation: str
     feature_idx: int
+
+    @classmethod
+    def with_positive_and_negative_examples(cls, sae_explanation: SAEExplained) -> "TrainingExample":
+        prompt = f"""<positive_example>{sae_explanation.positive_examples[0]}</positive_example>
+<positive_example>{sae_explanation.positive_examples[1]}</positive_example>
+<positive_example>{sae_explanation.positive_examples[2]}</positive_example>
+<positive_example>{sae_explanation.positive_examples[3]}</positive_example>
+<positive_example>{sae_explanation.positive_examples[4]}</positive_example>
+<negative_example>{sae_explanation.negative_examples[0]}</negative_example>
+<negative_example>{sae_explanation.negative_examples[1]}</negative_example>
+<negative_example>{sae_explanation.negative_examples[2]}</negative_example>
+<negative_example>{sae_explanation.negative_examples[3]}</negative_example>
+<negative_example>{sae_explanation.negative_examples[4]}</negative_example>
+<explanation>{sae_explanation.explanation}</explanation>"""
+
+        return TrainingExample(
+            explanation=prompt,
+            feature_idx=sae_explanation.sae_id,
+        )
+
+    @classmethod
+    def with_explanation_only(cls, sae_explanation: SAEExplained) -> "TrainingExample":
+        prompt = f"<explanation>{sae_explanation.explanation}</explanation>"
+        return TrainingExample(
+            explanation=prompt,
+            feature_idx=sae_explanation.sae_id,
+        )
 
 
 class SentenceData(BaseModel):
@@ -150,17 +176,17 @@ class EvalStepResult(BaseModel):
     """Results from a single evaluation step."""
 
     step: int
-    results: List[FeatureResult]
+    results: list[FeatureResult]
 
 
 @dataclass
 class TrainingDataPoint:
     """Training data point with tensors."""
 
-    input_ids: List[int]
-    labels: List[int]  # Can contain -100 for ignored tokens
-    steering_vectors: List[torch.Tensor]
-    positions: List[int]
+    input_ids: list[int]
+    labels: list[int]  # Can contain -100 for ignored tokens
+    steering_vectors: list[torch.Tensor]
+    positions: list[int]
     feature_idx: int
 
 
@@ -171,9 +197,9 @@ class BatchData:
     input_ids: torch.Tensor
     labels: torch.Tensor
     attention_mask: torch.Tensor
-    steering_vectors: List[List[torch.Tensor]]
-    positions: List[List[int]]
-    feature_indices: List[int]
+    steering_vectors: list[list[torch.Tensor]]
+    positions: list[list[int]]
+    feature_indices: list[int]
 
 
 # ==============================================================================
@@ -323,9 +349,7 @@ class BaseSAE(nn.Module, ABC):
         norms = torch.norm(self.W_dec, dim=1).to(dtype=self.dtype, device=self.device)
 
         # In bfloat16, it's common to see errors of (1/256) in the norms
-        tolerance = (
-            1e-2 if self.W_dec.dtype in [torch.bfloat16, torch.float16] else 1e-5
-        )
+        tolerance = 1e-2 if self.W_dec.dtype in [torch.bfloat16, torch.float16] else 1e-5
 
         if torch.allclose(norms, torch.ones_like(norms), atol=tolerance):
             return True
@@ -393,9 +417,7 @@ class TopKSAE(BaseSAE):
         self.use_threshold = use_threshold
         if use_threshold:
             # Optional global threshold to use during inference. Must be positive.
-            self.register_buffer(
-                "threshold", torch.tensor(-1.0, dtype=dtype, device=device)
-            )
+            self.register_buffer("threshold", torch.tensor(-1.0, dtype=dtype, device=device))
 
     def encode(self, x: torch.Tensor):
         """Note: x can be either shape (B, F) or (B, L, F)"""
@@ -410,19 +432,9 @@ class TopKSAE(BaseSAE):
             batch_indices = torch.arange(acts.shape[0], device=acts.device).unsqueeze(1)
             acts[batch_indices, top_indices] = torch.nn.functional.relu(top_acts)
         else:  # (B, L, F)
-            batch_indices = (
-                torch.arange(acts.shape[0], device=acts.device)
-                .unsqueeze(1)
-                .unsqueeze(2)
-            )
-            seq_indices = (
-                torch.arange(acts.shape[1], device=acts.device)
-                .unsqueeze(0)
-                .unsqueeze(2)
-            )
-            acts[batch_indices, seq_indices, top_indices] = torch.nn.functional.relu(
-                top_acts
-            )
+            batch_indices = torch.arange(acts.shape[0], device=acts.device).unsqueeze(1).unsqueeze(2)
+            seq_indices = torch.arange(acts.shape[1], device=acts.device).unsqueeze(0).unsqueeze(2)
+            acts[batch_indices, seq_indices, top_indices] = torch.nn.functional.relu(top_acts)
 
         if self.use_threshold and hasattr(self, "threshold"):
             acts = acts * (acts > self.threshold)
@@ -482,31 +494,16 @@ def parse_generated_explanation(text: str) -> Optional[ExplanationResult]:
     )
 
 
-def load_explanations_from_jsonl(filepath: str) -> List[SAEExplained]:
+def load_explanations_from_jsonl(filepath: str) -> list[SAEExplained]:
     """Load SAE explanations from a JSONL file."""
     explanations = []
-    with open(filepath, "r") as f:
+    with open(filepath) as f:
         for line in f:
             line = line.strip()
             if line:
                 data = json.loads(line)
                 explanations.append(SAEExplained(**data))
     return explanations
-
-
-def convert_explanations_to_training_examples(
-    explanations: List[SAEExplained],
-) -> List[TrainingExample]:
-    """Convert SAEExplained models to TrainingExample models."""
-    training_examples = []
-    for exp in explanations:
-        training_examples.append(
-            TrainingExample(
-                explanation=exp.explanation,
-                feature_idx=exp.sae_id,
-            )
-        )
-    return training_examples
 
 
 # ==============================================================================
@@ -569,11 +566,7 @@ def get_activation_steering_hook(
         norms_BK1 = orig_BKD.norm(dim=-1, keepdim=True).detach()  # (B, K, 1)
 
         # ---- build steered vectors ----
-        steered_BKD = (
-            torch.nn.functional.normalize(vec_BKD, dim=-1)
-            * norms_BK1
-            * steering_coefficient
-        )  # (B, K, d)
+        steered_BKD = torch.nn.functional.normalize(vec_BKD, dim=-1) * norms_BK1 * steering_coefficient  # (B, K, d)
 
         # ---- in-place replacement via advanced indexing ----
         resid_BLD[batch_idx_B1, pos_BK] = steered_BKD
@@ -591,10 +584,10 @@ def construct_train_dataset(
     cfg: SelfInterpTrainingConfig,
     dataset_size: int,
     input_prompt: str,
-    training_examples: List[TrainingExample],
+    training_examples: list[TrainingExample],
     sae: BaseSAE,
     tokenizer: PreTrainedTokenizer,
-) -> List[TrainingDataPoint]:
+) -> list[TrainingDataPoint]:
     input_messages = [{"role": "user", "content": input_prompt}]
 
     input_prompt_ids = tokenizer.apply_chat_template(
@@ -612,13 +605,9 @@ def construct_train_dataset(
     training_data = []
 
     for i in tqdm(range(dataset_size), desc="Constructing training dataset"):
-        target_response = (
-            f"<explanation>{training_examples[i].explanation}</explanation>"
-        )
+        target_response = training_examples[i].explanation
 
-        full_messages = input_messages + [
-            {"role": "assistant", "content": target_response}
-        ]
+        full_messages = input_messages + [{"role": "assistant", "content": target_response}]
 
         full_prompt_ids = tokenizer.apply_chat_template(
             full_messages,
@@ -669,11 +658,11 @@ def construct_eval_dataset(
     cfg: SelfInterpTrainingConfig,
     dataset_size: int,
     input_prompt: str,
-    eval_feature_indices: List[int],
+    eval_feature_indices: list[int],
     api_data: dict,
     sae: BaseSAE,
     tokenizer: PreTrainedTokenizer,
-) -> List[TrainingDataPoint]:
+) -> list[TrainingDataPoint]:
     """Every prompt is exactly the same - the only difference is the steering vectors."""
 
     input_messages = [{"role": "user", "content": input_prompt}]
@@ -718,9 +707,7 @@ def construct_eval_dataset(
         if first_position is None:
             first_position = positions[0]
         else:
-            assert positions[0] == first_position, (
-                "Expected all positions to be the same"
-            )
+            assert positions[0] == first_position, "Expected all positions to be the same"
 
         eval_data_point = TrainingDataPoint(
             input_ids=input_prompt_ids,
@@ -736,7 +723,7 @@ def construct_eval_dataset(
 
 
 def construct_batch(
-    training_data: List[TrainingDataPoint],
+    training_data: list[TrainingDataPoint],
     tokenizer: PreTrainedTokenizer,
     device: torch.device,
 ) -> BatchData:
@@ -829,7 +816,7 @@ def eval_features_batch(
     tokenizer: PreTrainedTokenizer,
     device: torch.device,
     dtype: torch.dtype,
-) -> List[FeatureResult]:
+) -> list[FeatureResult]:
     batch_steering_vectors = eval_batch.steering_vectors
     batch_positions = eval_batch.positions
 
@@ -875,8 +862,6 @@ def eval_features_batch(
     for i, output in enumerate(decoded_output):
         feature_idx = eval_batch.feature_indices[i]
 
-
-
         feature_result = FeatureResult(
             feature_idx=feature_idx,
             api_response=output,
@@ -892,11 +877,11 @@ def eval_features_batch(
 def save_logs(
     eval_results_path: str,
     global_step: int,
-    all_feature_results_this_eval_step: List[FeatureResult],
+    all_feature_results_this_eval_step: list[FeatureResult],
 ):
     # Load existing data, append new results, and save
     try:
-        with open(eval_results_path, "r") as f:
+        with open(eval_results_path) as f:
             all_run_results = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         all_run_results = []
@@ -953,9 +938,7 @@ def load_gemma_scope_jumprelu_sae(
 
     normalized = sae.check_decoder_norms()
     if not normalized:
-        raise ValueError(
-            "Decoder norms are not normalized. Implement a normalization method."
-        )
+        raise ValueError("Decoder norms are not normalized. Implement a normalization method.")
 
     return sae
 
@@ -969,9 +952,7 @@ def load_llama_scope_topk_sae(
 ) -> TopKSAE:
     repo_id = f"fnlp/Llama3_1-8B-Base-LXR-{expansion_factor}x"
     config_filename = f"Llama3_1-8B-Base-L{layer}R-{expansion_factor}x/hyperparams.json"
-    filename = (
-        f"Llama3_1-8B-Base-L{layer}R-{expansion_factor}x/checkpoints/final.safetensors"
-    )
+    filename = f"Llama3_1-8B-Base-L{layer}R-{expansion_factor}x/checkpoints/final.safetensors"
 
     path_to_params = hf_hub_download(
         repo_id=repo_id,
@@ -1044,7 +1025,7 @@ def load_model(
 ) -> AutoModelForCausalLM:
     print(f"Loading model: {cfg.model_name}...")
     model = AutoModelForCausalLM.from_pretrained(
-        cfg.model_name, device_map="auto", torch_dtype=dtype, attn_implementation='eager'
+        cfg.model_name, device_map="auto", torch_dtype=dtype, attn_implementation="eager"
     )
 
     if use_lora:
@@ -1094,9 +1075,7 @@ def load_sae(
     return sae
 
 
-def get_bos_eos_pad_mask(
-    tokenizer: PreTrainedTokenizer, token_ids: torch.Tensor
-) -> torch.Tensor:
+def get_bos_eos_pad_mask(tokenizer: PreTrainedTokenizer, token_ids: torch.Tensor) -> torch.Tensor:
     """Create mask for BOS, EOS, and PAD tokens"""
     mask = torch.zeros_like(token_ids, dtype=torch.bool)
 
@@ -1146,10 +1125,9 @@ def has_active_lora(model: AutoModelForCausalLM) -> bool:
     )
 
 
-
 def run_evaluation(
     cfg: SelfInterpTrainingConfig,
-    eval_data: List[TrainingDataPoint],
+    eval_data: list[TrainingDataPoint],
     model: AutoModelForCausalLM,
     tokenizer: PreTrainedTokenizer,
     submodule: torch.nn.Module,
@@ -1190,8 +1168,8 @@ def run_evaluation(
 
 def train_model(
     cfg: SelfInterpTrainingConfig,
-    training_data: List[TrainingDataPoint],
-    eval_data: List[TrainingDataPoint],
+    training_data: list[TrainingDataPoint],
+    eval_data: list[TrainingDataPoint],
     model: AutoModelForCausalLM,
     tokenizer: PreTrainedTokenizer,
     submodule: torch.nn.Module,
@@ -1276,7 +1254,7 @@ def train_model(
             global_step += 1
 
     print("Training complete.")
-    
+
     # Final evaluation
     print("Running final evaluation...")
     run_evaluation(
@@ -1290,11 +1268,11 @@ def train_model(
         dtype=dtype,
         global_step=global_step,
     )
-    
+
     # Save final model
     print("Saving final model...")
     model.save_pretrained(f"{cfg.save_dir}/final")
-    
+
     wandb.finish()
 
 
@@ -1305,12 +1283,10 @@ def main(explanations_file: str):
         model_name="google/gemma-2-9b-it",
         train_batch_size=4,
         eval_batch_size=128,  # 8 * 16
-        
         # SAE settings
         sae_repo_id="google/gemma-scope-9b-it-res",
         sae_layer=9,
         sae_width=16,
-        
         # Experiment settings
         eval_set_size=100,
         use_decoder_vectors=True,
@@ -1320,30 +1296,32 @@ def main(explanations_file: str):
             "max_new_tokens": 400,
         },
         steering_coefficient=2.0,
-        
         # LoRA settings
         use_lora=True,
         lora_r=16,
         lora_alpha=32,
         lora_dropout=0.05,
         lora_target_modules="all-linear",
-        
         # Training settings
         num_epochs=2,
         lr=5e-5,
         eval_steps=1000,
         save_steps=2000,
         save_dir="checkpoints",
+        positive_negative_examples=True,
     )
-    verbose = True
 
     print(asdict(cfg))
     dtype = torch.bfloat16
     device = torch.device("cuda")
 
-
     explanations = load_explanations_from_jsonl(explanations_file)
-    training_examples = convert_explanations_to_training_examples(explanations)
+    training_examples = [
+        TrainingExample.with_positive_and_negative_examples(exp)
+        if cfg.positive_negative_examples
+        else TrainingExample.with_explanation_only(exp)
+        for exp in explanations
+    ]
 
     print(f"Loaded {len(training_examples)} training examples from {explanations_file}")
 
