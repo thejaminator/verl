@@ -179,7 +179,7 @@ print(f"Feature vector shape: {feature_vector.shape}")
 print(f"Feature vector norm: {feature_vector.norm().item():.4f}")
 
 # Create feature vectors for both prompts (same vector for demo)
-features = [feature_vector, feature_vector]
+features = [feature_vector] * len(formatted_prompts)
 
 print(f"Number of prompts: {len(formatted_prompts)}")
 print(f"Number of feature vectors: {len(features)}")
