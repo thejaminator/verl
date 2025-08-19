@@ -778,6 +778,6 @@ def main(
 if __name__ == "__main__":
     # Example usage - customize the feature_idxs and other parameters as needed
     # first 500 features
-    target_features = list(range(2_000))
+    target_features = list(range(11_000))
     # actually we want 32, but sometimes it fails, so need some buffer.
     main(target_features=target_features, top_k_similar_features=34, batch_size=1024, target_sentences=32)
