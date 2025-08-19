@@ -1,3 +1,23 @@
+"""
+Lightweight SAE Introspection Training Script
+
+This script trains a model to understand SAE (Sparse Autoencoder) features through introspection.
+
+Features:
+- Automatic Hugging Face login at script start
+- LoRA fine-tuning support
+- Automatic pushing of trained LoRA adapters to Hugging Face Hub after training
+- Configurable repository settings (public/private)
+
+Usage:
+    python lightweight_sft.py [explanations_file.jsonl]
+
+Before running:
+1. Make sure you're logged into Hugging Face: `huggingface-cli login`
+2. Update the hf_repo_id in the main() function to your desired repository name
+3. Ensure you have the required explanations JSONL file
+"""
+
 import os
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -16,7 +36,7 @@ import safetensors.torch
 import torch
 import torch.nn as nn
 import wandb
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, login, whoami, HfApi
 from peft import LoraConfig, get_peft_model
 from pydantic import BaseModel
 from torch.nn.utils import clip_grad_norm_
@@ -25,6 +45,55 @@ from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.tokenization_utils import PreTrainedTokenizer
+
+# ==============================================================================
+# 1. HUGGING FACE SETUP
+# ==============================================================================
+
+
+
+def push_lora_to_hf(
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
+    repo_id: str,
+    private: bool,
+    commit_message: str = "Upload LoRA adapter after training",
+) -> None:
+    """
+    Push the trained LoRA adapter to Hugging Face Hub.
+    
+    Args:
+        model: The trained model with LoRA adapters
+        tokenizer: The tokenizer used with the model
+        repo_id: HuggingFace repository ID (e.g., "username/repo-name")
+        commit_message: Commit message for the upload
+        private: Whether to make the repository private
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+
+            
+    print(f"Pushing LoRA adapter to Hugging Face Hub: {repo_id}")
+    
+    # Push the model (LoRA adapters)
+    model.push_to_hub(
+        repo_id=repo_id,
+        commit_message=commit_message,
+        private=private,
+    )
+    
+    # Push the tokenizer as well
+    tokenizer.push_to_hub(
+        repo_id=repo_id,
+        commit_message=f"Upload tokenizer - {commit_message}",
+        private=private,
+    )
+    
+    print(f"Successfully pushed LoRA adapter to: https://huggingface.co/{repo_id}")
+
+        
+    
 
 # ==============================================================================
 # 2. CONFIGURATION
@@ -85,6 +154,11 @@ class SelfInterpTrainingConfig:
     eval_steps: int
     save_steps: int
     save_dir: str
+
+    # --- Hugging Face Settings ---
+    hf_push_to_hub: bool
+    hf_private_repo: bool
+    hf_repo_id: str = "thejaminator/sae-introspection-lora"
 
     # --- Fields with defaults (must come after fields without defaults) ---
     sae_filename: str = field(init=False)
@@ -1232,10 +1306,9 @@ def train_model(
             range(0, len(training_data), cfg.train_batch_size),
             desc=f"Training epoch {epoch + 1}",
         ):
-            t_batch: list[TrainingDataPoint] = training_data[i : i + cfg.train_batch_size]
-          
+            t_batch_list: list[TrainingDataPoint] = training_data[i : i + cfg.train_batch_size]
 
-            t_batch = construct_batch(t_batch, tokenizer, device)
+            t_batch = construct_batch(t_batch_list, tokenizer, device)
 
             if i % 100 == 0:
                 torch.cuda.empty_cache()
@@ -1298,11 +1371,28 @@ def train_model(
     print("Saving final model...")
     model.save_pretrained(f"{cfg.save_dir}/final")
 
+    # Push to Hugging Face if configured
+    if cfg.hf_push_to_hub and cfg.hf_repo_id:
+        print("Pushing LoRA adapter to Hugging Face Hub...")
+        push_lora_to_hf(
+            model=model,
+            tokenizer=tokenizer,
+            repo_id=cfg.hf_repo_id,
+            commit_message=f"SAE introspection LoRA - {run_name} - final model",
+            private=cfg.hf_private_repo,
+        )
+        
+
     wandb.finish()
 
 
 def main(explanations_file: str):
     """Main script logic."""
+    
+    # Set up Hugging Face login at the start
+    print("Setting up Hugging Face authentication...")
+    hf_logged_in = login()
+    
     cfg = SelfInterpTrainingConfig(
         # Model settings
         model_name="google/gemma-2-9b-it",
@@ -1333,6 +1423,10 @@ def main(explanations_file: str):
         eval_steps=1000,
         save_steps=2000,
         save_dir="checkpoints",
+        # Hugging Face settings - set these based on your needs
+        hf_push_to_hub=hf_logged_in,  # Only enable if login successful
+        hf_repo_id="thejaminator/sae-introspection-lora",  # Update this to your desired repo
+        hf_private_repo=True,  # Set to False if you want public repo
         positive_negative_examples=False,
     )
 
