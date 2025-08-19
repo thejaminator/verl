@@ -267,8 +267,8 @@ class BatchData:
     input_ids: torch.Tensor
     labels: torch.Tensor
     attention_mask: torch.Tensor
-    steering_vectors: list[list[torch.Tensor]]
-    positions: list[list[int]]
+    steering_vectors: list[torch.Tensor]
+    positions: list[int]
     feature_indices: list[int]
 
 
@@ -595,8 +595,8 @@ def add_hook(module: torch.nn.Module, hook: Callable):
 
 
 def get_activation_steering_hook(
-    vectors: list[list[torch.Tensor]],  # [B][K, d_model]  or [K, d_model] if B==1
-    positions: list[list[int]],  # [B][K]
+    vectors: list[torch.Tensor],  # [B, d_model]
+    positions: list[int],  # [B]
     steering_coefficient: float,
     device: torch.device,
     dtype: torch.dtype,
@@ -605,20 +605,19 @@ def get_activation_steering_hook(
     Returns a forward hook that *replaces* specified residual-stream activations
     during the initial prompt pass of `model.generate`.
 
-    • vectors[b][k]  – feature vector to inject for batch b, slot k
-    • coeffs[b][k]   – scale factor (usually small, e.g. 0.3)
-    • positions[b][k]– token index (0-based, within prompt only)
+    • vectors[b]  – feature vector to inject for batch b
+    • positions[b]– token index (0-based, within prompt only) for batch b
     """
 
     # ---- pack Python lists → torch tensors once, outside the hook ----
-    vec_BKD = torch.stack([torch.stack(v) for v in vectors])  # (B, K, d)
-    pos_BK = torch.tensor(positions, dtype=torch.long)  # (B, K)
+    vec_BD = torch.stack(vectors)  # (B, d)
+    pos_B = torch.tensor(positions, dtype=torch.long)  # (B,)
 
-    B, K, d_model = vec_BKD.shape
-    assert pos_BK.shape == (B, K)
+    B, d_model = vec_BD.shape
+    assert pos_B.shape == (B,)
 
-    vec_BKD = vec_BKD.to(device, dtype)
-    pos_BK = pos_BK.to(device)
+    vec_BD = vec_BD.to(device, dtype)
+    pos_B = pos_B.to(device)
 
     def hook_fn(module, _input, output):
         resid_BLD, *rest = output  # Gemma returns (resid, hidden_states, ...)
@@ -629,20 +628,20 @@ def get_activation_steering_hook(
             return (resid_BLD, *rest)
 
         # Safety: make sure every position is inside current sequence
-        if (pos_BK >= L).any():
-            bad = pos_BK[pos_BK >= L].min().item()
+        if (pos_B >= L).any():
+            bad = pos_B[pos_B >= L].min().item()
             raise IndexError(f"position {bad} is out of bounds for length {L}")
 
         # ---- compute norms of original activations at the target slots ----
-        batch_idx_B1 = torch.arange(B, device=device).unsqueeze(1)  # (B, 1) → (B, K)
-        orig_BKD = resid_BLD[batch_idx_B1, pos_BK]  # (B, K, d)
-        norms_BK1 = orig_BKD.norm(dim=-1, keepdim=True).detach()  # (B, K, 1)
+        batch_idx_B = torch.arange(B, device=device)  # (B,)
+        orig_BD = resid_BLD[batch_idx_B, pos_B]  # (B, d)
+        norms_B1 = orig_BD.norm(dim=-1, keepdim=True).detach()  # (B, 1)
 
         # ---- build steered vectors ----
-        steered_BKD = torch.nn.functional.normalize(vec_BKD, dim=-1) * norms_BK1 * steering_coefficient  # (B, K, d)
+        steered_BD = torch.nn.functional.normalize(vec_BD, dim=-1) * norms_B1 * steering_coefficient  # (B, d)
 
         # ---- in-place replacement via advanced indexing ----
-        resid_BLD[batch_idx_B1, pos_BK] = steered_BKD
+        resid_BLD[batch_idx_B, pos_B] = steered_BD
 
         return (resid_BLD, *rest)
 
@@ -833,11 +832,15 @@ def construct_batch(
         batch_labels.append(labels)
         batch_attn_masks.append(attn_mask)
 
-        positions = data_point.positions
-        positions = [p + padding_length for p in positions]
+        # Extract single position and single steering vector (simplified structure)
+        assert len(data_point.positions) == 1, f"Expected exactly one position, got {len(data_point.positions)}"
+        assert len(data_point.steering_vectors) == 1, f"Expected exactly one steering vector, got {len(data_point.steering_vectors)}"
+        
+        single_position = data_point.positions[0] + padding_length
+        single_steering_vector = data_point.steering_vectors[0]
 
-        batch_positions.append(positions)
-        batch_steering_vectors.append(data_point.steering_vectors)
+        batch_positions.append(single_position)
+        batch_steering_vectors.append(single_steering_vector)
         batch_feature_indices.append(data_point.feature_idx)
 
     return BatchData(
