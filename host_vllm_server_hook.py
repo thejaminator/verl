@@ -19,6 +19,7 @@ from huggingface_hub import hf_hub_download
 from pydantic import BaseModel
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
+from vllm.lora.request import LoRARequest
 
 # Environment setup
 os.environ["VLLM_USE_V1"] = "0"
@@ -107,9 +108,14 @@ class VLLMServer:
         # Load LoRA adapters
         if load_loras:
             print(f"Loading LoRA adapters: {load_loras}")
-            for lora_id in load_loras:
+            for i, lora_id in enumerate(load_loras, 1):
                 print(f"Loading LoRA adapter: {lora_id}")
-                self.llm.llm_engine.add_lora(lora_id)
+                lora_request = LoRARequest(
+                    lora_name=f"lora_{i}",
+                    lora_int_id=i,
+                    lora_path=lora_id
+                )
+                self.llm.llm_engine.add_lora(lora_request)
         
         print("Loading SAE...")
         self.sae = load_gemma_scope_sae(
