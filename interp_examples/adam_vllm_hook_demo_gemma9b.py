@@ -577,3 +577,5 @@ for i in range(len(formatted_prompts)):
     print(f"HF Transformers (LoRA+Steering): {hf_texts[i]}")
     print(f"vLLM (LoRA+Steering):           {vllm_texts[i]}")
     print(f"Outputs match: {'YES' if hf_texts[i].strip() == vllm_texts[i].strip() else 'NO'}")
+
+# %%
