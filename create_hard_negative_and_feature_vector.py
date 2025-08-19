@@ -676,12 +676,12 @@ def main(
         target_max_acts: FeatureMaxActivations = get_feature_max_activating_sentences(
             acts_data, tokenizer, feature_idx, target_sentences
         )
-        target_sentences = target_max_acts.sentences
+        target_sentence_list = target_max_acts.sentences
 
         # Compute actual SAE activations for target feature sentences
         print("🧮 Computing SAE activations for target feature sentences...")
         target_sentence_infos = compute_sae_activations_for_sentences(
-            model, tokenizer, sae, submodule, target_sentences, feature_idx, batch_size
+            model, tokenizer, sae, submodule, target_sentence_list, feature_idx, batch_size
         )
 
         # Analyze similar features and collect hard negatives - OPTIMIZED WITH BATCHING
