@@ -849,7 +849,10 @@ def eval_features_batch(
 
     feature_results = []
 
-    # Sample 2 times for each SAE
+    # Generate both samples first, then display them grouped by feature
+    all_samples = []
+    all_explanations = []
+    
     for sample_idx in range(2):
         with add_hook(submodule, hook_fn):
             output_ids = model.generate(**tokenized_input, **cfg.generation_kwargs)
@@ -857,23 +860,29 @@ def eval_features_batch(
         # Decode only the newly generated tokens
         generated_tokens = output_ids[:, eval_batch.input_ids.shape[1] :]
         decoded_output = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
-
+        
         explanations = []
-
-        for i, output in enumerate(decoded_output):
-            # What feature number is this?
-            feature_idx = eval_batch.feature_indices[i]
-            print(f"Sample {sample_idx + 1} - Feature index: {feature_idx}")
-            print(f"Sample {sample_idx + 1} - Generated output: {output}")
+        for output in decoded_output:
             explanations.append(parse_generated_explanation(output))
+        
+        all_samples.append(decoded_output)
+        all_explanations.append(explanations)
 
-        for i, output in enumerate(decoded_output):
-            feature_idx = eval_batch.feature_indices[i]
+    # Now display and process both samples for each feature consecutively
+    for i in range(len(eval_batch.feature_indices)):
+        feature_idx = eval_batch.feature_indices[i]
+        
+        print(f"\n=== Feature {feature_idx} ===")
+        
+        # Show both samples for this feature
+        for sample_idx in range(2):
+            output = all_samples[sample_idx][i]
+            print(f"Sample {sample_idx + 1}: {output}")
             
             # Extract explanation string, handling None case
             explanation_str = ""
-            if explanations[i] is not None:
-                explanation_str = explanations[i].explanation
+            if all_explanations[sample_idx][i] is not None:
+                explanation_str = all_explanations[sample_idx][i].explanation
             
             feature_result = FeatureResult(
                 feature_idx=feature_idx,
@@ -881,8 +890,9 @@ def eval_features_batch(
                 prompt=decoded_prompts[i],
                 explanation=explanation_str,
             )
-
             feature_results.append(feature_result)
+        
+        print()  # Empty line for readability
 
     return feature_results
 
