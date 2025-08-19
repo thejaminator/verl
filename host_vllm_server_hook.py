@@ -41,6 +41,7 @@ SAE_REPO_ID = "google/gemma-scope-9b-it-res"
 load_loras = ["thejaminator/sae-introspection-lora"]
 SAE_WIDTH = 16  # Can be 16 or 131
 SAE_FILENAME = f"layer_{LAYER}/width_16k/average_l0_88/params.npz"
+STEERING_COEFFICIENT = 2.0
 
 
 class Message(BaseModel):
@@ -54,7 +55,6 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: Optional[int] = 100
     temperature: Optional[float] = 0.0
     sae_index: Optional[int] = None  # Custom parameter for SAE feature index
-    steering_coefficient: float = 2.0
 
 
 class Choice(BaseModel):
@@ -227,7 +227,6 @@ class VLLMServer:
             request_ids = []
             steering_vectors = []
             steering_positions = []
-            steering_coefficients = []
             
             # Determine LoRA request (all requests in batch should use same model)
             lora_request = None
@@ -271,13 +270,11 @@ class VLLMServer:
                     feature_vector = get_sae_feature_vector(request.sae_index, self.sae)
                     steering_vectors.append(feature_vector)
                     steering_positions.append(x_positions[0])
-                    steering_coefficients.append(request.steering_coefficient)
                 else:
                     # Use zero vector for non-steering requests
                     zero_vector = torch.zeros(self.sae.d_in, dtype=DTYPE, device=DEVICE)
                     steering_vectors.append(zero_vector)
                     steering_positions.append(0)  # Position 0 as fallback
-                    steering_coefficients.append(0.0)  # No steering
             
             # Set up sampling parameters (use first request's params for all)
             first_request = batch_requests[0].request
@@ -291,14 +288,10 @@ class VLLMServer:
             hook_fn = get_activation_steering_hook(
                 vectors=steering_vectors,
                 positions=steering_positions,
-                steering_coefficient=1.0,  # Will be multiplied by individual coefficients in vectors
+                steering_coefficient=STEERING_COEFFICIENT,
                 device=DEVICE,
                 dtype=DTYPE,
             )
-            
-            # Scale vectors by their individual coefficients
-            for i, coeff in enumerate(steering_coefficients):
-                steering_vectors[i] = steering_vectors[i] * coeff
             
             # Generate batch with steering
             target_layer = self.model.model.layers[LAYER]
