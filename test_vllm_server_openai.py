@@ -75,9 +75,10 @@ async def main():
             test_chat_completion(client),
             # Tests with different SAE indices
             test_chat_completion(client, sae_index=0),
-            # 10027
+            # 10027: good feature?
             test_chat_completion(client, sae_index=10027),
-            test_chat_completion(client, sae_index=42),
+            # 10026 film feature
+            test_chat_completion(client, sae_index=10026),
             test_chat_completion(client, sae_index=123),
             test_chat_completion(client, sae_index=999),
         ]

@@ -13,7 +13,6 @@ from collections import defaultdict, deque
 from typing import Any, Callable, Optional
 
 import numpy as np
-from distutils.command.build_scripts import first_line_re
 import torch
 import torch.nn as nn
 import uvicorn
@@ -95,7 +94,7 @@ class VLLMServer:
         self.tokenizer: Optional[Any] = None
         self.sae: Optional[JumpReluSAE] = None
         self.initialized = False
-        
+
         # Queue management - separate queue per LoRA model
         self.queues: dict[str, deque[QueuedRequest]] = defaultdict(deque)
         self.queue_timers: dict[str, float] = {}  # Track when each queue first got a request
@@ -122,19 +121,15 @@ class VLLMServer:
             max_lora_rank=64,
         )
         self.model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-        
+
         # Load LoRA adapters
         if load_loras:
             print(f"Loading LoRA adapters: {load_loras}")
             for i, lora_id in enumerate(load_loras, 1):
                 print(f"Loading LoRA adapter: {lora_id}")
-                lora_request = LoRARequest(
-                    lora_name=f"lora_{i}",
-                    lora_int_id=i,
-                    lora_path=lora_id
-                )
+                lora_request = LoRARequest(lora_name=f"lora_{i}", lora_int_id=i, lora_path=lora_id)
                 self.llm.llm_engine.add_lora(lora_request)
-        
+
         print("Loading SAE...")
         self.sae = load_gemma_scope_sae(
             repo_id=SAE_REPO_ID,
@@ -143,7 +138,7 @@ class VLLMServer:
             device=DEVICE,
             dtype=DTYPE,
         )
-        
+
         self.initialized = True
         print("Server ready!")
 
@@ -161,34 +156,29 @@ class VLLMServer:
         """Add request to appropriate queue and handle processing."""
         model_key = self.get_model_key(request.model)
         request_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-        
+
         # Create future for async response
         future = asyncio.Future()
-        
-        queued_request = QueuedRequest(
-            request=request,
-            request_id=request_id,
-            timestamp=time.time(),
-            future=future
-        )
-        
+
+        queued_request = QueuedRequest(request=request, request_id=request_id, timestamp=time.time(), future=future)
+
         # Add to queue
         self.queues[model_key].append(queued_request)
-        
+
         # Set timer if this is the first request in queue
         if len(self.queues[model_key]) == 1:
             self.queue_timers[model_key] = time.time()
-        
+
         # Check if we should process the queue immediately
         should_process = len(self.queues[model_key]) >= MAX_PARALLEL_REQUESTS
-        
+
         if should_process:
             # Process queue in background (non-blocking)
             asyncio.create_task(self.process_queue(model_key))
         elif len(self.queues[model_key]) == 1:
             # Schedule timeout processing for first request
             asyncio.create_task(self._schedule_timeout_processing(model_key))
-        
+
         # Wait for response
         return await future
 
@@ -197,30 +187,30 @@ class VLLMServer:
         async with self.processing_lock:  # Ensure only one batch processes at a time
             if not self.queues[model_key]:
                 return
-                
+
             # Get all current requests from queue
             batch_requests = []
             while self.queues[model_key]:
                 batch_requests.append(self.queues[model_key].popleft())
-            
+
             # Clear timer for this model
             if model_key in self.queue_timers:
                 del self.queue_timers[model_key]
-            
+
             # Process batch synchronously
             await self._process_batch(batch_requests, model_key)
 
     async def _schedule_timeout_processing(self, model_key: str):
         """Schedule processing after timeout if queue hasn't been processed yet."""
         await asyncio.sleep(GENERATE_WAIT_SECONDS)
-        
+
         # Check if queue still has items and hasn't been processed
         if self.queues[model_key] and model_key in self.queue_timers:
             await self.process_queue(model_key)
 
     async def _process_batch(self, batch_requests: list[QueuedRequest], model_key: str):
         """Process a batch of requests as a true batch."""
-            
+
         try:
             # Prepare batch data
             prompts = []
@@ -228,38 +218,34 @@ class VLLMServer:
             request_ids = []
             steering_vectors = []
             steering_positions = []
-            
+
             # Determine LoRA request (all requests in batch should use same model)
             lora_request: LoRARequest | None = None
             model_name = batch_requests[0].request.model
             if model_name != MODEL_NAME:
                 for i, lora_id in enumerate(load_loras, 1):
                     if model_name == lora_id or model_name == f"lora_{i}":
-                        lora_request = LoRARequest(
-                            lora_name=f"lora_{i}",
-                            lora_int_id=i,
-                            lora_path=lora_id
-                        )
+                        lora_request = LoRARequest(lora_name=f"lora_{i}", lora_int_id=i, lora_path=lora_id)
                         break
                 if lora_request is None:
                     raise HTTPException(status_code=400, detail=f"Model {model_name} not found in loaded LoRAs")
-            
+
             # Process each request in the batch
             for queued_request in batch_requests:
                 request = queued_request.request
-                
+
                 # Format prompt
                 formatted_prompt = self.tokenizer.apply_chat_template(
                     [msg.dict() for msg in request.messages], tokenize=False, add_generation_prompt=True
                 )
                 prompts.append(formatted_prompt)
-                
+
                 # Tokenize
                 tokenized = self.tokenizer(formatted_prompt, return_tensors="pt", add_special_tokens=False)
                 token_list = tokenized["input_ids"].tolist()[0]
                 token_lists.append(token_list)
                 request_ids.append(queued_request.request_id)
-                
+
                 # Handle steering
                 if request.sae_index is not None:
                     # Find X positions for steering
@@ -267,7 +253,7 @@ class VLLMServer:
                     print(f"X positions: {x_positions}")
                     if not x_positions:
                         raise HTTPException(status_code=400, detail="No 'X' token found in prompt for steering")
-                    
+
                     # Get SAE feature vector
                     feature_vector = get_sae_feature_vector(request.sae_index, self.sae)
                     print(f"Feature vector: {feature_vector}")
@@ -278,16 +264,12 @@ class VLLMServer:
                     zero_vector = torch.zeros(self.sae.d_in, dtype=DTYPE, device=DEVICE)
                     steering_vectors.append(zero_vector)
                     steering_positions.append(0)  # Position 0 as fallback
-            
+
             #  TODO: this is dumb but whatever
             temperature = batch_requests[0].request.temperature
             max_tokens = batch_requests[0].request.max_tokens
-            sampling_params = SamplingParams(
-                temperature=temperature, 
-                ignore_eos=False, 
-                max_tokens=max_tokens
-            )
-            
+            sampling_params = SamplingParams(temperature=temperature, ignore_eos=False, max_tokens=max_tokens)
+
             # Create steering hook for the entire batch
             hook_fn = get_activation_steering_hook(
                 vectors=steering_vectors,
@@ -296,7 +278,7 @@ class VLLMServer:
                 device=DEVICE,
                 dtype=DTYPE,
             )
-            
+
             # Generate batch with steering
             target_layer = self.model.model.layers[LAYER]
             with add_hook(target_layer, hook_fn):
@@ -304,27 +286,30 @@ class VLLMServer:
                     prompt_token_ids=token_lists,
                     sampling_params=sampling_params,
                     lora_request=lora_request,
-                    use_tqdm=False
+                    use_tqdm=False,
                 )
-            
+
             # Process outputs and set results
-            for i, (queued_request, output) in enumerate(zip(batch_requests, outputs)):
+            for i, (queued_request, output) in enumerate(zip(batch_requests, outputs, strict=False)):
                 generated_text = output.outputs[0].text
-                
+
                 response = ChatCompletionResponse(
                     id=request_ids[i],
                     created=int(time.time()),
                     model=queued_request.request.model or MODEL_NAME,
-                    choices=[Choice(index=0, message=Message(role="assistant", content=generated_text), finish_reason="stop")],
+                    choices=[
+                        Choice(index=0, message=Message(role="assistant", content=generated_text), finish_reason="stop")
+                    ],
                     usage=Usage(
                         prompt_tokens=len(token_lists[i]),
                         completion_tokens=len(self.tokenizer.encode(generated_text, add_special_tokens=False)),
-                        total_tokens=len(token_lists[i]) + len(self.tokenizer.encode(generated_text, add_special_tokens=False)),
+                        total_tokens=len(token_lists[i])
+                        + len(self.tokenizer.encode(generated_text, add_special_tokens=False)),
                     ),
                 )
-                
+
                 queued_request.future.set_result(response)
-                
+
         except Exception as e:
             # If batch processing fails, set exception for all requests
             for queued_request in batch_requests:
@@ -362,6 +347,12 @@ def get_activation_steering_hook(
     pos_B = pos_B.to(device)
 
     def hook_fn(module, _input, output):
+        # print(_input)
+        left_input, right_input = _input
+        print(f"left_input: {left_input}")
+        # shape
+        print(f"left_input shape: {left_input.shape}")
+        print(f"right_input: {right_input}")
         resid_flat, *rest = output
         total_tokens, d_model = resid_flat.shape
 
@@ -451,7 +442,7 @@ def load_gemma_scope_sae(
     sae = JumpReluSAE(d_in, d_sae, device, dtype)
     sae.load_state_dict(pt_params)
     sae.to(dtype=dtype, device=device)
-    
+
     return sae
 
 
@@ -461,7 +452,7 @@ def get_sae_feature_vector(sae_index: int, sae: JumpReluSAE) -> torch.Tensor:
     """
     if sae_index >= sae.d_sae:
         raise ValueError(f"Feature index {sae_index} is out of bounds for SAE with {sae.d_sae} features")
-    
+
     # Use decoder weights as feature vectors (maps from feature space back to residual stream)
     return sae.W_dec[sae_index].clone()
 
@@ -520,9 +511,13 @@ async def queue_status(server: VLLMServer = Depends(get_server)):
         status[model_key] = {
             "queue_length": len(queue),
             "oldest_timestamp": queue[0].timestamp if queue else None,
-            "waiting_time": time.time() - queue[0].timestamp if queue else 0
+            "waiting_time": time.time() - queue[0].timestamp if queue else 0,
         }
-    return {"queue_status": status, "max_parallel_requests": MAX_PARALLEL_REQUESTS, "generate_wait_seconds": GENERATE_WAIT_SECONDS}
+    return {
+        "queue_status": status,
+        "max_parallel_requests": MAX_PARALLEL_REQUESTS,
+        "generate_wait_seconds": GENERATE_WAIT_SECONDS,
+    }
 
 
 if __name__ == "__main__":
