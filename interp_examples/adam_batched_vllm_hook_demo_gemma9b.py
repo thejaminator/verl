@@ -256,7 +256,7 @@ def get_activation_steering_hook( # def debug_your_steering_hook(
 
             expected_position_indices_L = torch.arange(prompt_length, device=device)
 
-            assert tokens_L[count:count+prompt_length].equal(expected_position_indices_L)
+            assert tokens_L[count:count+prompt_length].equal(expected_position_indices_L), f"Position indices mismatch at index {count}, expected {expected_position_indices_L}, got {tokens_L[count:count+prompt_length]}"
 
             count += prompt_length
 
@@ -268,11 +268,11 @@ def get_activation_steering_hook( # def debug_your_steering_hook(
         # Make copy
         resid_flat = resid_flat.clone()
         total_tokens, d_model_actual = resid_flat.shape
+        assert d_model_actual == d_model
         
         
         # Try to infer if this is the prompt pass
         if total_tokens <= max(pos_B) + 1:
-            # print(f"  ❌ SKIPPING: Not enough tokens ({total_tokens}) for positions {pos_B.tolist()}")
             return (before_resid_flat, resid_flat, *rest)
 
         # Check if this looks like prompt pass vs generation
@@ -282,34 +282,22 @@ def get_activation_steering_hook( # def debug_your_steering_hook(
         print(f"  Module: {type(module).__name__}")
         print(f"  Input shape: {resid_flat.shape}")
         
-        # Check batch size inference
-        if total_tokens % B != 0:
-            print(f"  ❌ SKIPPING: Can't divide {total_tokens} tokens by batch size {B}")
-            return (before_resid_flat, resid_flat, *rest)
-            
-        L = total_tokens // B
-        print(f"  Inferred sequence length: {L}")
-        
-        if L <= 1:
-            print(f"  ❌ SKIPPING: Sequence too short ({L})")
-            return (before_resid_flat, resid_flat, *rest)
-            
-        # Check positions are valid
-        if (pos_B >= L).any():
-            print(f"  ❌ SKIPPING: Some positions {pos_B.tolist()} >= {L}")
-            return (before_resid_flat, resid_flat, *rest)
-        
-        print(f"  ✅ PROCEEDING with steering...")
-        
-        # Reshape to batch format
-        resid_BLD = resid_flat.view(B, L, d_model_actual)
-        print(f"  Reshaped to: {resid_BLD.shape}")
-        
-        # Get original activations at target positions
-        batch_idx_B = torch.arange(B, device=device)
-        orig_BD = resid_BLD[batch_idx_B, pos_B]  # (B, d_model)
-        
-        print(f"  Original activation norms: {orig_BD.norm(dim=-1).tolist()}")
+
+        intervention_indices_L = []
+        idx = 0
+
+        for i in range(len(prompt_lengths)):
+            intervention_idx = torch.tensor(idx + positions[i], device=device)
+            intervention_indices_L.append(intervention_idx)
+            idx += prompt_lengths[i]
+
+        intervention_indices_L = torch.stack(intervention_indices_L)
+
+        assert intervention_indices_L.shape[0] == B
+
+        orig_BD = resid_flat[intervention_indices_L]
+
+        assert orig_BD.shape == (B, d_model)
         
         # Compute norms and steering
         norms_B1 = orig_BD.norm(dim=-1, keepdim=True).detach()
@@ -329,19 +317,9 @@ def get_activation_steering_hook( # def debug_your_steering_hook(
         
         # Apply the steering
         print(f"  Applying steering at positions: {pos_B.tolist()}")
-        resid_BLD[batch_idx_B, pos_B] = steered_BD
+        resid_flat[intervention_indices_L] = steered_BD
         
-        # Verify it was applied
-        new_BD = resid_BLD[batch_idx_B, pos_B]
-        actual_change = (new_BD - orig_BD).norm(dim=-1)
-        print(f"  Actual change applied: {actual_change.tolist()}")
-        
-        # Reshape back
-        resid_flat_modified = resid_BLD.view(total_tokens, d_model_actual)
-        print(f"  Output shape: {resid_flat_modified.shape}")
-        print(f"  ✅ STEERING COMPLETE\n")
-        
-        return (before_resid_flat, resid_flat_modified, *rest)
+        return (before_resid_flat, resid_flat, *rest)
     
     return hook_fn
 
@@ -541,9 +519,9 @@ if LOAD_LORAS:
         llm.llm_engine.add_lora(lora_request)
 
 # %%
-# Test with both LoRA and steering in vLLM
-
 prompt_lengths = [len(prompt_tokens) for prompt_tokens in batch_token_lists]
+
+print(f"Prompt lengths: {prompt_lengths}")
 
 print(f"Generating with vLLM (LoRA + Steering, SAE index {SAE_INDEX})...")
 vllm_hook_fn = get_activation_steering_hook(features, positions, prompt_lengths, STEERING_COEFFICIENT, DEVICE, DTYPE)
