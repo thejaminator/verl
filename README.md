@@ -23,6 +23,7 @@
 
 James' verl hacks for feature vector steering.
 Note: whenever you call vLLM with hooks, enforce_eager=True is required. Otherwise, the hook will not be applied.
+Also uh, be careful with the hook and asyncronous generation. The hook may not get applied to the right batch?
 
 verl is a flexible, efficient and production-ready RL training library for large language models (LLMs).
 

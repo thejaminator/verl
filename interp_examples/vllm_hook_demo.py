@@ -14,7 +14,6 @@ from transformers import AutoTokenizer
 from typing import Callable
 import contextlib
 
-import interp_tools.model_utils as model_utils
 
 
 # %%
@@ -27,34 +26,54 @@ max_decode_tokens = 100
 
 # %%
 
-test_input = [{"role": "user", "content": "What is the meaning of the word 'X'?"}]
-
-test_input = tokenizer.apply_chat_template(
-    test_input, tokenize=False, add_generation_prompt=True
-)
-
-print(test_input)
-
-positions = [
-    i
-    for i, a in enumerate(tokenizer.encode(test_input, add_special_tokens=False))
-    if tokenizer.decode([a]) == "X"
+# Create two different prompts with 'X' tokens
+test_inputs = [
+    [{"role": "user", "content": "What is the meaning of the word 'X'?"}],
+    [{"role": "user", "content": "What does the 'X' mean?"}]
 ]
 
-orig_input = tokenizer(test_input, return_tensors="pt", add_special_tokens=False).to(
-    device
-)
+# Apply chat template to both prompts
+formatted_prompts = [
+    tokenizer.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True)
+    for prompt in test_inputs
+]
+
+print("Prompt 1:", formatted_prompts[0])
+print("Prompt 2:", formatted_prompts[1])
+
+# Find positions of 'X' in each prompt
+positions = []
+for prompt in formatted_prompts:
+    x_positions = [
+        i
+        for i, a in enumerate(tokenizer.encode(prompt, add_special_tokens=False))
+        if tokenizer.decode([a]) == "X"
+    ]
+    if x_positions:
+        positions.append(x_positions[0])  # Take first 'X' if multiple
+    else:
+        raise ValueError(f"No 'X' token found in prompt: {prompt}")
+
+print(f"X positions: {positions}")
+
+# Tokenize both prompts with padding to handle different lengths
+tokenized = tokenizer(formatted_prompts, return_tensors="pt", add_special_tokens=False, padding=True).to(device)
+print(f"Tokenized shape: {tokenized['input_ids'].shape}")
+print(f"Attention mask shape: {tokenized['attention_mask'].shape}")
 
 # %%
 layer = 6
 
-# Create a random feature vector for demo (in practice, this would be from SAE)
+# Create random feature vectors for demo (one per prompt, in practice these would be from SAE)
 if model_name == "google/gemma-2-2b-it":
-    feature = torch.randn(2304)
+    features = [torch.randn(2304), torch.randn(2304)]  # Different vectors for each prompt
 else:
     raise ValueError(f"Model {model_name} not supported")
 
-print(f"Feature vector shape: {feature.shape}")
+print(f"Feature vector shapes: {[f.shape for f in features]}")
+print(f"Number of prompts: {len(formatted_prompts)}")
+print(f"Number of feature vectors: {len(features)}")
+print(f"Number of positions: {len(positions)}")
 
 
 
@@ -83,6 +102,7 @@ def add_hook(
         handle.remove()
 
 
+
 def get_activation_steering_hook(
     vectors: list[torch.Tensor],  # [B] each with shape [d_model]
     positions: list[int],  # [B]
@@ -109,19 +129,19 @@ def get_activation_steering_hook(
     pos_B = pos_B.to(device)
 
     def hook_fn(module, _input, output):
-        print(f"🔥 HOOK CALLED! Module: {type(module).__name__}")
+        # print(f"🔥 HOOK CALLED! Module: {type(module).__name__}")
         resid_flat, *rest = output  # vLLM uses flattened layout: (batch_size * seq_len, d_model)
         total_tokens, d_model = resid_flat.shape
-        print(f"🔥 Hook processing: total_tokens {total_tokens}, d_model {d_model}, shape {resid_flat.shape}")
+        # print(f"🔥 Hook processing: total_tokens {total_tokens}, d_model {d_model}, shape {resid_flat.shape}")
 
         # vLLM flattens (B, L) -> (B*L), so we need to infer L from total_tokens
         # Assuming all sequences have the same length L
         L = total_tokens // B
-        print(f"🔥 Inferred: batch_size={B}, seq_len={L}")
+        # print(f"🔥 Inferred: batch_size={B}, seq_len={L}")
 
         # Only touch the *prompt* forward pass (sequence length > 1)
         if L <= 1:
-            print(f"Skipping hook because sequence length is <= 1, total_tokens: {total_tokens}")
+            # print(f"Skipping hook because sequence length is <= 1, total_tokens: {total_tokens}")
             return (resid_flat, *rest)
 
         print(f"Applying feature vector on module {type(module).__name__}. Sequence length: {L}, Batch size: {B}")
@@ -166,35 +186,41 @@ llm = LLM(
 model = llm.llm_engine.model_executor.driver_worker.model_runner.model
 
 # %%
-# Demo the activation steering hook
-list_tokens = orig_input["input_ids"].tolist()[0]
+# Demo the activation steering hook with batch of prompts
+batch_token_lists = tokenized["input_ids"].tolist()
 sampling_params = SamplingParams(temperature=0.0, ignore_eos=False, max_tokens=max_decode_tokens)
 
-# Generate baseline output without steering
-print("Generating baseline output...")
-vllm_baseline = llm.generate(prompt_token_ids=list_tokens, sampling_params=sampling_params, use_tqdm=False)
-baseline_text = vllm_baseline[0].outputs[0].text
-print(f"Baseline output: {baseline_text}")
+# Generate baseline outputs without steering
+print("Generating baseline outputs...")
+vllm_baseline = llm.generate(prompt_token_ids=batch_token_lists, sampling_params=sampling_params, use_tqdm=False)
+baseline_texts = [output.outputs[0].text for output in vllm_baseline]
+print("Baseline outputs:")
+for i, text in enumerate(baseline_texts):
+    print(f"  Prompt {i+1}: {text}")
 
 # %%
 # Now generate with activation steering
 print("\nGenerating with activation steering...")
-hook_fn = get_activation_steering_hook([feature], positions, 5.0, device, dtype)
+hook_fn = get_activation_steering_hook(features, positions, 5.0, device, dtype)
 
 # Apply hook to the specified layer
 target_layer = model.model.layers[layer]
 with add_hook(target_layer, hook_fn):
-    vllm_steered = llm.generate(prompt_token_ids=list_tokens, sampling_params=sampling_params, use_tqdm=False)
+    vllm_steered = llm.generate(prompt_token_ids=batch_token_lists, sampling_params=sampling_params, use_tqdm=False)
 
-steered_text = vllm_steered[0].outputs[0].text
-print(f"Steered output: {steered_text}")
+steered_texts = [output.outputs[0].text for output in vllm_steered]
+print("Steered outputs:")
+for i, text in enumerate(steered_texts):
+    print(f"  Prompt {i+1}: {text}")
 
 # %%
 # Compare outputs
 print("\n=== COMPARISON ===")
-print(f"Original prompt: {test_input}")
-print(f"Target positions for steering: {positions}")
-print(f"Baseline output: {baseline_text}")
-print(f"Steered output:  {steered_text}")
-print(f"\nOutputs are {'SAME' if baseline_text == steered_text else 'DIFFERENT'}")
+for i in range(len(formatted_prompts)):
+    print(f"\n--- Prompt {i+1} ---")
+    print(f"Original prompt: {formatted_prompts[i]}")
+    print(f"Target position for steering: {positions[i]}")
+    print(f"Baseline output: {baseline_texts[i]}")
+    print(f"Steered output:  {steered_texts[i]}")
+    print(f"Outputs are {'SAME' if baseline_texts[i] == steered_texts[i] else 'DIFFERENT'}")
 
