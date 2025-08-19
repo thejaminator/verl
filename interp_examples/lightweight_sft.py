@@ -1316,7 +1316,7 @@ def main(explanations_file: str):
         eval_set_size=100,
         use_decoder_vectors=True,
         generation_kwargs={
-            "do_sample": False,
+            "do_sample": True,
             "temperature": 1.0,
             "max_new_tokens": 600,
         },
