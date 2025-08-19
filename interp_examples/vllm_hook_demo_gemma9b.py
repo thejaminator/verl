@@ -211,7 +211,7 @@ def add_hook(
         handle.remove()
 
 
-def get_activation_steering_hook(
+def get_activation_steering_hook( # def debug_your_steering_hook(
     vectors: list[torch.Tensor],
     positions: list[int],
     steering_coefficient: float,
@@ -219,70 +219,107 @@ def get_activation_steering_hook(
     dtype: torch.dtype,
 ) -> Callable:
     """
-    Returns a forward hook that replaces specified residual-stream activations
-    during the initial prompt pass of model.generate.
-    
-    vLLM version that works with flattened residual streams (B*L, d_model).
-    
-    • vectors[b]   – feature vector to inject for batch b
-    • positions[b] – token index (0-based, within prompt only)
+    Debug version of your steering hook with detailed logging
     """
-    # ---- pack Python lists → torch tensors once, outside the hook ----
     vec_BD = torch.stack(vectors)  # (B, d_model)
     pos_B = torch.tensor(positions, dtype=torch.long)  # (B,)
-
     B, d_model = vec_BD.shape
-    assert pos_B.shape == (B,)
-
     vec_BD = vec_BD.to(device, dtype)
     pos_B = pos_B.to(device)
-
+    
+    print(f"🔧 STEERING HOOK SETUP:")
+    print(f"  Batch size: {B}")
+    print(f"  Feature vector shape: {vec_BD.shape}")
+    print(f"  Positions: {pos_B.tolist()}")
+    print(f"  Steering coefficient: {steering_coefficient}")
+    print(f"  Feature vector norms: {vec_BD.norm(dim=-1).tolist()}")
+    
     def hook_fn(module, _input, output):
-        resid_flat, *rest = output  # (B*L, d_model)
-        total_tokens, _d_model = resid_flat.shape
+        resid_flat, *rest = output
         
-        # Extract batch size and sequence length from the input
-        # The actual sequence length should be inferred from total_tokens / B
-        # since we trust B and know total_tokens
-        L = total_tokens // B
-        B_actual = B  # Use provided batch size
-
-        # Only apply steering during prompt pass (sequence length > 1)
-        if L <= 1:
+        print(f"\n🎯 STEERING HOOK EXECUTING:")
+        print(f"  Module: {type(module).__name__}")
+        print(f"  Input shape: {resid_flat.shape}")
+        
+        # Make copy
+        resid_flat = resid_flat.clone()
+        total_tokens, d_model_actual = resid_flat.shape
+        
+        # Check if this looks like prompt pass vs generation
+        print(f"  Total tokens: {total_tokens}")
+        
+        # Try to infer if this is the prompt pass
+        if total_tokens <= max(pos_B) + 1:
+            print(f"  ❌ SKIPPING: Not enough tokens ({total_tokens}) for positions {pos_B.tolist()}")
             return (resid_flat, *rest)
         
-        print(f"Applying feature vector on module {type(module).__name__}. Sequence length: {L}, Batch size: {B_actual}")
+        # Check batch size inference
+        if total_tokens % B != 0:
+            print(f"  ❌ SKIPPING: Can't divide {total_tokens} tokens by batch size {B}")
+            return (resid_flat, *rest)
+            
+        L = total_tokens // B
+        print(f"  Inferred sequence length: {L}")
         
-        # Reshape flattened tensor to (B_actual, L, d_model) format using actual tensor dimensions
-        resid_BLD = resid_flat.view(B_actual, L, _d_model)
-        
-        # Safety: make sure every position is inside current sequence
+        if L <= 1:
+            print(f"  ❌ SKIPPING: Sequence too short ({L})")
+            return (resid_flat, *rest)
+            
+        # Check positions are valid
         if (pos_B >= L).any():
-            bad = pos_B[pos_B >= L].min().item()
-            raise IndexError(f"position {bad} is out of bounds for length {L}")
+            print(f"  ❌ SKIPPING: Some positions {pos_B.tolist()} >= {L}")
+            return (resid_flat, *rest)
         
-        # ---- compute norms of original activations at the target slots ----
-        batch_idx_B = torch.arange(B, device=device)  # (B,)
+        print(f"  ✅ PROCEEDING with steering...")
+        
+        # Reshape to batch format
+        resid_BLD = resid_flat.view(B, L, d_model_actual)
+        print(f"  Reshaped to: {resid_BLD.shape}")
+        
+        # Get original activations at target positions
+        batch_idx_B = torch.arange(B, device=device)
         orig_BD = resid_BLD[batch_idx_B, pos_B]  # (B, d_model)
-        norms_B1 = orig_BD.norm(dim=-1, keepdim=True).detach()  # (B, 1)
         
-        # ---- build steered vectors ----
-        steered_BD = torch.nn.functional.normalize(vec_BD, dim=-1) * norms_B1 * steering_coefficient  # (B, d_model)
+        print(f"  Original activation norms: {orig_BD.norm(dim=-1).tolist()}")
         
-        # ---- in-place replacement via advanced indexing ----
+        # Compute norms and steering
+        norms_B1 = orig_BD.norm(dim=-1, keepdim=True).detach()
+        normalized_features = torch.nn.functional.normalize(vec_BD, dim=-1)
+        steered_BD = normalized_features * norms_B1 * steering_coefficient
+        
+        print(f"  Normalized feature norms: {normalized_features.norm(dim=-1).tolist()}")
+        print(f"  Original norms: {norms_B1.squeeze().tolist()}")
+        print(f"  Steered activation norms: {steered_BD.norm(dim=-1).tolist()}")
+        
+        # Calculate the change magnitude BEFORE applying
+        change_magnitude = (steered_BD - orig_BD).norm(dim=-1)
+        print(f"  Change magnitudes: {change_magnitude.tolist()}")
+        
+        if change_magnitude.max() < 1e-4:
+            print(f"  ⚠️  WARNING: Very small change magnitude!")
+        
+        # Apply the steering
+        print(f"  Applying steering at positions: {pos_B.tolist()}")
         resid_BLD[batch_idx_B, pos_B] = steered_BD
         
-        # Reshape back to flattened format (B*L, d_model)
-        resid_flat_modified = resid_BLD.view(total_tokens, _d_model)
+        # Verify it was applied
+        new_BD = resid_BLD[batch_idx_B, pos_B]
+        actual_change = (new_BD - orig_BD).norm(dim=-1)
+        print(f"  Actual change applied: {actual_change.tolist()}")
+        
+        # Reshape back
+        resid_flat_modified = resid_BLD.view(total_tokens, d_model_actual)
+        print(f"  Output shape: {resid_flat_modified.shape}")
+        print(f"  ✅ STEERING COMPLETE\n")
         
         return (resid_flat_modified, *rest)
-
+    
     return hook_fn
 
 
 # %%
 # HF Transformers hook (copied from lightweight_sft.py)
-def get_hf_activation_steering_hook(
+def get_hf_activation_steering_hook_debug(
     vectors: list[torch.Tensor],  # [B, d_model]
     positions: list[int],  # [B]
     steering_coefficient: float,
@@ -290,17 +327,11 @@ def get_hf_activation_steering_hook(
     dtype: torch.dtype,
 ) -> Callable:
     """
-    Returns a forward hook that *replaces* specified residual-stream activations
-    during the initial prompt pass of `model.generate`.
-
-    • vectors[b]  – feature vector to inject for batch b
-    • positions[b]– token index (0-based, within prompt only) for batch b
+    HF hook with debug prints to compare against vLLM
     """
-
     # ---- pack Python lists → torch tensors once, outside the hook ----
     vec_BD = torch.stack(vectors)  # (B, d)
     pos_B = torch.tensor(positions, dtype=torch.long)  # (B,)
-
     B, d_model = vec_BD.shape
     
     # Handle the case where positions might create a scalar tensor instead of a 1D tensor
@@ -308,38 +339,75 @@ def get_hf_activation_steering_hook(
         pos_B = pos_B.unsqueeze(0)  # Convert scalar to (1,) shape
     
     assert pos_B.shape == (B,)
-
     vec_BD = vec_BD.to(device, dtype)
     pos_B = pos_B.to(device)
-
+    
+    print(f"🔧 HF STEERING HOOK SETUP:")
+    print(f"  Batch size: {B}")
+    print(f"  Feature vector shape: {vec_BD.shape}")
+    print(f"  Positions: {pos_B.tolist()}")
+    print(f"  Steering coefficient: {steering_coefficient}")
+    print(f"  Feature vector norms: {vec_BD.norm(dim=-1).tolist()}")
+    
     def hook_fn(module, _input, output):
         resid_BLD, *rest = output  # Gemma returns (resid, hidden_states, ...)
-        L = resid_BLD.shape[1]
-
+        B_actual, L, d_model_actual = resid_BLD.shape
+        
+        print(f"\n🎯 HF STEERING HOOK EXECUTING:")
+        print(f"  Module: {type(module).__name__}")
+        print(f"  Input shape: {resid_BLD.shape}")
+        print(f"  Sequence length: {L}")
+        print(f"  Expected batch size: {B}, actual: {B_actual}")
+        
         # Only touch the *prompt* forward pass (sequence length > 1)
         if L <= 1:
+            print(f"  ❌ SKIPPING: Sequence too short ({L})")
             return (resid_BLD, *rest)
-
+        
         # Safety: make sure every position is inside current sequence
         if (pos_B >= L).any():
             bad = pos_B[pos_B >= L].min().item()
+            print(f"  ❌ ERROR: position {bad} is out of bounds for length {L}")
             raise IndexError(f"position {bad} is out of bounds for length {L}")
-
+        
+        print(f"  ✅ PROCEEDING with HF steering...")
+        
         # ---- compute norms of original activations at the target slots ----
         batch_idx_B = torch.arange(B, device=device)  # (B,)
         orig_BD = resid_BLD[batch_idx_B, pos_B]  # (B, d)
+        
+        print(f"  Original activation norms: {orig_BD.norm(dim=-1).tolist()}")
+        
         norms_B1 = orig_BD.norm(dim=-1, keepdim=True).detach()  # (B, 1)
-
+        
         # ---- build steered vectors ----
-        steered_BD = torch.nn.functional.normalize(vec_BD, dim=-1) * norms_B1 * steering_coefficient  # (B, d)
-
+        normalized_features = torch.nn.functional.normalize(vec_BD, dim=-1)
+        steered_BD = normalized_features * norms_B1 * steering_coefficient  # (B, d)
+        
+        print(f"  Normalized feature norms: {normalized_features.norm(dim=-1).tolist()}")
+        print(f"  Original norms: {norms_B1.squeeze().tolist()}")
+        print(f"  Steered activation norms: {steered_BD.norm(dim=-1).tolist()}")
+        
+        # Calculate the change magnitude BEFORE applying
+        change_magnitude = (steered_BD - orig_BD).norm(dim=-1)
+        print(f"  Change magnitudes: {change_magnitude.tolist()}")
+        
+        if change_magnitude.max() < 1e-4:
+            print(f"  ⚠️  WARNING: Very small change magnitude!")
+        
         # ---- in-place replacement via advanced indexing ----
+        print(f"  Applying HF steering at positions: {pos_B.tolist()}")
         resid_BLD[batch_idx_B, pos_B] = steered_BD
-
+        
+        # Verify it was applied
+        new_BD = resid_BLD[batch_idx_B, pos_B]
+        actual_change = (new_BD - orig_BD).norm(dim=-1)
+        print(f"  Actual change applied: {actual_change.tolist()}")
+        print(f"  ✅ HF STEERING COMPLETE\n")
+        
         return (resid_BLD, *rest)
-
+    
     return hook_fn
-
 
 def get_hf_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = False):
     """Gets the residual stream submodule for HF transformers"""
