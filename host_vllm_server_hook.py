@@ -10,9 +10,12 @@ import time
 import uuid
 from typing import Any, Callable, Optional
 
+import numpy as np
 import torch
+import torch.nn as nn
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException
+from huggingface_hub import hf_hub_download
 from pydantic import BaseModel
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
@@ -22,11 +25,16 @@ os.environ["VLLM_USE_V1"] = "0"
 os.environ["NVTE_ALLOW_NONDETERMINISTIC_ALGO"] = "1"
 
 # Configuration
-MODEL_NAME = "google/gemma-2-2b-it"
+MODEL_NAME = "google/gemma-2-9b-it"
 DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
 CTX_LEN = 512
-LAYER = 6  # Target layer for activation steering
+LAYER = 9  # Target layer for activation steering (matching lightweight_sft.py)
+
+# SAE Configuration
+SAE_REPO_ID = "google/gemma-scope-9b-it-res"
+SAE_WIDTH = 16  # Can be 16 or 131
+SAE_FILENAME = f"layer_{LAYER}/width_16k/average_l0_88/params.npz"
 
 
 class Message(BaseModel):
@@ -65,16 +73,17 @@ class ChatCompletionResponse(BaseModel):
 
 
 class VLLMServer:
-    """Encapsulates vLLM model and tokenizer state."""
+    """Encapsulates vLLM model, tokenizer, and SAE state."""
 
     def __init__(self):
         self.llm: Optional[LLM] = None
         self.model: Optional[Any] = None
         self.tokenizer: Optional[Any] = None
+        self.sae: Optional[JumpReluSAE] = None
         self.initialized = False
 
     def initialize(self):
-        """Initialize the vLLM model and tokenizer."""
+        """Initialize the vLLM model, tokenizer, and SAE."""
         if self.initialized:
             return
 
@@ -92,12 +101,22 @@ class VLLMServer:
             gpu_memory_utilization=0.5,
         )
         self.model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+        
+        print("Loading SAE...")
+        self.sae = load_gemma_scope_sae(
+            repo_id=SAE_REPO_ID,
+            filename=SAE_FILENAME,
+            layer=LAYER,
+            device=DEVICE,
+            dtype=DTYPE,
+        )
+        
         self.initialized = True
         print("Server ready!")
 
     def is_ready(self) -> bool:
         """Check if server is ready."""
-        return self.initialized and self.llm is not None and self.tokenizer is not None
+        return self.initialized and self.llm is not None and self.tokenizer is not None and self.sae is not None
 
 
 @contextlib.contextmanager
@@ -164,17 +183,75 @@ def get_activation_steering_hook(
     return hook_fn
 
 
-def get_sae_feature_vector(sae_index: int) -> torch.Tensor:
+# SAE Classes
+class JumpReluSAE(nn.Module):
+    def __init__(self, d_in: int, d_sae: int, device: torch.device, dtype: torch.dtype):
+        super().__init__()
+        self.W_enc = nn.Parameter(torch.zeros(d_in, d_sae))
+        self.W_dec = nn.Parameter(torch.zeros(d_sae, d_in))
+        self.b_enc = nn.Parameter(torch.zeros(d_sae))
+        self.b_dec = nn.Parameter(torch.zeros(d_in))
+        self.threshold = nn.Parameter(torch.zeros(d_sae, dtype=dtype, device=device))
+        self.device = device
+        self.dtype = dtype
+        self.d_sae = d_sae
+        self.d_in = d_in
+        self.to(dtype=dtype, device=device)
+
+    def encode(self, x: torch.Tensor):
+        pre_acts = x @ self.W_enc + self.b_enc
+        mask = pre_acts > self.threshold
+        acts = mask * torch.nn.functional.relu(pre_acts)
+        return acts
+
+    def decode(self, feature_acts: torch.Tensor):
+        return feature_acts @ self.W_dec + self.b_dec
+
+
+def load_gemma_scope_sae(
+    repo_id: str,
+    filename: str,
+    layer: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    local_dir: str = "downloaded_saes",
+) -> JumpReluSAE:
+    """Load Gemma Scope SAE from Hugging Face Hub."""
+    path_to_params = hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        force_download=False,
+        local_dir=local_dir,
+    )
+    pytorch_path = path_to_params.replace(".npz", ".pt")
+
+    # Convert npz to pt for faster loading
+    if not os.path.exists(pytorch_path):
+        params = np.load(path_to_params)
+        pt_params = {k: torch.from_numpy(v) for k, v in params.items()}
+        torch.save(pt_params, pytorch_path)
+
+    pt_params = torch.load(pytorch_path)
+
+    d_in = pt_params["W_enc"].shape[0]
+    d_sae = pt_params["W_enc"].shape[1]
+
+    sae = JumpReluSAE(d_in, d_sae, device, dtype)
+    sae.load_state_dict(pt_params)
+    sae.to(dtype=dtype, device=device)
+    
+    return sae
+
+
+def get_sae_feature_vector(sae_index: int, sae: JumpReluSAE) -> torch.Tensor:
     """
-    Get SAE feature vector for the given index.
-    For now, returns a random vector. In practice, this would load from actual SAE.
+    Get SAE feature vector for the given index from the loaded SAE.
     """
-    if MODEL_NAME == "google/gemma-2-2b-it":
-        # Return random vector for demo (in practice, load from SAE)
-        torch.manual_seed(sae_index)  # Deterministic based on index
-        return torch.randn(2304)
-    else:
-        raise ValueError(f"Model {MODEL_NAME} not supported")
+    if sae_index >= sae.d_sae:
+        raise ValueError(f"Feature index {sae_index} is out of bounds for SAE with {sae.d_sae} features")
+    
+    # Use decoder weights as feature vectors (maps from feature space back to residual stream)
+    return sae.W_dec[sae_index].clone()
 
 
 def find_x_positions(formatted_prompt: str, tokenizer) -> list[int]:
@@ -187,20 +264,16 @@ def find_x_positions(formatted_prompt: str, tokenizer) -> list[int]:
     return positions
 
 
-# Create server instance and FastAPI app
+# Create and initialize server instance immediately
 server = VLLMServer()
+server.initialize()  # Initialize right away
+
 app = FastAPI(title="vLLM Server with Activation Steering", version="1.0.0")
 
 
 def get_server() -> VLLMServer:
     """Dependency to get server instance."""
     return server
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize the vLLM model and tokenizer on startup."""
-    server.initialize()
 
 
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
@@ -230,8 +303,8 @@ async def create_chat_completion(request: ChatCompletionRequest, server: VLLMSer
         if not x_positions:
             raise HTTPException(status_code=400, detail="No 'X' token found in prompt for steering")
 
-        # Get SAE feature vector
-        feature_vector = get_sae_feature_vector(request.sae_index)
+        # Get SAE feature vector from loaded SAE
+        feature_vector = get_sae_feature_vector(request.sae_index, server.sae)
 
         # Create steering hook
         hook_fn = get_activation_steering_hook(

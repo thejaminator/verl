@@ -7,7 +7,7 @@ Test client for the vLLM server with activation steering hooks.
 import requests
 
 
-def test_chat_completion(sae_index=None, steering_coefficient=5.0):
+def test_chat_completion(sae_index=None, steering_coefficient=2.0) -> str | None:
     """Test the chat completion endpoint."""
 
     url = "http://localhost:8000/v1/chat/completions"
@@ -41,7 +41,7 @@ def main():
 
     # Test baseline (no steering)
     print("\n=== Baseline (no steering) ===")
-    baseline_output = test_chat_completion()
+    baseline_output: str | None = test_chat_completion()
     if baseline_output:
         print(f"Output: {baseline_output}")
 
