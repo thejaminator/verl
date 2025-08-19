@@ -46,7 +46,7 @@ class Message(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     messages: list[Message]
-    model: Optional[str] = MODEL_NAME
+    model: str = MODEL_NAME
     max_tokens: Optional[int] = 100
     temperature: Optional[float] = 0.0
     sae_index: Optional[int] = None  # Custom parameter for SAE feature index
@@ -310,6 +310,21 @@ async def create_chat_completion(request: ChatCompletionRequest, server: VLLMSer
 
     # Set up sampling parameters
     sampling_params = SamplingParams(temperature=request.temperature, ignore_eos=False, max_tokens=request.max_tokens)
+    
+    # Determine LoRA request if model is specified and different from base model
+    lora_request = None
+    if request.model != MODEL_NAME:
+        # Find the LoRA ID based on the model name
+        for i, lora_id in enumerate(load_loras, 1):
+            if request.model == lora_id or request.model == f"lora_{i}":
+                lora_request = LoRARequest(
+                    lora_name=f"lora_{i}",
+                    lora_int_id=i,
+                    lora_path=lora_id
+                )
+                break
+        if lora_request is None:
+            raise HTTPException(status_code=400, detail=f"Model {request.model} not found in loaded LoRAs")
 
     # Generate response
     if request.sae_index is not None:
@@ -335,11 +350,19 @@ async def create_chat_completion(request: ChatCompletionRequest, server: VLLMSer
         target_layer = server.model.model.layers[LAYER]
         with add_hook(target_layer, hook_fn):
             outputs = server.llm.generate(
-                prompt_token_ids=[token_list], sampling_params=sampling_params, use_tqdm=False
+                prompt_token_ids=[token_list], 
+                sampling_params=sampling_params, 
+                lora_request=lora_request,
+                use_tqdm=False
             )
     else:
         # Generate without steering
-        outputs = server.llm.generate(prompt_token_ids=[token_list], sampling_params=sampling_params, use_tqdm=False)
+        outputs = server.llm.generate(
+            prompt_token_ids=[token_list], 
+            sampling_params=sampling_params, 
+            lora_request=lora_request,
+            use_tqdm=False
+        )
 
     # Extract generated text
     generated_text = outputs[0].outputs[0].text
