@@ -4,10 +4,12 @@ FastAPI server that runs vLLM with activation steering hooks.
 Mimics OpenAI chat completions API with additional sae_index parameter.
 """
 
+import asyncio
 import contextlib
 import os
 import time
 import uuid
+from collections import defaultdict, deque
 from typing import Any, Callable, Optional
 
 import numpy as np
@@ -31,6 +33,8 @@ DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
 CTX_LEN = 512 * 4
 LAYER = 9  # Target layer for activation steering (matching lightweight_sft.py)
+MAX_PARALLEL_REQUESTS = 30
+GENERATE_WAIT_SECONDS = 2
 
 # SAE Configuration
 SAE_REPO_ID = "google/gemma-scope-9b-it-res"
@@ -74,8 +78,15 @@ class ChatCompletionResponse(BaseModel):
     usage: Usage
 
 
+class QueuedRequest(BaseModel):
+    request: ChatCompletionRequest
+    request_id: str
+    timestamp: float
+    future: Optional[Any] = None  # asyncio.Future for response
+
+
 class VLLMServer:
-    """Encapsulates vLLM model, tokenizer, and SAE state."""
+    """Encapsulates vLLM model, tokenizer, SAE state, and request queues."""
 
     def __init__(self):
         self.llm: Optional[LLM] = None
@@ -83,6 +94,11 @@ class VLLMServer:
         self.tokenizer: Optional[Any] = None
         self.sae: Optional[JumpReluSAE] = None
         self.initialized = False
+        
+        # Queue management - separate queue per LoRA model
+        self.queues: dict[str, deque[QueuedRequest]] = defaultdict(deque)
+        self.queue_timers: dict[str, float] = {}  # Track when each queue first got a request
+        self.processing_lock = asyncio.Lock()  # Ensure synchronous generation
 
     def initialize(self):
         """Initialize the vLLM model, tokenizer, and SAE."""
@@ -133,6 +149,167 @@ class VLLMServer:
     def is_ready(self) -> bool:
         """Check if server is ready."""
         return self.initialized and self.llm is not None and self.tokenizer is not None and self.sae is not None
+
+    def get_model_key(self, model_name: str) -> str:
+        """Get the key for queue management based on model name."""
+        if model_name == MODEL_NAME:
+            return "base"
+        return model_name
+
+    async def add_to_queue(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
+        """Add request to appropriate queue and handle processing."""
+        model_key = self.get_model_key(request.model)
+        request_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+        
+        # Create future for async response
+        future = asyncio.Future()
+        
+        queued_request = QueuedRequest(
+            request=request,
+            request_id=request_id,
+            timestamp=time.time(),
+            future=future
+        )
+        
+        # Add to queue
+        self.queues[model_key].append(queued_request)
+        
+        # Set timer if this is the first request in queue
+        if len(self.queues[model_key]) == 1:
+            self.queue_timers[model_key] = time.time()
+        
+        # Check if we should process the queue immediately
+        should_process = len(self.queues[model_key]) >= MAX_PARALLEL_REQUESTS
+        
+        if should_process:
+            # Process queue in background (non-blocking)
+            asyncio.create_task(self.process_queue(model_key))
+        elif len(self.queues[model_key]) == 1:
+            # Schedule timeout processing for first request
+            asyncio.create_task(self._schedule_timeout_processing(model_key))
+        
+        # Wait for response
+        return await future
+
+    async def process_queue(self, model_key: str):
+        """Process all requests in the queue for a specific model."""
+        async with self.processing_lock:  # Ensure only one batch processes at a time
+            if not self.queues[model_key]:
+                return
+                
+            # Get all current requests from queue
+            batch_requests = []
+            while self.queues[model_key]:
+                batch_requests.append(self.queues[model_key].popleft())
+            
+            # Clear timer for this model
+            if model_key in self.queue_timers:
+                del self.queue_timers[model_key]
+            
+            # Process batch synchronously
+            await self._process_batch(batch_requests, model_key)
+
+    async def _schedule_timeout_processing(self, model_key: str):
+        """Schedule processing after timeout if queue hasn't been processed yet."""
+        await asyncio.sleep(GENERATE_WAIT_SECONDS)
+        
+        # Check if queue still has items and hasn't been processed
+        if self.queues[model_key] and model_key in self.queue_timers:
+            await self.process_queue(model_key)
+
+    async def _process_batch(self, batch_requests: list[QueuedRequest], model_key: str):
+        """Process a batch of requests synchronously."""
+        for queued_request in batch_requests:
+            try:
+                response = await self._generate_single_response(queued_request.request, queued_request.request_id)
+                queued_request.future.set_result(response)
+            except Exception as e:
+                queued_request.future.set_exception(e)
+
+    async def _generate_single_response(self, request: ChatCompletionRequest, request_id: str) -> ChatCompletionResponse:
+        """Generate a single response for a request (extracted from original endpoint logic)."""
+        # Format the messages using chat template
+        formatted_prompt = self.tokenizer.apply_chat_template(
+            [msg.dict() for msg in request.messages], tokenize=False, add_generation_prompt=True
+        )
+
+        # Tokenize the prompt
+        tokenized = self.tokenizer(formatted_prompt, return_tensors="pt", add_special_tokens=False)
+        token_list = tokenized["input_ids"].tolist()[0]
+
+        # Set up sampling parameters
+        sampling_params = SamplingParams(temperature=request.temperature, ignore_eos=False, max_tokens=request.max_tokens)
+        
+        # Determine LoRA request if model is specified and different from base model
+        lora_request = None
+        if request.model != MODEL_NAME:
+            # Find the LoRA ID based on the model name
+            for i, lora_id in enumerate(load_loras, 1):
+                if request.model == lora_id or request.model == f"lora_{i}":
+                    lora_request = LoRARequest(
+                        lora_name=f"lora_{i}",
+                        lora_int_id=i,
+                        lora_path=lora_id
+                    )
+                    break
+            if lora_request is None:
+                raise HTTPException(status_code=400, detail=f"Model {request.model} not found in loaded LoRAs")
+
+        # Generate response
+        if request.sae_index is not None:
+            # Find X positions for steering
+            x_positions = find_x_positions(formatted_prompt, self.tokenizer)
+
+            if not x_positions:
+                raise HTTPException(status_code=400, detail="No 'X' token found in prompt for steering")
+
+            # Get SAE feature vector from loaded SAE
+            feature_vector = get_sae_feature_vector(request.sae_index, self.sae)
+
+            # Create steering hook
+            hook_fn = get_activation_steering_hook(
+                vectors=[feature_vector],
+                positions=[x_positions[0]],  # Use first X position
+                steering_coefficient=request.steering_coefficient,
+                device=DEVICE,
+                dtype=DTYPE,
+            )
+
+            # Generate with steering
+            target_layer = self.model.model.layers[LAYER]
+            with add_hook(target_layer, hook_fn):
+                outputs = self.llm.generate(
+                    prompt_token_ids=[token_list], 
+                    sampling_params=sampling_params, 
+                    lora_request=lora_request,
+                    use_tqdm=False
+                )
+        else:
+            # Generate without steering
+            outputs = self.llm.generate(
+                prompt_token_ids=[token_list], 
+                sampling_params=sampling_params, 
+                lora_request=lora_request,
+                use_tqdm=False
+            )
+
+        # Extract generated text
+        generated_text = outputs[0].outputs[0].text
+
+        # Create response
+        response = ChatCompletionResponse(
+            id=request_id,
+            created=int(time.time()),
+            model=request.model or MODEL_NAME,
+            choices=[Choice(index=0, message=Message(role="assistant", content=generated_text), finish_reason="stop")],
+            usage=Usage(
+                prompt_tokens=len(token_list),
+                completion_tokens=len(self.tokenizer.encode(generated_text, add_special_tokens=False)),
+                total_tokens=len(token_list) + len(self.tokenizer.encode(generated_text, add_special_tokens=False)),
+            ),
+        )
+
+        return response
 
 
 @contextlib.contextmanager
@@ -294,93 +471,13 @@ def get_server() -> VLLMServer:
 
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def create_chat_completion(request: ChatCompletionRequest, server: VLLMServer = Depends(get_server)):
-    """Create a chat completion with optional activation steering."""
+    """Create a chat completion with optional activation steering using queue system."""
 
     if not server.is_ready():
         raise HTTPException(status_code=503, detail="Model not initialized")
 
-    # Format the messages using chat template
-    formatted_prompt = server.tokenizer.apply_chat_template(
-        [msg.dict() for msg in request.messages], tokenize=False, add_generation_prompt=True
-    )
-
-    # Tokenize the prompt
-    tokenized = server.tokenizer(formatted_prompt, return_tensors="pt", add_special_tokens=False)
-    token_list = tokenized["input_ids"].tolist()[0]
-
-    # Set up sampling parameters
-    sampling_params = SamplingParams(temperature=request.temperature, ignore_eos=False, max_tokens=request.max_tokens)
-    
-    # Determine LoRA request if model is specified and different from base model
-    lora_request = None
-    if request.model != MODEL_NAME:
-        # Find the LoRA ID based on the model name
-        for i, lora_id in enumerate(load_loras, 1):
-            if request.model == lora_id or request.model == f"lora_{i}":
-                lora_request = LoRARequest(
-                    lora_name=f"lora_{i}",
-                    lora_int_id=i,
-                    lora_path=lora_id
-                )
-                break
-        if lora_request is None:
-            raise HTTPException(status_code=400, detail=f"Model {request.model} not found in loaded LoRAs")
-
-    # Generate response
-    if request.sae_index is not None:
-        # Find X positions for steering
-        x_positions = find_x_positions(formatted_prompt, server.tokenizer)
-
-        if not x_positions:
-            raise HTTPException(status_code=400, detail="No 'X' token found in prompt for steering")
-
-        # Get SAE feature vector from loaded SAE
-        feature_vector = get_sae_feature_vector(request.sae_index, server.sae)
-
-        # Create steering hook
-        hook_fn = get_activation_steering_hook(
-            vectors=[feature_vector],
-            positions=[x_positions[0]],  # Use first X position
-            steering_coefficient=request.steering_coefficient,
-            device=DEVICE,
-            dtype=DTYPE,
-        )
-
-        # Generate with steering
-        target_layer = server.model.model.layers[LAYER]
-        with add_hook(target_layer, hook_fn):
-            outputs = server.llm.generate(
-                prompt_token_ids=[token_list], 
-                sampling_params=sampling_params, 
-                lora_request=lora_request,
-                use_tqdm=False
-            )
-    else:
-        # Generate without steering
-        outputs = server.llm.generate(
-            prompt_token_ids=[token_list], 
-            sampling_params=sampling_params, 
-            lora_request=lora_request,
-            use_tqdm=False
-        )
-
-    # Extract generated text
-    generated_text = outputs[0].outputs[0].text
-
-    # Create response
-    response = ChatCompletionResponse(
-        id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
-        created=int(time.time()),
-        model=request.model or MODEL_NAME,
-        choices=[Choice(index=0, message=Message(role="assistant", content=generated_text), finish_reason="stop")],
-        usage=Usage(
-            prompt_tokens=len(token_list),
-            completion_tokens=len(server.tokenizer.encode(generated_text, add_special_tokens=False)),
-            total_tokens=len(token_list) + len(server.tokenizer.encode(generated_text, add_special_tokens=False)),
-        ),
-    )
-
-    return response
+    # Add request to queue and wait for response
+    return await server.add_to_queue(request)
 
 
 @app.get("/health")
@@ -393,6 +490,19 @@ async def health_check(server: VLLMServer = Depends(get_server)):
 async def list_models():
     """List available models (OpenAI API compatibility)."""
     return {"object": "list", "data": [{"id": MODEL_NAME, "object": "model", "owned_by": "local", "permission": []}]}
+
+
+@app.get("/queue/status")
+async def queue_status(server: VLLMServer = Depends(get_server)):
+    """Get current queue status for all models."""
+    status = {}
+    for model_key, queue in server.queues.items():
+        status[model_key] = {
+            "queue_length": len(queue),
+            "oldest_timestamp": queue[0].timestamp if queue else None,
+            "waiting_time": time.time() - queue[0].timestamp if queue else 0
+        }
+    return {"queue_status": status, "max_parallel_requests": MAX_PARALLEL_REQUESTS, "generate_wait_seconds": GENERATE_WAIT_SECONDS}
 
 
 if __name__ == "__main__":
