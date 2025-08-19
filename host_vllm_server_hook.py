@@ -347,12 +347,12 @@ def get_activation_steering_hook(
     pos_B = pos_B.to(device)
 
     def hook_fn(module, _input, output):
-        # print(_input)
-        left_input, right_input = _input
-        print(f"left_input: {left_input}")
-        # shape
-        print(f"left_input shape: {left_input.shape}")
-        print(f"right_input: {right_input}")
+        print(_input)
+        # left_input, right_input = _input
+        # print(f"left_input: {left_input}")
+        # # shape
+        # print(f"left_input shape: {left_input.shape}")
+        # print(f"right_input: {right_input}")
         resid_flat, *rest = output
         total_tokens, d_model = resid_flat.shape
 
