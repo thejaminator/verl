@@ -336,6 +336,12 @@ def get_activation_steering_hook(
     """
     Returns a forward hook that replaces specified residual-stream activations
     during the initial prompt pass of model.generate.
+
+    This version supports vLLM's packed variable-length layout where tokens are
+    concatenated as [L1 + L2 + ... + LB], rather than a rectangular BxL. It
+    uses the 1D position ids input (which resets to 0 at each new sequence) to
+    derive per-sequence boundaries and map per-sequence positions to flat
+    indices.
     """
     vec_BD = torch.stack(vectors)  # (B, d_model)
     pos_B = torch.tensor(positions, dtype=torch.long)  # (B,)
@@ -347,35 +353,69 @@ def get_activation_steering_hook(
     pos_B = pos_B.to(device)
 
     def hook_fn(module, _input, output):
-        print(_input)
-        # left_input, right_input = _input
-        # print(f"left_input: {left_input}")
-        # # shape
-        # print(f"left_input shape: {left_input.shape}")
-        # print(f"right_input: {right_input}")
         resid_flat, *rest = output
-        total_tokens, d_model = resid_flat.shape
+        total_tokens, _d_model = resid_flat.shape
 
-        L = total_tokens // B
+        # Debug: mark the shape of resid_flat
+        print(f"resid_flat shape: {tuple(resid_flat.shape)}") # (total_tokens, d_model) ?
 
-        # Only touch the prompt forward pass (sequence length > 1)
-        if L <= 1:
+        # Try to find packed position ids among inputs: a 1D int tensor of length total_tokens
+        position_ids: Optional[torch.Tensor] = None
+        for obj in _input:
+            if (
+                isinstance(obj, torch.Tensor)
+                and obj.dim() == 1
+                and obj.shape[0] == total_tokens
+                and obj.dtype in (torch.int64, torch.int32)
+            ):
+                position_ids = obj
+                break
+
+        # If we cannot find position ids, we cannot reliably map to sequences; bail out
+        if position_ids is None:
             return (resid_flat, *rest)
 
-        # Safety: make sure every position is inside current sequence
-        if (pos_B >= L).any():
-            bad = pos_B[pos_B >= L].min().item()
-            raise IndexError(f"position {bad} is out of bounds for length {L}")
+        # Identify sequence starts where position id resets to 0
+        starts = (position_ids == 0).nonzero(as_tuple=False).flatten()
+        if starts.numel() == 0:
+            # No sequence boundaries detected; treat as decoding or unknown layout
+            return (resid_flat, *rest)
 
-        # Compute flat indices for vLLM's layout
-        batch_offsets = torch.arange(B, device=device) * L
-        flat_indices = batch_offsets + pos_B
+        starts = starts.sort()[0]
+
+        # Compute per-sequence lengths from consecutive starts
+        if starts.numel() > 1:
+            lengths = torch.empty_like(starts)
+            lengths[:-1] = starts[1:] - starts[:-1]
+            lengths[-1] = total_tokens - starts[-1]
+        else:
+            lengths = torch.tensor([total_tokens], device=starts.device, dtype=starts.dtype)
+
+        # Consider only the first B sequences (vLLM may pack more in rare cases)
+        if starts.numel() < B:
+            # Not enough sequences for provided positions; skip
+            return (resid_flat, *rest)
+        if starts.numel() != B:
+            starts = starts[:B]
+            lengths = lengths[:B]
+
+        # Skip during decoding: all sequences have length 1
+        if torch.all(lengths == 1):
+            return (resid_flat, *rest)
+
+        # Bounds check: each requested position must be within its sequence length
+        if (pos_B >= lengths).any():
+            bad = int((pos_B - lengths).clamp_min(0).nonzero(as_tuple=False)[0].item())
+            raise IndexError("One or more positions are out of bounds for their sequence lengths")
+
+        # Map per-sequence positions to flat indices using sequence starts as offsets
+        flat_indices = starts + pos_B
 
         # Compute norms of original activations at the target slots
         orig_BD = resid_flat[flat_indices]
         norms_B1 = orig_BD.norm(dim=-1, keepdim=True)
 
-        # Build steered vectors
+        # Build steered vectors with per-slot norm scaling
         steered_BD = torch.nn.functional.normalize(vec_BD, dim=-1) * norms_B1 * steering_coefficient
 
         # In-place replacement via flat indexing
