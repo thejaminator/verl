@@ -260,29 +260,14 @@ def get_activation_steering_hook( # def debug_your_steering_hook(
 
             count += prompt_length
 
-        assert count == tokens_L.shape[0]
 
         before_resid_flat, resid_flat, *rest = output
-        
-        
-        # Make copy
-        resid_flat = resid_flat.clone()
-        total_tokens, d_model_actual = resid_flat.shape
-        assert d_model_actual == d_model
-        
-        
-        # Try to infer if this is the prompt pass
-        if total_tokens <= max(pos_B) + 1:
-            return (before_resid_flat, resid_flat, *rest)
 
-        # Check if this looks like prompt pass vs generation
-        print(f"  Total tokens: {total_tokens}")
-        
-        print(f"\n🎯 STEERING HOOK EXECUTING:")
-        print(f"  Module: {type(module).__name__}")
-        print(f"  Input shape: {resid_flat.shape}")
-        
 
+        assert count == tokens_L.shape[0]
+        assert resid_flat.shape[0] == tokens_L.shape[0]
+        assert resid_flat.shape[1] == d_model
+        
         intervention_indices_L = []
         idx = 0
 
