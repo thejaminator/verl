@@ -62,6 +62,7 @@ async def main():
         # Baseline (no steering)
         test_chat_completion(client),
         # Tests with different SAE indices
+        test_chat_completion(client, sae_index=0),
         test_chat_completion(client, sae_index=42),
         test_chat_completion(client, sae_index=123),
         test_chat_completion(client, sae_index=999),
