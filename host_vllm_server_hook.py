@@ -28,11 +28,12 @@ os.environ["NVTE_ALLOW_NONDETERMINISTIC_ALGO"] = "1"
 MODEL_NAME = "google/gemma-2-9b-it"
 DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
-CTX_LEN = 512
+CTX_LEN = 512 * 4
 LAYER = 9  # Target layer for activation steering (matching lightweight_sft.py)
 
 # SAE Configuration
 SAE_REPO_ID = "google/gemma-scope-9b-it-res"
+load_loras = ["thejaminator/sae-introspection-lora"]
 SAE_WIDTH = 16  # Can be 16 or 131
 SAE_FILENAME = f"layer_{LAYER}/width_16k/average_l0_88/params.npz"
 
@@ -94,13 +95,21 @@ class VLLMServer:
         self.llm = LLM(
             model=MODEL_NAME,
             tensor_parallel_size=1,
-            max_model_len=CTX_LEN * 4,
+            max_model_len=CTX_LEN,
             enforce_eager=True,
             dtype=DTYPE,
             disable_async_output_proc=True,
             gpu_memory_utilization=0.5,
+            enable_lora=True,
         )
         self.model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+        
+        # Load LoRA adapters
+        if load_loras:
+            print(f"Loading LoRA adapters: {load_loras}")
+            for lora_id in load_loras:
+                print(f"Loading LoRA adapter: {lora_id}")
+                self.llm.llm_engine.add_lora(lora_id)
         
         print("Loading SAE...")
         self.sae = load_gemma_scope_sae(

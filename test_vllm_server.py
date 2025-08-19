@@ -7,15 +7,17 @@ Test client for the vLLM server with activation steering hooks.
 import requests
 
 
-def test_chat_completion(sae_index=None, steering_coefficient=2.0) -> str | None:
+def test_chat_completion(sae_index: int | None = None, steering_coefficient: float = 2.0) -> str | None:
     """Test the chat completion endpoint."""
 
     url = "http://localhost:8000/v1/chat/completions"
 
     payload = {
-        "messages": [{"role": "user", "content": "What is the meaning of the word 'X'?"}],
-        "max_tokens": 100,
+        "messages": [{"role": "user", "content": "Can you explain to me what 'X' means? Format your final answer with <explanation>"}],
+        "max_tokens": 500,
         "temperature": 0.0,
+        # "model": "google/gemma-2-9b-it",
+        "model": "thejaminator/sae-introspection-lora",
     }
 
     # Add steering parameters if provided
