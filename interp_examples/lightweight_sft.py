@@ -36,7 +36,7 @@ import safetensors.torch
 import torch
 import torch.nn as nn
 import wandb
-from huggingface_hub import hf_hub_download, login, whoami, HfApi
+from huggingface_hub import hf_hub_download, login, whoami
 from peft import LoraConfig, get_peft_model
 from pydantic import BaseModel
 from torch.nn.utils import clip_grad_norm_
@@ -51,7 +51,6 @@ from transformers.tokenization_utils import PreTrainedTokenizer
 # ==============================================================================
 
 
-
 def push_lora_to_hf(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
@@ -61,39 +60,36 @@ def push_lora_to_hf(
 ) -> None:
     """
     Push the trained LoRA adapter to Hugging Face Hub.
-    
+
     Args:
         model: The trained model with LoRA adapters
         tokenizer: The tokenizer used with the model
         repo_id: HuggingFace repository ID (e.g., "username/repo-name")
         commit_message: Commit message for the upload
         private: Whether to make the repository private
-        
+
     Returns:
         bool: True if successful, False otherwise
     """
 
-            
     print(f"Pushing LoRA adapter to Hugging Face Hub: {repo_id}")
-    
+
     # Push the model (LoRA adapters)
     model.push_to_hub(
         repo_id=repo_id,
         commit_message=commit_message,
         private=private,
     )
-    
+
     # Push the tokenizer as well
     tokenizer.push_to_hub(
         repo_id=repo_id,
         commit_message=f"Upload tokenizer - {commit_message}",
         private=private,
     )
-    
+
     print(f"Successfully pushed LoRA adapter to: https://huggingface.co/{repo_id}")
 
-        
-    
 
 # ==============================================================================
 # 2. CONFIGURATION
@@ -197,15 +193,13 @@ class TrainingExample(BaseModel):
     @classmethod
     def with_positive_and_negative_examples(cls, sae_explanation: SAEExplained) -> "TrainingExample":
         positive_examples_text = "".join(
-            f"<positive_example>{example}</positive_example>\n"
-            for example in sae_explanation.positive_examples
+            f"<positive_example>{example}</positive_example>\n" for example in sae_explanation.positive_examples
         )
-        
+
         negative_examples_text = "".join(
-            f"<negative_example>{example}</negative_example>\n"
-            for example in sae_explanation.negative_examples
+            f"<negative_example>{example}</negative_example>\n" for example in sae_explanation.negative_examples
         )
-        
+
         prompt = f"""{positive_examples_text.rstrip()}
 {negative_examples_text.rstrip()}
 <explanation>{sae_explanation.explanation}</explanation>"""
@@ -258,6 +252,7 @@ class EvalStepResult(BaseModel):
 @dataclass
 class TrainingDataPoint:
     """Training data point with tensors."""
+
     input_ids: list[int]
     labels: list[int]  # Can contain -100 for ignored tokens
     steering_vectors: list[torch.Tensor]
@@ -689,7 +684,7 @@ def construct_train_dataset(
 
         if i == 0:
             # Fully print the first example
-            print(f"First training example:")
+            print("First training example:")
             print(full_messages)
             print("-" * 100)
 
@@ -926,7 +921,7 @@ def eval_features_batch(
     # Generate both samples first, then display them grouped by feature
     all_samples = []
     all_explanations = []
-    
+
     for sample_idx in range(2):
         with add_hook(submodule, hook_fn):
             output_ids = model.generate(**tokenized_input, **cfg.generation_kwargs)
@@ -934,30 +929,30 @@ def eval_features_batch(
         # Decode only the newly generated tokens
         generated_tokens = output_ids[:, eval_batch.input_ids.shape[1] :]
         decoded_output = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
-        
+
         explanations = []
         for output in decoded_output:
             explanations.append(parse_generated_explanation(output))
-        
+
         all_samples.append(decoded_output)
         all_explanations.append(explanations)
 
     # Now display and process both samples for each feature consecutively
     for i in range(len(eval_batch.feature_indices)):
         feature_idx = eval_batch.feature_indices[i]
-        
+
         print(f"\n=== Feature {feature_idx} ===")
-        
+
         # Show both samples for this feature
         for sample_idx in range(2):
             output = all_samples[sample_idx][i]
             print(f"Sample {sample_idx + 1}: {output}")
-            
+
             # Extract explanation string, handling None case
             explanation_str = ""
             if all_explanations[sample_idx][i] is not None:
                 explanation_str = all_explanations[sample_idx][i].explanation
-            
+
             feature_result = FeatureResult(
                 feature_idx=feature_idx,
                 api_response=output,
@@ -965,7 +960,7 @@ def eval_features_batch(
                 explanation=explanation_str,
             )
             feature_results.append(feature_result)
-        
+
         print()  # Empty line for readability
 
     return feature_results
@@ -1381,18 +1376,22 @@ def train_model(
             commit_message=f"SAE introspection LoRA - {run_name} - final model",
             private=cfg.hf_private_repo,
         )
-        
 
     wandb.finish()
 
 
 def main(explanations_file: str):
     """Main script logic."""
-    
+
     # Set up Hugging Face login at the start
     print("Setting up Hugging Face authentication...")
-    hf_logged_in = login()
-    
+    # check if already logged in
+    if whoami() is None:
+        print("Not logged in to Hugging Face. Attempting to log in...")
+        login()
+    else:
+        print("Already logged in to Hugging Face.")
+
     cfg = SelfInterpTrainingConfig(
         # Model settings
         model_name="google/gemma-2-9b-it",

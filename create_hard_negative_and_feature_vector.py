@@ -621,7 +621,7 @@ def main(
     target_features: Sequence[int] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
     target_sentences: int = 20,
     top_k_similar_features: int = 10,
-    negative_sentences: int = 8, # we don't need so many
+    negative_sentences: int = 8,  # we don't need so many
     output: str = "hard_negatives_results.jsonl",
     model_name: str = "google/gemma-2-9b-it",
     sae_repo_id: str = "google/gemma-scope-9b-it-res",
