@@ -619,8 +619,9 @@ def identify_hard_negatives(
 
 def main(
     target_features: Sequence[int] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-    num_sentences: int = 20,
+    target_sentences: int = 20,
     top_k_similar_features: int = 10,
+    negative_sentences: int = 8, # we don't need so many
     output: str = "hard_negatives_results.jsonl",
     model_name: str = "google/gemma-2-9b-it",
     sae_repo_id: str = "google/gemma-scope-9b-it-res",
@@ -673,7 +674,7 @@ def main(
         # Get sentences for target feature
         print(f"📝 Getting sentences for target feature {feature_idx}...")
         target_max_acts: FeatureMaxActivations = get_feature_max_activating_sentences(
-            acts_data, tokenizer, feature_idx, num_sentences
+            acts_data, tokenizer, feature_idx, target_sentences
         )
         target_sentences = target_max_acts.sentences
 
@@ -694,7 +695,7 @@ def main(
         for similar_feature in similar_features:
             # Get sentences for this similar feature
             similar_max_acts = get_feature_max_activating_sentences(
-                acts_data, tokenizer, similar_feature.feature_idx, num_sentences
+                acts_data, tokenizer, similar_feature.feature_idx, num_sentences=negative_sentences
             )
             # sometimes empty???
             candidate_similar_sentences = [s for s in similar_max_acts.sentences if s != ""]
@@ -777,6 +778,6 @@ def main(
 if __name__ == "__main__":
     # Example usage - customize the feature_idxs and other parameters as needed
     # first 500 features
-    target_features = list(range(1200))
+    target_features = list(range(2_000))
     # actually we want 32, but sometimes it fails, so need some buffer.
-    main(target_features=target_features, top_k_similar_features=34, batch_size=1024, num_sentences=32)
+    main(target_features=target_features, top_k_similar_features=34, batch_size=1024, target_sentences=32)
