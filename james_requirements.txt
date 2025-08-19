@@ -215,7 +215,7 @@ typing_extensions==4.12.2
 tzdata==2025.2
 urllib3==2.3.0
 uvicorn==0.35.0
-vllm==0.10.1
+vllm==0.10.0
 wadllib==1.3.6
 wandb==0.21.1
 watchfiles==1.1.0
