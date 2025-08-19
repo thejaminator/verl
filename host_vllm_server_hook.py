@@ -102,6 +102,7 @@ class VLLMServer:
             disable_async_output_proc=True,
             gpu_memory_utilization=0.5,
             enable_lora=True,
+            max_lora_rank=64,
         )
         self.model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
         
