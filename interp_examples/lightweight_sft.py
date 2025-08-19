@@ -1311,8 +1311,8 @@ def main(explanations_file: str):
         steering_coefficient=2.0,
         # LoRA settings
         use_lora=True,
-        lora_r=16,
-        lora_alpha=32,
+        lora_r=64,
+        lora_alpha=128,
         lora_dropout=0.05,
         lora_target_modules="all-linear",
         # Training settings
