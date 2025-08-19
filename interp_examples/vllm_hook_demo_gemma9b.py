@@ -319,7 +319,7 @@ def get_activation_steering_hook( # def debug_your_steering_hook(
 
 # %%
 # HF Transformers hook (copied from lightweight_sft.py)
-def get_hf_activation_steering_hook_debug(
+def get_hf_activation_steering_hook(
     vectors: list[torch.Tensor],  # [B, d_model]
     positions: list[int],  # [B]
     steering_coefficient: float,
