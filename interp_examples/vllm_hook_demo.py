@@ -9,41 +9,21 @@ os.environ['VLLM_USE_V1'] = '0'
 os.environ["NVTE_ALLOW_NONDETERMINISTIC_ALGO"] = "1"
 
 import torch
-import vllm
 from vllm import LLM, SamplingParams
-from vllm.model_executor import SamplingMetadata
-from vllm.model_executor.layers.logits_processor import _prune_hidden_states
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from datasets import load_dataset
-from tqdm import tqdm
-from jaxtyping import Float
+from transformers import AutoTokenizer
 from typing import Callable
 import contextlib
-from torch import Tensor
 
 import interp_tools.model_utils as model_utils
-import interp_tools.saes.jumprelu_sae as jumprelu_sae
 
 
 # %%
 model_name = "google/gemma-2-2b-it"
-# model_name = "meta-llama/Llama-3.1-8B-Instruct"
 dtype = torch.bfloat16
 device = torch.device("cuda")
-dataset_name = "lmsys/lmsys-chat-1m"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 ctx_len = 512
-
 max_decode_tokens = 100
-n_samples = 100
-
-# sampling_params = SamplingParams(temperature=0.8, top_p=0.95, ignore_eos=True, max_tokens=max_decode_tokens + 1)
-
-
-generation_kwargs = {
-    "max_new_tokens": max_decode_tokens+1,
-    "do_sample": False,
-}
 
 # %%
 
@@ -66,48 +46,15 @@ orig_input = tokenizer(test_input, return_tensors="pt", add_special_tokens=False
 )
 
 # %%
-
-hf_model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", torch_dtype=dtype)
-
-# %%
-with torch.no_grad():
-    hf_output_orig = hf_model.generate(**orig_input, **generation_kwargs, output_logits=True, return_dict_in_generate=True)
-    logits_hf_orig = torch.stack(hf_output_orig.logits)
-
-# %%
-
-print(hf_model)
-
-# %%
-layer = 20
 layer = 6
 
-repo_id = "google/gemma-scope-2b-pt-res"
-filename = f"layer_{layer}/width_16k/average_l0_71/params.npz"
-filename = f"layer_6/width_16k/average_l0_70/params.npz"
-# repo_id = "google/gemma-scope-9b-it-res"
-# layer = 9
-# filename = f"layer_9/width_16k/average_l0_88/params.npz"
-# model_name = "google/gemma-2-9b-it"
-
-# sae = jumprelu_sae.load_gemma_scope_jumprelu_sae(
-#     repo_id, filename, layer, model_name, device, dtype
-# )
-# %%
-feature_idx = 0
-# feature = sae.W_enc[:, feature_idx]
-# feature = sae.W_dec[feature_idx]
-
-if model_name == "meta-llama/Llama-3.1-8B-Instruct":
-    feature = torch.randn(4096)
-elif model_name == "google/gemma-2-2b-it":
+# Create a random feature vector for demo (in practice, this would be from SAE)
+if model_name == "google/gemma-2-2b-it":
     feature = torch.randn(2304)
 else:
     raise ValueError(f"Model {model_name} not supported")
 
-print(feature.shape)
-
-submodule = model_utils.get_submodule(hf_model, layer)
+print(f"Feature vector shape: {feature.shape}")
 
 
 
@@ -136,107 +83,81 @@ def add_hook(
         handle.remove()
 
 
-def get_activation_addition_output_hook(
-    vectors: list[Float[Tensor, "d_model"]],
-    coeffs: list[float],
-    positions: list[int],
+def get_activation_steering_hook(
+    vectors: list[torch.Tensor],  # [B] each with shape [d_model]
+    positions: list[int],  # [B]
+    steering_coefficient: float,
+    device: torch.device,
+    dtype: torch.dtype,
 ) -> Callable:
-    """Creates a hook function that adds scaled vectors to layer activations.
+    """
+    Returns a forward hook that *replaces* specified residual-stream activations
+    during the initial prompt pass of `model.generate`.
 
-    This hook performs a simple activation steering by adding scaled vectors
-    to the layer's output activations. This is the most basic form of intervention.
-
-    Args:
-        vectors: List of vectors to add, each of shape (d_model,)
-        coeffs: List of scaling coefficients for each vector
-
-    Returns:
-        Hook function that modifies layer activations
-
+    • vectors[b]   – feature vector to inject for batch b
+    • positions[b] – token index (0-based, within prompt only)
     """
 
-    assert len(vectors) == len(coeffs) == len(positions), (
-        f"len(vectors): {len(vectors)}, len(coeffs): {len(coeffs)}, len(positions): {len(positions)}"
-    )
+    # ---- pack Python lists → torch tensors once, outside the hook ----
+    vec_BD = torch.stack(vectors)  # (B, d_model)
+    pos_B = torch.tensor(positions, dtype=torch.long)  # (B,)
 
-    def hook_fn(module, input, output):
-        resid_BLD, *rest = output if isinstance(output, tuple) else (output,)
-        resid_BLD = resid_BLD.clone()
+    B, d_model = vec_BD.shape
+    assert pos_B.shape == (B,)
 
-        if resid_BLD.shape[1] > 1:
-            for i, (vector, coeff, position) in enumerate(
-                zip(vectors, coeffs, positions)
-            ):
-                i = 0  # TODO: Better solution
-                vector = vector.to(resid_BLD.device)
-                # resid_vector = resid_BLD[i, position]
-                resid_norm = torch.norm(resid_BLD[i, position])
+    vec_BD = vec_BD.to(device, dtype)
+    pos_B = pos_B.to(device)
 
-                # resid_vector = resid_BLD[i, position]
-                # resid_norm = torch.norm(resid_vector)
-                # vector = vector / torch.norm(vector) * resid_norm * 1
-                # resid_BLD[i, position] = vector
+    def hook_fn(module, _input, output):
+        print(f"🔥 HOOK CALLED! Module: {type(module).__name__}")
+        resid_flat, *rest = output  # vLLM uses flattened layout: (batch_size * seq_len, d_model)
+        total_tokens, d_model = resid_flat.shape
+        print(f"🔥 Hook processing: total_tokens {total_tokens}, d_model {d_model}, shape {resid_flat.shape}")
 
-                normalized_vector = vector / torch.norm(vector)
-                # normalized_resid_vector = resid_vector / torch.norm(resid_vector)
+        # vLLM flattens (B, L) -> (B*L), so we need to infer L from total_tokens
+        # Assuming all sequences have the same length L
+        L = total_tokens // B
+        print(f"🔥 Inferred: batch_size={B}, seq_len={L}")
 
-                # Mix half original resid_vector and half normalized vector
-                # mixed_vector = 0.0 * normalized_resid_vector + 1.0 * normalized_vector
-                mixed_vector = 1.0 * normalized_vector
-                # Normalize to maintain original norm
-                mixed_vector = mixed_vector * resid_norm
-                mixed_vector = mixed_vector * coeff
+        # Only touch the *prompt* forward pass (sequence length > 1)
+        if L <= 1:
+            print(f"Skipping hook because sequence length is <= 1, total_tokens: {total_tokens}")
+            return (resid_flat, *rest)
 
-                resid_BLD[i, position] = mixed_vector
+        print(f"Applying feature vector on module {type(module).__name__}. Sequence length: {L}, Batch size: {B}")
 
-        return (resid_BLD, *rest)
+        # Safety: make sure every position is inside current sequence
+        if (pos_B >= L).any():
+            bad = pos_B[pos_B >= L].min().item()
+            raise IndexError(f"position {bad} is out of bounds for length {L}")
+
+        # ---- compute flat indices for vLLM's layout ----
+        # For batch b at position p: flat_index = b * L + p
+        batch_offsets = torch.arange(B, device=device) * L  # (B,)
+        flat_indices = batch_offsets + pos_B  # (B,)
+
+        # ---- compute norms of original activations at the target slots ----
+        orig_BD = resid_flat[flat_indices]  # (B, d_model)
+        norms_B1 = orig_BD.norm(dim=-1, keepdim=True)  # (B, 1)
+
+        # ---- build steered vectors ----
+        steered_BD = torch.nn.functional.normalize(vec_BD, dim=-1) * norms_B1 * steering_coefficient  # (B, d_model)
+
+        # ---- in-place replacement via flat indexing ----
+        resid_flat[flat_indices] = steered_BD
+
+        return (resid_flat, *rest)
 
     return hook_fn
 
 
 # %%
-
-hf_acts_BLD = model_utils.collect_activations(hf_model, submodule, orig_input)
-print(hf_acts_BLD.shape)
-
-
-
-
-
-
-# %%
-
-hook_fn = get_activation_addition_output_hook([feature], [5.0], positions)
-
-context_manager = add_hook(submodule, hook_fn)
-
-with context_manager:
-    output_hf_v2= hf_model.generate(**orig_input, **generation_kwargs, output_logits=True, return_dict_in_generate=True)
-
-logits_hf_v2 = torch.stack(output_hf_v2.logits)
-
-# %%
-
-diff = logits_hf_v2 - logits_hf_orig
-print(f"mean diff: {diff.abs().mean()}, max diff: {diff.abs().max()}")
-# print(diff.abs().sum(dim=-1))
-
-# %%
-
-# llm_8bit = LLM(
-#     model=model_name,
-#     tensor_parallel_size=1,
-#     max_model_len=ctx_len*2,
-#     enforce_eager=True,
-#     dtype=dtype,
-#     disable_async_output_proc=True,
-#     quantization="fp8",
-# )
+# Initialize vLLM model
 
 llm = LLM(
     model=model_name,
     tensor_parallel_size=1,
-    max_model_len=ctx_len*8,
+    max_model_len=ctx_len*4,
     enforce_eager=True,
     dtype=dtype,
     disable_async_output_proc=True,
@@ -245,202 +166,35 @@ llm = LLM(
 model = llm.llm_engine.model_executor.driver_worker.model_runner.model
 
 # %%
-
+# Demo the activation steering hook
 list_tokens = orig_input["input_ids"].tolist()[0]
-sampling_params = SamplingParams(temperature=0.0, ignore_eos=False, max_tokens=max_decode_tokens+1)
+sampling_params = SamplingParams(temperature=0.0, ignore_eos=False, max_tokens=max_decode_tokens)
 
-logits_processor = llm.llm_engine.model_executor.driver_worker.model_runner.model.logits_processor
-saved_logits = []
-def logits_saving_hook(module, input, output):
-    saved_logits.append(output[0].detach().clone())
-
-saved_logits_handle = logits_processor.register_forward_hook(logits_saving_hook)
-
-try:
-    vllm_orig = llm.generate(prompt_token_ids=list_tokens, sampling_params=sampling_params, use_tqdm=False)
-except Exception as e:
-    print(e)
-finally:
-    saved_logits_handle.remove()
-
+# Generate baseline output without steering
+print("Generating baseline output...")
+vllm_baseline = llm.generate(prompt_token_ids=list_tokens, sampling_params=sampling_params, use_tqdm=False)
+baseline_text = vllm_baseline[0].outputs[0].text
+print(f"Baseline output: {baseline_text}")
 
 # %%
+# Now generate with activation steering
+print("\nGenerating with activation steering...")
+hook_fn = get_activation_steering_hook([feature], positions, 5.0, device, dtype)
 
-print(len(saved_logits))
-print(len(saved_logits[0]))
+# Apply hook to the specified layer
+target_layer = model.model.layers[layer]
+with add_hook(target_layer, hook_fn):
+    vllm_steered = llm.generate(prompt_token_ids=list_tokens, sampling_params=sampling_params, use_tqdm=False)
 
-vllm_orig_logits = torch.stack(saved_logits)
-
-print(vllm_orig_logits.shape)
-print(logits_hf_orig.squeeze(1).shape)
-
-
-vllm_output_tokens = vllm_orig[0].outputs[0].token_ids
-hf_output_tokens = hf_output_orig.sequences[0].tolist()
-
-
-input_length = len(orig_input["input_ids"][0])
-hf_output_tokens = hf_output_tokens[input_length:]
-
-print(vllm_output_tokens)
-print(hf_output_tokens)
-# Find where tokens first diverge
-diverge_idx = None
-min_len = min(len(vllm_output_tokens), len(hf_output_tokens))
-for i in range(min_len):
-    if vllm_output_tokens[i] != hf_output_tokens[i]:
-        diverge_idx = i
-        break
-
-print(f"Tokens diverge at index: {diverge_idx}")
-if diverge_idx is not None:
-    print(f"vLLM token at divergence: {vllm_output_tokens[diverge_idx]}")
-    print(f"HF token at divergence: {hf_output_tokens[diverge_idx]}")
-else:
-    diverge_idx = len(vllm_output_tokens) - 1
-
-
-idx = diverge_idx - 1
-
-diff = vllm_orig_logits[:idx] - logits_hf_orig.squeeze(1)[:idx]
-print(diff.shape)
-print(f"mean diff: {diff.abs().mean()}, max diff: {diff.abs().max()}")
-
-# print(vllm_output_tokens)
-
-# print(vllm_output_tokens[0].outputs[0].text)
-# print(tokenizer.decode(hf_output_orig.sequences[0]))
-# print(hf_output_orig.sequences)
+steered_text = vllm_steered[0].outputs[0].text
+print(f"Steered output: {steered_text}")
 
 # %%
-
-temp_saved_activations = []
-tokens_len = len(list_tokens)
-def activation_saving_hook(module, input, output):
-    if output[0].shape[0] > 1:
-
-        # assert input[0][tokens_len-1] == tokens_len-1, f"Seq length mismatch: {input[0][tokens_len-1]} != {tokens_len-1}"
-
-        print(len(input), input[0].shape, input[1].shape, output[0].shape, output[1].shape)
-        if len(input) == 3:
-            print(input[0][:])
-        temp_saved_activations.append(output[1].detach().clone())
-
-        # temp_saved_activations.append(input[2].detach().clone())
-
-
-saved_activations_handle = model.model.layers[layer].register_forward_hook(activation_saving_hook)
-
-try:
-    vllm_new = llm.generate(prompt_token_ids=list_tokens, sampling_params=sampling_params, use_tqdm=False)
-except Exception as e:
-    print(e)
-finally:
-    saved_activations_handle.remove()
-
-print(vllm_new[0].outputs[0].token_ids)
-print(temp_saved_activations[0].shape)
-
-# %%
-
-# TODO: PROBLEM HERE: numerical correctness in gemma-2-2b-it: 
-# mean diff: 0.64453125, max diff: 164.0
-
-hf_acts_BLD = hf_acts_BLD.squeeze(0)
-vllm_acts_BLD = temp_saved_activations[0]
-
-print(hf_acts_BLD.shape)
-print(vllm_acts_BLD.shape)
-
-print(hf_acts_BLD.abs().mean(), hf_acts_BLD.abs().max())
-print(vllm_acts_BLD.abs().mean(), vllm_acts_BLD.abs().max())
-
-diff = vllm_acts_BLD - hf_acts_BLD
-print(diff.shape)
-print(f"mean diff: {diff.abs().mean()}, max diff: {diff.abs().max()}")
-
-# %%
-
-
-
-
-
-# %%
-
-vllm_new = llm.generate(prompt_token_ids=list_tokens, sampling_params=sampling_params, use_tqdm=False)
-
-print(vllm_new[0].outputs[0].token_ids)
-
-print(len(vllm_new))
-print(len(vllm_new[0].outputs))
-
-# %%
-
-
-def get_vllm_activation_addition_output_hook(
-    vectors: list[Float[Tensor, "d_model"]],
-    coeffs: list[float],
-    positions: list[int],
-    seq_lengths: list[int],
-) -> Callable:
-    """Creates a hook function that adds scaled vectors to layer activations.
-
-    This hook performs a simple activation steering by adding scaled vectors
-    to the layer's output activations. This is the most basic form of intervention.
-
-    Args:
-        vectors: List of vectors to add, each of shape (d_model,)
-        coeffs: List of scaling coefficients for each vector
-
-    Returns:
-        Hook function that modifies layer activations
-
-    """
-
-    assert len(vectors) == len(coeffs) == len(positions), (
-        f"len(vectors): {len(vectors)}, len(coeffs): {len(coeffs)}, len(positions): {len(positions)}"
-    )
-
-    def hook_fn(module, input, output):
-        resid_BLD, *rest = output if isinstance(output, tuple) else (output,)
-        resid_BLD = resid_BLD.clone()
-
-        if resid_BLD.shape[1] > 1:
-            for i, (vector, coeff, position) in enumerate(
-                zip(vectors, coeffs, positions)
-            ):
-                i = 0  # TODO: Better solution
-                vector = vector.to(resid_BLD.device)
-                resid_norm = torch.norm(resid_BLD[i, position])
-
-                mixed_vector = vector / torch.norm(vector)
-                mixed_vector = mixed_vector * resid_norm
-                mixed_vector = mixed_vector * coeff
-
-                resid_BLD[i, position] = mixed_vector
-
-        return (resid_BLD, *rest)
-
-    return hook_fn
-
-
-
-list_tokens = orig_input["input_ids"].tolist()[0]
-sampling_params = SamplingParams(temperature=0.0, ignore_eos=False, max_tokens=max_decode_tokens+1)
-
-logits_processor = llm.llm_engine.model_executor.driver_worker.model_runner.model.logits_processor
-saved_logits = []
-def logits_saving_hook(module, input, output):
-    saved_logits.append(output[0].detach().clone())
-
-saved_logits_handle = logits_processor.register_forward_hook(logits_saving_hook)
-
-try:
-    vllm_orig = llm.generate(prompt_token_ids=list_tokens, sampling_params=sampling_params, use_tqdm=False)
-except Exception as e:
-    print(e)
-finally:
-    saved_logits_handle.remove()
-
-# %%
+# Compare outputs
+print("\n=== COMPARISON ===")
+print(f"Original prompt: {test_input}")
+print(f"Target positions for steering: {positions}")
+print(f"Baseline output: {baseline_text}")
+print(f"Steered output:  {steered_text}")
+print(f"\nOutputs are {'SAME' if baseline_text == steered_text else 'DIFFERENT'}")
 
