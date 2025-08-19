@@ -7,7 +7,7 @@ Test client for the vLLM server with activation steering hooks.
 import requests
 
 
-def test_chat_completion(sae_index: int | None = None, steering_coefficient: float = 2.0) -> str | None:
+def test_chat_completion(sae_index: int | None = None) -> str | None:
     """Test the chat completion endpoint."""
 
     url = "http://localhost:8000/v1/chat/completions"
@@ -23,7 +23,6 @@ def test_chat_completion(sae_index: int | None = None, steering_coefficient: flo
     # Add steering parameters if provided
     if sae_index is not None:
         payload["sae_index"] = sae_index
-        payload["steering_coefficient"] = steering_coefficient
 
     response = requests.post(url, json=payload)
 
@@ -50,7 +49,7 @@ def main():
     # Test with different SAE indices
     for sae_index in [42, 123, 999]:
         print(f"\n=== With SAE index {sae_index} ===")
-        steered_output = test_chat_completion(sae_index=sae_index, steering_coefficient=5.0)
+        steered_output = test_chat_completion(sae_index=sae_index)
         if steered_output:
             print(f"Output: {steered_output}")
             if baseline_output:

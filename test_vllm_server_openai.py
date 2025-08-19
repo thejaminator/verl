@@ -10,7 +10,6 @@ from openai import AsyncOpenAI
 async def test_chat_completion(
     client: AsyncOpenAI, 
     sae_index: int | None = None, 
-    steering_coefficient: float = 2.0
 ) -> str | None:
     """Test the chat completion endpoint using OpenAI async client."""
     
@@ -19,7 +18,6 @@ async def test_chat_completion(
         extra_body = {}
         if sae_index is not None:
             extra_body["sae_index"] = sae_index
-            extra_body["steering_coefficient"] = steering_coefficient
         
         response = await client.chat.completions.create(
             model="thejaminator/sae-introspection-lora",
@@ -64,9 +62,9 @@ async def main():
         # Baseline (no steering)
         test_chat_completion(client),
         # Tests with different SAE indices
-        test_chat_completion(client, sae_index=42, steering_coefficient=2.0),
-        test_chat_completion(client, sae_index=123, steering_coefficient=2.0),
-        test_chat_completion(client, sae_index=999, steering_coefficient=2.0),
+        test_chat_completion(client, sae_index=42),
+        test_chat_completion(client, sae_index=123),
+        test_chat_completion(client, sae_index=999),
 
     ]
 
