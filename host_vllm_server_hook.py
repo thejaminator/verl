@@ -281,13 +281,14 @@ class VLLMServer:
 
             # Generate batch with steering
             target_layer = self.model.model.layers[LAYER]
-            with add_hook(target_layer, hook_fn):
-                outputs = self.llm.generate(
-                    prompt_token_ids=token_lists,
-                    sampling_params=sampling_params,
-                    lora_request=lora_request,
-                    use_tqdm=False,
-                )
+            with torch.no_grad():
+                with add_hook(target_layer, hook_fn):
+                        outputs = self.llm.generate(
+                            prompt_token_ids=token_lists,
+                            sampling_params=sampling_params,
+                            lora_request=lora_request,
+                            use_tqdm=False,
+                        )
 
             # Process outputs and set results
             for i, (queued_request, output) in enumerate(zip(batch_requests, outputs, strict=False)):
@@ -385,22 +386,24 @@ def get_activation_steering_hook(
         # From the comment example, _input[0] contains position indices that repeat every L tokens
         position_indices = _input[0]  # tensor with position indices 0,1,2,...,L-1,0,1,2,...,L-1
         
-        # Debug: print position indices to understand the pattern
-        print(f"DEBUG: position_indices length: {len(position_indices)}")
-        print(f"DEBUG: position_indices first 20: {position_indices[:20]}")
-        print(f"DEBUG: total_tokens: {total_tokens}, d_model: {_d_model}")
         
         # The actual sequence length should be inferred from total_tokens / B
         # since we trust B and know total_tokens
         L = total_tokens // B
         B_actual = B  # Use provided batch size
+
+        # Only apply steering during prompt pass (sequence length > 1)
+        if L <= 1:
+            return (resid_flat, *rest)
+        
+        # Debug: print position indices to understand the pattern
+        print(f"DEBUG: position_indices length: {len(position_indices)}")
+        print(f"DEBUG: position_indices first 20: {position_indices[:20]}")
+        print(f"DEBUG: total_tokens: {total_tokens}, d_model: {_d_model}")
         
         print(f"DEBUG: Calculated L={L}, B_actual={B_actual}, B={B}")
         print(f"DEBUG: Expected reshape: {B_actual} * {L} * {_d_model} = {B_actual * L * _d_model}")
         
-        # Only apply steering during prompt pass (sequence length > 1)
-        if L <= 1:
-            return (resid_flat, *rest)
         
         # Trust the provided batch size
         
