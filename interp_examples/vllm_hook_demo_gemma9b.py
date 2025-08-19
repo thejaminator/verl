@@ -12,11 +12,13 @@ import torch
 import torch.nn as nn
 from vllm import LLM, SamplingParams
 from vllm.lora.request import LoRARequest
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import PeftModel
 from typing import Callable
 import contextlib
 import numpy as np
 from huggingface_hub import hf_hub_download
+import gc
 
 
 # %%
@@ -129,8 +131,8 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
 # Create test prompts with 'X' tokens
 test_inputs = [
-    [{"role": "user", "content": "What is the meaning of the word 'X'?"}],
-    [{"role": "user", "content": "What does the 'X' mean?"}]
+    [{"role": "user", "content": "Can you explain to me what 'X' means? Format your final answer with <explanation>"}],
+    # [{"role": "user", "content": "What does the 'X' mean?"}]
 ]
 
 # Apply chat template to both prompts
@@ -140,7 +142,7 @@ formatted_prompts = [
 ]
 
 print("Prompt 1:", formatted_prompts[0])
-print("Prompt 2:", formatted_prompts[1])
+# print("Prompt 2:", formatted_prompts[1])
 
 # Find positions of 'X' in each prompt
 positions = []
@@ -157,30 +159,6 @@ print(f"X positions: {positions}")
 tokenized = tokenizer(formatted_prompts, return_tensors="pt", add_special_tokens=False, padding=True).to(DEVICE)
 print(f"Tokenized shape: {tokenized['input_ids'].shape}")
 print(f"Attention mask shape: {tokenized['attention_mask'].shape}")
-
-# %%
-# Initialize vLLM model with LoRA support
-print("Initializing vLLM model...")
-llm = LLM(
-    model=MODEL_NAME,
-    tensor_parallel_size=1,
-    max_model_len=CTX_LEN,
-    enforce_eager=True,
-    dtype=DTYPE,
-    disable_async_output_proc=True,
-    gpu_memory_utilization=0.5,
-    enable_lora=True,
-    max_lora_rank=64,
-)
-model = llm.llm_engine.model_executor.driver_worker.model_runner.model
-
-# Load LoRA adapters
-if LOAD_LORAS:
-    print(f"Loading LoRA adapters: {LOAD_LORAS}")
-    for i, lora_id in enumerate(LOAD_LORAS, 1):
-        print(f"Loading LoRA adapter: {lora_id}")
-        lora_request = LoRARequest(lora_name=f"lora_{i}", lora_int_id=i, lora_path=lora_id)
-        llm.llm_engine.add_lora(lora_request)
 
 # %%
 # Load SAE
@@ -301,53 +279,192 @@ def get_activation_steering_hook(
 
     return hook_fn
 
+
 # %%
+# HF Transformers hook (copied from lightweight_sft.py)
+def get_hf_activation_steering_hook(
+    vectors: list[torch.Tensor],  # [B, d_model]
+    positions: list[int],  # [B]
+    steering_coefficient: float,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> Callable:
+    """
+    Returns a forward hook that *replaces* specified residual-stream activations
+    during the initial prompt pass of `model.generate`.
+
+    • vectors[b]  – feature vector to inject for batch b
+    • positions[b]– token index (0-based, within prompt only) for batch b
+    """
+
+    # ---- pack Python lists → torch tensors once, outside the hook ----
+    vec_BD = torch.stack(vectors)  # (B, d)
+    pos_B = torch.tensor(positions, dtype=torch.long)  # (B,)
+
+    B, d_model = vec_BD.shape
+    
+    # Handle the case where positions might create a scalar tensor instead of a 1D tensor
+    if pos_B.dim() == 0:  # scalar tensor case (when positions is a single integer instead of list)
+        pos_B = pos_B.unsqueeze(0)  # Convert scalar to (1,) shape
+    
+    assert pos_B.shape == (B,)
+
+    vec_BD = vec_BD.to(device, dtype)
+    pos_B = pos_B.to(device)
+
+    def hook_fn(module, _input, output):
+        resid_BLD, *rest = output  # Gemma returns (resid, hidden_states, ...)
+        L = resid_BLD.shape[1]
+
+        # Only touch the *prompt* forward pass (sequence length > 1)
+        if L <= 1:
+            return (resid_BLD, *rest)
+
+        # Safety: make sure every position is inside current sequence
+        if (pos_B >= L).any():
+            bad = pos_B[pos_B >= L].min().item()
+            raise IndexError(f"position {bad} is out of bounds for length {L}")
+
+        # ---- compute norms of original activations at the target slots ----
+        batch_idx_B = torch.arange(B, device=device)  # (B,)
+        orig_BD = resid_BLD[batch_idx_B, pos_B]  # (B, d)
+        norms_B1 = orig_BD.norm(dim=-1, keepdim=True).detach()  # (B, 1)
+
+        # ---- build steered vectors ----
+        steered_BD = torch.nn.functional.normalize(vec_BD, dim=-1) * norms_B1 * steering_coefficient  # (B, d)
+
+        # ---- in-place replacement via advanced indexing ----
+        resid_BLD[batch_idx_B, pos_B] = steered_BD
+
+        return (resid_BLD, *rest)
+
+    return hook_fn
+
+
+def get_hf_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = False):
+    """Gets the residual stream submodule for HF transformers"""
+    model_name = model.config._name_or_path
+
+    if use_lora:
+        if "pythia" in model_name:
+            raise ValueError("Need to determine how to get submodule for LoRA")
+        elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name:
+            return model.base_model.model.model.layers[layer]
+        else:
+            raise ValueError(f"Please add submodule for model {model_name}")
+
+    if "pythia" in model_name:
+        return model.gpt_neox.layers[layer]
+    elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name:
+        return model.model.layers[layer]
+    else:
+        raise ValueError(f"Please add submodule for model {model_name}")
+
+
+def unload_model(model):
+    """Properly unload a model to free GPU memory"""
+    if hasattr(model, 'cpu'):
+        model.cpu()
+    del model
+    torch.cuda.empty_cache()
+    gc.collect()
+
+# %%
+# =============================================================================
+# PART 1: HUGGING FACE TRANSFORMERS TEST
+# =============================================================================
+print("="*80)
+print("PART 1: Testing with Hugging Face Transformers")
+print("="*80)
+
+# Load HF model with LoRA
+print("Loading Hugging Face model...")
+hf_model = AutoModelForCausalLM.from_pretrained(
+    MODEL_NAME, 
+    device_map="auto", 
+    torch_dtype=DTYPE, 
+    attn_implementation="eager"
+)
+
+# Load LoRA adapter
+print(f"Loading LoRA adapter: {LOAD_LORAS[0]}")
+hf_model = PeftModel.from_pretrained(hf_model, LOAD_LORAS[0])
+
+# Get the target submodule for the hook
+hf_target_layer = get_hf_submodule(hf_model, LAYER, use_lora=True)
+
+# Prepare the hook
+hf_hook_fn = get_hf_activation_steering_hook(features, positions, STEERING_COEFFICIENT, DEVICE, DTYPE)
+
+# Generate with LoRA + steering
+print(f"Generating with HF Transformers (LoRA + Steering, SAE index {SAE_INDEX})...")
+with add_hook(hf_target_layer, hf_hook_fn):
+    with torch.no_grad():
+        hf_outputs = hf_model.generate(
+            **tokenized,
+            do_sample=False,
+            max_new_tokens=MAX_DECODE_TOKENS,
+            pad_token_id=tokenizer.eos_token_id
+        )
+
+# Decode the new tokens only
+hf_generated_tokens = hf_outputs[:, tokenized['input_ids'].shape[1]:]
+hf_texts = tokenizer.batch_decode(hf_generated_tokens, skip_special_tokens=True)
+
+print("HF Transformers outputs (LoRA + Steering):")
+for i, text in enumerate(hf_texts):
+    print(f"  Prompt {i+1}: {text}")
+
+# Unload HF model to free memory
+print("Unloading HF model...")
+unload_model(hf_model)
+
+# %%
+# =============================================================================
+# PART 2: VLLM TEST  
+# =============================================================================
+print("\n" + "="*80)
+print("PART 2: Testing with vLLM")
+print("="*80)
+
 # Demo the activation steering hook with batch of prompts
 batch_token_lists = tokenized["input_ids"].tolist()
 sampling_params = SamplingParams(temperature=0.0, ignore_eos=False, max_tokens=MAX_DECODE_TOKENS)
 
-# Generate baseline outputs without steering
-print("Generating baseline outputs...")
-vllm_baseline = llm.generate(prompt_token_ids=batch_token_lists, sampling_params=sampling_params, use_tqdm=False)
-baseline_texts = [output.outputs[0].text for output in vllm_baseline]
-print("Baseline outputs:")
-for i, text in enumerate(baseline_texts):
-    print(f"  Prompt {i+1}: {text}")
+# %%
+# Initialize vLLM model with LoRA support
+print("Initializing vLLM model...")
+llm = LLM(
+    model=MODEL_NAME,
+    tensor_parallel_size=1,
+    max_model_len=CTX_LEN,
+    enforce_eager=True,
+    dtype=DTYPE,
+    disable_async_output_proc=True,
+    gpu_memory_utilization=0.5,
+    enable_lora=True,
+    max_lora_rank=64,
+)
+vllm_model = llm.llm_engine.model_executor.driver_worker.model_runner.model
+
+# Load LoRA adapters
+if LOAD_LORAS:
+    print(f"Loading LoRA adapters: {LOAD_LORAS}")
+    for i, lora_id in enumerate(LOAD_LORAS, 1):
+        print(f"Loading LoRA adapter: {lora_id}")
+        lora_request = LoRARequest(lora_name=f"lora_{i}", lora_int_id=i, lora_path=lora_id)
+        llm.llm_engine.add_lora(lora_request)
 
 # %%
-# Now generate with activation steering using SAE feature
-print(f"\nGenerating with activation steering (SAE index {SAE_INDEX})...")
-hook_fn = get_activation_steering_hook(features, positions, STEERING_COEFFICIENT, DEVICE, DTYPE)
+# Test with both LoRA and steering in vLLM
+print(f"Generating with vLLM (LoRA + Steering, SAE index {SAE_INDEX})...")
+vllm_hook_fn = get_activation_steering_hook(features, positions, STEERING_COEFFICIENT, DEVICE, DTYPE)
 
 # Apply hook to the specified layer
-target_layer = model.model.layers[LAYER]
-with add_hook(target_layer, hook_fn):
-    vllm_steered = llm.generate(prompt_token_ids=batch_token_lists, sampling_params=sampling_params, use_tqdm=False)
-
-steered_texts = [output.outputs[0].text for output in vllm_steered]
-print("Steered outputs:")
-for i, text in enumerate(steered_texts):
-    print(f"  Prompt {i+1}: {text}")
-
-# %%
-# Test with LoRA as well
-print(f"\nGenerating with LoRA (model: {LOAD_LORAS[0]})...")
+vllm_target_layer = vllm_model.model.layers[LAYER]
 lora_request = LoRARequest(lora_name="lora_1", lora_int_id=1, lora_path=LOAD_LORAS[0])
-vllm_lora = llm.generate(
-    prompt_token_ids=batch_token_lists, 
-    sampling_params=sampling_params, 
-    lora_request=lora_request,
-    use_tqdm=False
-)
-lora_texts = [output.outputs[0].text for output in vllm_lora]
-print("LoRA outputs:")
-for i, text in enumerate(lora_texts):
-    print(f"  Prompt {i+1}: {text}")
 
-# %%
-# Test with both LoRA and steering
-print(f"\nGenerating with both LoRA and activation steering...")
-with add_hook(target_layer, hook_fn):
+with add_hook(vllm_target_layer, vllm_hook_fn):
     vllm_lora_steered = llm.generate(
         prompt_token_ids=batch_token_lists, 
         sampling_params=sampling_params, 
@@ -355,28 +472,23 @@ with add_hook(target_layer, hook_fn):
         use_tqdm=False
     )
 
-lora_steered_texts = [output.outputs[0].text for output in vllm_lora_steered]
-print("LoRA + Steered outputs:")
-for i, text in enumerate(lora_steered_texts):
+vllm_texts = [output.outputs[0].text for output in vllm_lora_steered]
+print("vLLM outputs (LoRA + Steering):")
+for i, text in enumerate(vllm_texts):
     print(f"  Prompt {i+1}: {text}")
 
 # %%
-# Compare all outputs
-print("\n=== COMPARISON ===")
+# =============================================================================
+# COMPARISON
+# =============================================================================
+print("\n" + "="*80)
+print("COMPARISON: HF Transformers vs vLLM")
+print("="*80)
+
 for i in range(len(formatted_prompts)):
     print(f"\n--- Prompt {i+1} ---")
     print(f"Original prompt: {formatted_prompts[i]}")
     print(f"Target position for steering: {positions[i]}")
-    print(f"Baseline output:     {baseline_texts[i]}")
-    print(f"Steered output:      {steered_texts[i]}")
-    print(f"LoRA output:         {lora_texts[i]}")
-    print(f"LoRA+Steered output: {lora_steered_texts[i]}")
-    print(f"Baseline vs Steered: {'SAME' if baseline_texts[i] == steered_texts[i] else 'DIFFERENT'}")
-    print(f"Baseline vs LoRA:    {'SAME' if baseline_texts[i] == lora_texts[i] else 'DIFFERENT'}")
-    print(f"LoRA vs LoRA+Steered: {'SAME' if lora_texts[i] == lora_steered_texts[i] else 'DIFFERENT'}")
-
-print(f"\nSAE Feature Analysis:")
-print(f"SAE Index: {SAE_INDEX}")
-print(f"Feature vector norm: {feature_vector.norm().item():.4f}")
-print(f"Feature vector mean: {feature_vector.mean().item():.4f}")
-print(f"Feature vector std: {feature_vector.std().item():.4f}")
+    print(f"HF Transformers (LoRA+Steering): {hf_texts[i]}")
+    print(f"vLLM (LoRA+Steering):           {vllm_texts[i]}")
+    print(f"Outputs match: {'YES' if hf_texts[i].strip() == vllm_texts[i].strip() else 'NO'}")
