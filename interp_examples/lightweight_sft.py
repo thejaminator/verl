@@ -1370,9 +1370,9 @@ def main(explanations_file: str):
     print(f"Train features: {len(train_features)}")
 
     # Use a subset of training features for evaluation
-    # 0 to 25, then 10_000 to 10_025
-    # 0 to 25 is in training, 10_000 to 10_025 is in eval
-    cfg.eval_features = [i for i in range(25)] + [i for i in range(10_000, 10_025)]
+    # 0 to 10, then 10_000 to 10_030
+    # 0 to 10 is in training, 10_000 to 10_030 is in eval
+    cfg.eval_features = [i for i in range(10)] + [i for i in range(10_000, 10_030)]
 
     print(f"Using {len(cfg.eval_features)} features for evaluation")
 
