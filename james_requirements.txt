@@ -34,7 +34,6 @@ cramjam==2.11.0
 cryptography==3.4.8
 cupy-cuda12x==13.6.0
 datasets==4.0.0
-dbus-python==1.2.18
 debugpy==1.8.13
 decorator==5.2.1
 defusedxml==0.7.1
@@ -43,7 +42,6 @@ dill==0.3.8
 diskcache==5.6.3
 distlib==0.4.0
 distro==1.9.0
-dnspython==2.7.0
 dotenv==0.9.9
 einops==0.8.1
 email_validator==2.2.0
@@ -61,7 +59,6 @@ frozenlist==1.7.0
 fsspec==2024.10.0
 gguf==0.17.1
 gitdb==4.0.12
-GitPython==3.1.45
 google-api-core==2.25.1
 google-auth==2.40.3
 googleapis-common-protos==1.70.0
@@ -77,10 +74,6 @@ identify==2.6.13
 idna==3.10
 importlib_metadata==8.7.0
 interegular==0.3.3
-ipykernel==6.29.5
-ipython==9.0.2
-ipython_pygments_lexers==1.1.1
-ipywidgets==8.1.5
 isoduration==20.11.0
 jedi==0.19.2
 jeepney==0.7.1
