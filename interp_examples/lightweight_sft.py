@@ -867,12 +867,17 @@ def eval_features_batch(
 
     for i, output in enumerate(decoded_output):
         feature_idx = eval_batch.feature_indices[i]
-
+        
+        # Extract explanation string, handling None case
+        explanation_str = ""
+        if explanations[i] is not None:
+            explanation_str = explanations[i].explanation
+        
         feature_result = FeatureResult(
             feature_idx=feature_idx,
             api_response=output,
             prompt=decoded_prompts[i],
-            explanation=explanations[i],
+            explanation=explanation_str,
         )
 
         feature_results.append(feature_result)
@@ -1312,7 +1317,7 @@ def main(explanations_file: str):
         lora_target_modules="all-linear",
         # Training settings
         num_epochs=2,
-        lr=4e-5,
+        lr=2e-5,
         eval_steps=1000,
         save_steps=2000,
         save_dir="checkpoints",
