@@ -276,6 +276,8 @@ def get_activation_steering_hook( # def debug_your_steering_hook(
             intervention_indices_L.append(intervention_idx)
             idx += prompt_lengths[i]
 
+        assert idx >= tokens_L.shape[0]
+
         intervention_indices_L = torch.stack(intervention_indices_L)
 
         assert intervention_indices_L.shape[0] == B
