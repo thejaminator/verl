@@ -13,6 +13,7 @@ from collections import defaultdict, deque
 from typing import Any, Callable, Optional
 
 import numpy as np
+from distutils.command.build_scripts import first_line_re
 import torch
 import torch.nn as nn
 import uvicorn
@@ -278,12 +279,13 @@ class VLLMServer:
                     steering_vectors.append(zero_vector)
                     steering_positions.append(0)  # Position 0 as fallback
             
-            # Set up sampling parameters (use first request's params for all)
-            first_request = batch_requests[0].request
+            #  TODO: this is dumb but whatever
+            temperature = batch_requests[0].request.temperature
+            max_tokens = batch_requests[0].request.max_tokens
             sampling_params = SamplingParams(
-                temperature=first_request.temperature, 
+                temperature=temperature, 
                 ignore_eos=False, 
-                max_tokens=first_request.max_tokens
+                max_tokens=max_tokens
             )
             
             # Create steering hook for the entire batch

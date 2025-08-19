@@ -25,7 +25,7 @@ async def test_chat_completion(
                 {"role": "user", "content": "Can you explain to me what 'X' means? Format your final answer with <explanation>"}
             ],
             max_tokens=500,
-            temperature=0.0,
+            temperature=1.0,
             extra_body=extra_body if extra_body else None
         )
         
