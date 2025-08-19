@@ -326,60 +326,6 @@ def add_hook(module: torch.nn.Module, hook: Callable):
         handle.remove()
 
 
-def get_activation_steering_hook_huggingface(
-    vectors: list[torch.Tensor],  # [B, d_model]
-    positions: list[int],  # [B]
-    steering_coefficient: float,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> Callable:
-    """
-    Returns a forward hook that *replaces* specified residual-stream activations
-    during the initial prompt pass of `model.generate`.
-
-    • vectors[b]  – feature vector to inject for batch b
-    • positions[b]– token index (0-based, within prompt only) for batch b
-    """
-
-    # ---- pack Python lists → torch tensors once, outside the hook ----
-    vec_BD = torch.stack(vectors)  # (B, d)
-    pos_B = torch.tensor(positions, dtype=torch.long)  # (B,)
-
-    B, d_model = vec_BD.shape
-    assert pos_B.shape == (B,)
-
-    vec_BD = vec_BD.to(device, dtype)
-    pos_B = pos_B.to(device)
-
-    def hook_fn(module, _input, output):
-        resid_BLD, *rest = output  # Gemma returns (resid, hidden_states, ...)
-        L = resid_BLD.shape[1]
-
-        # Only touch the *prompt* forward pass (sequence length > 1)
-        if L <= 1:
-            return (resid_BLD, *rest)
-
-        # Safety: make sure every position is inside current sequence
-        if (pos_B >= L).any():
-            bad = pos_B[pos_B >= L].min().item()
-            raise IndexError(f"position {bad} is out of bounds for length {L}")
-
-        # ---- compute norms of original activations at the target slots ----
-        batch_idx_B = torch.arange(B, device=device)  # (B,)
-        orig_BD = resid_BLD[batch_idx_B, pos_B]  # (B, d)
-        norms_B1 = orig_BD.norm(dim=-1, keepdim=True).detach()  # (B, 1)
-
-        # ---- build steered vectors ----
-        steered_BD = torch.nn.functional.normalize(vec_BD, dim=-1) * norms_B1 * steering_coefficient  # (B, d)
-
-        # ---- in-place replacement via advanced indexing ----
-        resid_BLD[batch_idx_B, pos_B] = steered_BD
-
-        return (resid_BLD, *rest)
-
-    return hook_fn
-
-
 def get_activation_steering_hook(
     vectors: list[torch.Tensor],
     positions: list[int],
@@ -439,52 +385,43 @@ def get_activation_steering_hook(
         # From the comment example, _input[0] contains position indices that repeat every L tokens
         position_indices = _input[0]  # tensor with position indices 0,1,2,...,L-1,0,1,2,...,L-1
         
-        # Find sequence length by looking at the pattern in position indices
-        # Look for where the pattern repeats (first occurrence of 0 after position 0)
-        if len(position_indices) > 1:
-            # Find the first repeat of position 0
-            first_zero_after_start = None
-            for i in range(1, len(position_indices)):
-                if position_indices[i] == 0:
-                    first_zero_after_start = i
-                    break
-            
-            if first_zero_after_start is not None:
-                L = first_zero_after_start  # sequence length
-            else:
-                # If no repeat found, assume single sequence
-                L = total_tokens
-        else:
-            # Single token case
-            L = 1
+        # Debug: print position indices to understand the pattern
+        print(f"DEBUG: position_indices length: {len(position_indices)}")
+        print(f"DEBUG: position_indices first 20: {position_indices[:20]}")
+        print(f"DEBUG: total_tokens: {total_tokens}, d_model: {_d_model}")
+        
+        # The actual sequence length should be inferred from total_tokens / B
+        # since we trust B and know total_tokens
+        L = total_tokens // B
+        B_actual = B  # Use provided batch size
+        
+        print(f"DEBUG: Calculated L={L}, B_actual={B_actual}, B={B}")
+        print(f"DEBUG: Expected reshape: {B_actual} * {L} * {_d_model} = {B_actual * L * _d_model}")
         
         # Only apply steering during prompt pass (sequence length > 1)
         if L <= 1:
             return (resid_flat, *rest)
         
-        # Use the provided batch size directly
-        effective_B = B
-        vec_BD_eff = vec_BD
-        pos_B_eff = pos_B
+        # Trust the provided batch size
         
-        # Reshape flattened tensor to (B, L, d_model) format
-        resid_BLD = resid_flat.view(B, L, _d_model)
+        # Reshape flattened tensor to (B_actual, L, d_model) format using actual tensor dimensions
+        resid_BLD = resid_flat.view(B_actual, L, _d_model)
         
         # Safety: make sure every position is inside current sequence
-        if (pos_B_eff >= L).any():
-            bad = pos_B_eff[pos_B_eff >= L].min().item()
+        if (pos_B >= L).any():
+            bad = pos_B[pos_B >= L].min().item()
             raise IndexError(f"position {bad} is out of bounds for length {L}")
         
         # ---- compute norms of original activations at the target slots ----
-        batch_idx_B = torch.arange(effective_B, device=device)  # (effective_B,)
-        orig_BD = resid_BLD[batch_idx_B, pos_B_eff]  # (effective_B, d_model)
-        norms_B1 = orig_BD.norm(dim=-1, keepdim=True).detach()  # (effective_B, 1)
+        batch_idx_B = torch.arange(B, device=device)  # (B,)
+        orig_BD = resid_BLD[batch_idx_B, pos_B]  # (B, d_model)
+        norms_B1 = orig_BD.norm(dim=-1, keepdim=True).detach()  # (B, 1)
         
         # ---- build steered vectors ----
-        steered_BD = torch.nn.functional.normalize(vec_BD_eff, dim=-1) * norms_B1 * steering_coefficient  # (effective_B, d_model)
+        steered_BD = torch.nn.functional.normalize(vec_BD, dim=-1) * norms_B1 * steering_coefficient  # (B, d_model)
         
         # ---- in-place replacement via advanced indexing ----
-        resid_BLD[batch_idx_B, pos_B_eff] = steered_BD
+        resid_BLD[batch_idx_B, pos_B] = steered_BD
         
         # Reshape back to flattened format (B*L, d_model)
         resid_flat_modified = resid_BLD.view(total_tokens, _d_model)

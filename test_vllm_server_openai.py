@@ -73,8 +73,6 @@ async def main():
         [
             # Baseline (no steering)
             test_chat_completion(client),
-            # Tests with different SAE indices
-            test_chat_completion(client, sae_index=0),
             # 10027: good feature?
             test_chat_completion(client, sae_index=10027),
             # 10026 film feature
