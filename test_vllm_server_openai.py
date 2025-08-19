@@ -4,35 +4,45 @@ Test client for the vLLM server with activation steering hooks using OpenAI asyn
 """
 
 import asyncio
+
 from openai import AsyncOpenAI
+from pydantic import BaseModel
+from slist import Slist
+
+
+class TestChatCompletion(BaseModel):
+    sae_index: int | None = None
+    response: str
 
 
 async def test_chat_completion(
-    client: AsyncOpenAI, 
-    sae_index: int | None = None, 
-) -> str | None:
+    client: AsyncOpenAI,
+    sae_index: int | None = None,
+) -> TestChatCompletion | None:
     """Test the chat completion endpoint using OpenAI async client."""
-    
-    try:
-        # Prepare extra parameters for steering
-        extra_body = {}
-        if sae_index is not None:
-            extra_body["sae_index"] = sae_index
-        
-        response = await client.chat.completions.create(
-            model="thejaminator/sae-introspection-lora",
-            messages=[
-                {"role": "user", "content": "Can you explain to me what 'X' means? Format your final answer with <explanation>"}
-            ],
-            max_tokens=500,
-            temperature=1.0,
-            extra_body=extra_body if extra_body else None
-        )
-        
-        return response.choices[0].message.content
-    except Exception as e:
-        print(f"Error: {e}")
-        return None
+
+    # Prepare extra parameters for steering
+    extra_body = {}
+    if sae_index is not None:
+        extra_body["sae_index"] = sae_index
+
+    response = await client.chat.completions.create(
+        model="thejaminator/sae-introspection-lora",
+        messages=[
+            {
+                "role": "user",
+                "content": "Can you explain to me what 'X' means? Format your final answer with <explanation>",
+            }
+        ],
+        max_tokens=500,
+        temperature=1.0,
+        extra_body=extra_body if extra_body else None,
+    )
+
+    return TestChatCompletion(
+        sae_index=sae_index,
+        response=response.choices[0].message.content,  # type: ignore
+    )
 
 
 async def test_health_check(client: AsyncOpenAI) -> None:
@@ -47,55 +57,39 @@ async def test_health_check(client: AsyncOpenAI) -> None:
 
 async def main():
     """Run tests comparing baseline vs steered outputs in parallel."""
-    
+
     # Initialize OpenAI client pointed to local server
     client = AsyncOpenAI(
         api_key="dummy-key",  # vLLM doesn't require a real API key
-        base_url="http://localhost:8000/v1"
+        # base_url="http://localhost:8000/v1"
+        base_url="https://94nlcy6stx75yz-8000.proxy.runpod.net/v1",
     )
 
     print("Testing vLLM server with activation steering using OpenAI async client...")
     print("Running all requests in parallel...")
 
     # Create all tasks to run in parallel
-    tasks = [
-        # Baseline (no steering)
-        test_chat_completion(client),
-        # Tests with different SAE indices
-        test_chat_completion(client, sae_index=0),
-        test_chat_completion(client, sae_index=42),
-        test_chat_completion(client, sae_index=123),
-        test_chat_completion(client, sae_index=999),
-
-    ]
+    tasks = Slist(
+        [
+            # Baseline (no steering)
+            test_chat_completion(client),
+            # Tests with different SAE indices
+            test_chat_completion(client, sae_index=0),
+            # 10027
+            test_chat_completion(client, sae_index=10027),
+            test_chat_completion(client, sae_index=42),
+            test_chat_completion(client, sae_index=123),
+            test_chat_completion(client, sae_index=999),
+        ]
+    )
 
     # Run all tasks in parallel
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # Process and display results
-    labels = [
-        "Baseline (no steering)",
-        "SAE index 42",
-        "SAE index 123", 
-        "SAE index 999",
-     ]
-    
-    baseline_output = None
-    
-    for i, (label, result) in enumerate(zip(labels, results)):
-        print(f"\n=== {label} ===")
-        if isinstance(result, Exception):
-            print(f"Error: {result}")
+    results: Slist[TestChatCompletion | None] = await tasks.par_map_async(lambda x: x)
 
-        else:
-            if result:
-                print(f"Output: {result}")
-                if i == 0:  # Save baseline for comparison
-                    baseline_output = result
-                elif baseline_output and i > 0:
-                    print(f"Same as baseline: {'Yes' if result == baseline_output else 'No'}")
-            else:
-                print("No output received")
+    for result in results:
+        assert result is not None
+        print(f"\n=== {result.sae_index if result.sae_index is not None else 'Baseline'} ===")
+        print(f"Output: {result.response}")
 
 
 if __name__ == "__main__":
