@@ -218,98 +218,120 @@ class VLLMServer:
             await self.process_queue(model_key)
 
     async def _process_batch(self, batch_requests: list[QueuedRequest], model_key: str):
-        """Process a batch of requests synchronously."""
-        for queued_request in batch_requests:
-            try:
-                response = await self._generate_single_response(queued_request.request, queued_request.request_id)
-                queued_request.future.set_result(response)
-            except Exception as e:
-                queued_request.future.set_exception(e)
-
-    async def _generate_single_response(self, request: ChatCompletionRequest, request_id: str) -> ChatCompletionResponse:
-        """Generate a single response for a request (extracted from original endpoint logic)."""
-        # Format the messages using chat template
-        formatted_prompt = self.tokenizer.apply_chat_template(
-            [msg.dict() for msg in request.messages], tokenize=False, add_generation_prompt=True
-        )
-
-        # Tokenize the prompt
-        tokenized = self.tokenizer(formatted_prompt, return_tensors="pt", add_special_tokens=False)
-        token_list = tokenized["input_ids"].tolist()[0]
-
-        # Set up sampling parameters
-        sampling_params = SamplingParams(temperature=request.temperature, ignore_eos=False, max_tokens=request.max_tokens)
-        
-        # Determine LoRA request if model is specified and different from base model
-        lora_request = None
-        if request.model != MODEL_NAME:
-            # Find the LoRA ID based on the model name
-            for i, lora_id in enumerate(load_loras, 1):
-                if request.model == lora_id or request.model == f"lora_{i}":
-                    lora_request = LoRARequest(
-                        lora_name=f"lora_{i}",
-                        lora_int_id=i,
-                        lora_path=lora_id
-                    )
-                    break
-            if lora_request is None:
-                raise HTTPException(status_code=400, detail=f"Model {request.model} not found in loaded LoRAs")
-
-        # Generate response
-        if request.sae_index is not None:
-            # Find X positions for steering
-            x_positions = find_x_positions(formatted_prompt, self.tokenizer)
-
-            if not x_positions:
-                raise HTTPException(status_code=400, detail="No 'X' token found in prompt for steering")
-
-            # Get SAE feature vector from loaded SAE
-            feature_vector = get_sae_feature_vector(request.sae_index, self.sae)
-
-            # Create steering hook
+        """Process a batch of requests as a true batch."""
+            
+        try:
+            # Prepare batch data
+            prompts = []
+            token_lists = []
+            request_ids = []
+            steering_vectors = []
+            steering_positions = []
+            steering_coefficients = []
+            
+            # Determine LoRA request (all requests in batch should use same model)
+            lora_request = None
+            model_name = batch_requests[0].request.model
+            if model_name != MODEL_NAME:
+                for i, lora_id in enumerate(load_loras, 1):
+                    if model_name == lora_id or model_name == f"lora_{i}":
+                        lora_request = LoRARequest(
+                            lora_name=f"lora_{i}",
+                            lora_int_id=i,
+                            lora_path=lora_id
+                        )
+                        break
+                if lora_request is None:
+                    raise HTTPException(status_code=400, detail=f"Model {model_name} not found in loaded LoRAs")
+            
+            # Process each request in the batch
+            for queued_request in batch_requests:
+                request = queued_request.request
+                
+                # Format prompt
+                formatted_prompt = self.tokenizer.apply_chat_template(
+                    [msg.dict() for msg in request.messages], tokenize=False, add_generation_prompt=True
+                )
+                prompts.append(formatted_prompt)
+                
+                # Tokenize
+                tokenized = self.tokenizer(formatted_prompt, return_tensors="pt", add_special_tokens=False)
+                token_list = tokenized["input_ids"].tolist()[0]
+                token_lists.append(token_list)
+                request_ids.append(queued_request.request_id)
+                
+                # Handle steering
+                if request.sae_index is not None:
+                    # Find X positions for steering
+                    x_positions = find_x_positions(formatted_prompt, self.tokenizer)
+                    if not x_positions:
+                        raise HTTPException(status_code=400, detail="No 'X' token found in prompt for steering")
+                    
+                    # Get SAE feature vector
+                    feature_vector = get_sae_feature_vector(request.sae_index, self.sae)
+                    steering_vectors.append(feature_vector)
+                    steering_positions.append(x_positions[0])
+                    steering_coefficients.append(request.steering_coefficient)
+                else:
+                    # Use zero vector for non-steering requests
+                    zero_vector = torch.zeros(self.sae.d_in, dtype=DTYPE, device=DEVICE)
+                    steering_vectors.append(zero_vector)
+                    steering_positions.append(0)  # Position 0 as fallback
+                    steering_coefficients.append(0.0)  # No steering
+            
+            # Set up sampling parameters (use first request's params for all)
+            first_request = batch_requests[0].request
+            sampling_params = SamplingParams(
+                temperature=first_request.temperature, 
+                ignore_eos=False, 
+                max_tokens=first_request.max_tokens
+            )
+            
+            # Create steering hook for the entire batch
             hook_fn = get_activation_steering_hook(
-                vectors=[feature_vector],
-                positions=[x_positions[0]],  # Use first X position
-                steering_coefficient=request.steering_coefficient,
+                vectors=steering_vectors,
+                positions=steering_positions,
+                steering_coefficient=1.0,  # Will be multiplied by individual coefficients in vectors
                 device=DEVICE,
                 dtype=DTYPE,
             )
-
-            # Generate with steering
+            
+            # Scale vectors by their individual coefficients
+            for i, coeff in enumerate(steering_coefficients):
+                steering_vectors[i] = steering_vectors[i] * coeff
+            
+            # Generate batch with steering
             target_layer = self.model.model.layers[LAYER]
             with add_hook(target_layer, hook_fn):
                 outputs = self.llm.generate(
-                    prompt_token_ids=[token_list], 
-                    sampling_params=sampling_params, 
+                    prompt_token_ids=token_lists,
+                    sampling_params=sampling_params,
                     lora_request=lora_request,
                     use_tqdm=False
                 )
-        else:
-            # Generate without steering
-            outputs = self.llm.generate(
-                prompt_token_ids=[token_list], 
-                sampling_params=sampling_params, 
-                lora_request=lora_request,
-                use_tqdm=False
-            )
-
-        # Extract generated text
-        generated_text = outputs[0].outputs[0].text
-
-        # Create response
-        response = ChatCompletionResponse(
-            id=request_id,
-            created=int(time.time()),
-            model=request.model or MODEL_NAME,
-            choices=[Choice(index=0, message=Message(role="assistant", content=generated_text), finish_reason="stop")],
-            usage=Usage(
-                prompt_tokens=len(token_list),
-                completion_tokens=len(self.tokenizer.encode(generated_text, add_special_tokens=False)),
-                total_tokens=len(token_list) + len(self.tokenizer.encode(generated_text, add_special_tokens=False)),
-            ),
-        )
-
-        return response
+            
+            # Process outputs and set results
+            for i, (queued_request, output) in enumerate(zip(batch_requests, outputs)):
+                generated_text = output.outputs[0].text
+                
+                response = ChatCompletionResponse(
+                    id=request_ids[i],
+                    created=int(time.time()),
+                    model=queued_request.request.model or MODEL_NAME,
+                    choices=[Choice(index=0, message=Message(role="assistant", content=generated_text), finish_reason="stop")],
+                    usage=Usage(
+                        prompt_tokens=len(token_lists[i]),
+                        completion_tokens=len(self.tokenizer.encode(generated_text, add_special_tokens=False)),
+                        total_tokens=len(token_lists[i]) + len(self.tokenizer.encode(generated_text, add_special_tokens=False)),
+                    ),
+                )
+                
+                queued_request.future.set_result(response)
+                
+        except Exception as e:
+            # If batch processing fails, set exception for all requests
+            for queued_request in batch_requests:
+                queued_request.future.set_exception(e)
 
 
 @contextlib.contextmanager
@@ -472,6 +494,7 @@ def get_server() -> VLLMServer:
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def create_chat_completion(request: ChatCompletionRequest, server: VLLMServer = Depends(get_server)):
     """Create a chat completion with optional activation steering using queue system."""
+    print(f"Received request: {request}")
 
     if not server.is_ready():
         raise HTTPException(status_code=503, detail="Model not initialized")
