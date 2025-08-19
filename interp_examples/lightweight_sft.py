@@ -844,43 +844,45 @@ def eval_features_batch(
         "attention_mask": eval_batch.attention_mask,
     }
 
-    with add_hook(submodule, hook_fn):
-        output_ids = model.generate(**tokenized_input, **cfg.generation_kwargs)
-
-    # Decode only the newly generated tokens
-    generated_tokens = output_ids[:, eval_batch.input_ids.shape[1] :]
-    decoded_output = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
-
-    explanations = []
-
     prompt_tokens = eval_batch.input_ids[:, : eval_batch.input_ids.shape[1]]
     decoded_prompts = tokenizer.batch_decode(prompt_tokens, skip_special_tokens=False)
 
-    for i, output in enumerate(decoded_output):
-        # What feature number is this?
-        feature_idx = eval_batch.feature_indices[i]
-        print(f"Feature index: {feature_idx}")
-        print(f"Generated output: {output}")
-        explanations.append(parse_generated_explanation(output))
-
     feature_results = []
 
-    for i, output in enumerate(decoded_output):
-        feature_idx = eval_batch.feature_indices[i]
-        
-        # Extract explanation string, handling None case
-        explanation_str = ""
-        if explanations[i] is not None:
-            explanation_str = explanations[i].explanation
-        
-        feature_result = FeatureResult(
-            feature_idx=feature_idx,
-            api_response=output,
-            prompt=decoded_prompts[i],
-            explanation=explanation_str,
-        )
+    # Sample 2 times for each SAE
+    for sample_idx in range(2):
+        with add_hook(submodule, hook_fn):
+            output_ids = model.generate(**tokenized_input, **cfg.generation_kwargs)
 
-        feature_results.append(feature_result)
+        # Decode only the newly generated tokens
+        generated_tokens = output_ids[:, eval_batch.input_ids.shape[1] :]
+        decoded_output = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+
+        explanations = []
+
+        for i, output in enumerate(decoded_output):
+            # What feature number is this?
+            feature_idx = eval_batch.feature_indices[i]
+            print(f"Sample {sample_idx + 1} - Feature index: {feature_idx}")
+            print(f"Sample {sample_idx + 1} - Generated output: {output}")
+            explanations.append(parse_generated_explanation(output))
+
+        for i, output in enumerate(decoded_output):
+            feature_idx = eval_batch.feature_indices[i]
+            
+            # Extract explanation string, handling None case
+            explanation_str = ""
+            if explanations[i] is not None:
+                explanation_str = explanations[i].explanation
+            
+            feature_result = FeatureResult(
+                feature_idx=feature_idx,
+                api_response=output,
+                prompt=decoded_prompts[i],
+                explanation=explanation_str,
+            )
+
+            feature_results.append(feature_result)
 
     return feature_results
 
@@ -1317,7 +1319,7 @@ def main(explanations_file: str):
         lora_target_modules="all-linear",
         # Training settings
         num_epochs=2,
-        lr=2e-5,
+        lr=5e-5,
         eval_steps=1000,
         save_steps=2000,
         save_dir="checkpoints",
