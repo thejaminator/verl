@@ -194,12 +194,6 @@ pycountry==24.6.1
 pycparser==2.22
 pydantic==2.11.7
 pyparsing==2.4.7
-python-apt==2.4.0+ubuntu4
-python-dateutil==2.9.0.post0
-python-dotenv==1.1.1
-python-json-logger==3.3.0
-python-multipart==0.0.20
-pytorch-triton==3.3.0+git96316ce5
 pytz==2025.2
 pyvers==0.1.0
 PyYAML==6.0.2
