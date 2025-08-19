@@ -1423,7 +1423,7 @@ def main(explanations_file: str):
         save_steps=2000,
         save_dir="checkpoints",
         # Hugging Face settings - set these based on your needs
-        hf_push_to_hub=hf_logged_in,  # Only enable if login successful
+        hf_push_to_hub=True,  # Only enable if login successful
         hf_repo_id="thejaminator/sae-introspection-lora",  # Update this to your desired repo
         hf_private_repo=True,  # Set to False if you want public repo
         positive_negative_examples=False,
