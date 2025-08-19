@@ -229,7 +229,7 @@ class VLLMServer:
             steering_positions = []
             
             # Determine LoRA request (all requests in batch should use same model)
-            lora_request = None
+            lora_request: LoRARequest | None = None
             model_name = batch_requests[0].request.model
             if model_name != MODEL_NAME:
                 for i, lora_id in enumerate(load_loras, 1):
@@ -263,11 +263,13 @@ class VLLMServer:
                 if request.sae_index is not None:
                     # Find X positions for steering
                     x_positions = find_x_positions(formatted_prompt, self.tokenizer)
+                    print(f"X positions: {x_positions}")
                     if not x_positions:
                         raise HTTPException(status_code=400, detail="No 'X' token found in prompt for steering")
                     
                     # Get SAE feature vector
                     feature_vector = get_sae_feature_vector(request.sae_index, self.sae)
+                    print(f"Feature vector: {feature_vector}")
                     steering_vectors.append(feature_vector)
                     steering_positions.append(x_positions[0])
                 else:
