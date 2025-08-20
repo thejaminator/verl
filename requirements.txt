@@ -32,3 +32,4 @@ slist
 plotly
 anthropic
 openai
+tenacity
