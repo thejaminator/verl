@@ -35,7 +35,7 @@ async def test_chat_completion(
             }
         ],
         max_tokens=50,
-        temperature=0.0,
+        temperature=1.0,
         extra_body=extra_body if extra_body else None,
     )
 

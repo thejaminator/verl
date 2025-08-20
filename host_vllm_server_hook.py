@@ -268,7 +268,7 @@ class VLLMServer:
             #  TODO: this is dumb but whatever
             temperature = batch_requests[0].request.temperature
             max_tokens = batch_requests[0].request.max_tokens
-            sampling_params = SamplingParams(temperature=temperature, ignore_eos=False, max_tokens=max_tokens)
+            sampling_params = [SamplingParams(temperature=temperature, ignore_eos=False, max_tokens=max_tokens) for _ in range(len(batch_requests))]
             prompt_lengths = [len(token_list) for token_list in token_lists]
 
             # Create steering hook for the entire batch
@@ -351,6 +351,7 @@ def get_activation_steering_hook(
         tokens_L = _input[0]
         
         if tokens_L.shape[0] == B:
+            # means we are in decoding, not prefill. So no need to steer.
             return output
 
         count = 0
