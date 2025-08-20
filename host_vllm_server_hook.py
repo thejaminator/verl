@@ -269,11 +269,13 @@ class VLLMServer:
             temperature = batch_requests[0].request.temperature
             max_tokens = batch_requests[0].request.max_tokens
             sampling_params = SamplingParams(temperature=temperature, ignore_eos=False, max_tokens=max_tokens)
+            prompt_lengths = [len(token_list) for token_list in token_lists]
 
             # Create steering hook for the entire batch
             hook_fn = get_activation_steering_hook(
                 vectors=steering_vectors,
                 positions=steering_positions,
+                prompt_lengths=prompt_lengths,
                 steering_coefficient=STEERING_COEFFICIENT,
                 device=DEVICE,
                 dtype=DTYPE,
@@ -330,109 +332,84 @@ def add_hook(module: torch.nn.Module, hook: Callable):
 def get_activation_steering_hook(
     vectors: list[torch.Tensor],
     positions: list[int],
+    prompt_lengths: list[int],
     steering_coefficient: float,
     device: torch.device,
     dtype: torch.dtype,
 ) -> Callable:
     """
-    Returns a forward hook that replaces specified residual-stream activations
-    during the initial prompt pass of model.generate.
-    
-    vLLM version that works with flattened residual streams (B*L, d_model).
-    
-    • vectors[b]   – feature vector to inject for batch b
-    • positions[b] – token index (0-based, within prompt only)
-
-    e.g. _input
-    <class 'tuple'>
-(tensor([ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17,
-        18,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16,
-        17, 18], device='cuda:0'), tensor([[-0.5898, -0.0884,  0.0471,  ..., -0.5352,  0.4941, -0.3926],
-        [ 0.2715,  1.3750, -0.5430,  ..., -0.1680, -0.8711,  0.3691],
-        [-0.2158,  1.5859, -0.3398,  ..., -0.0588, -0.9531,  0.5664],
-        ...,
-        [-0.7969, -0.4805,  0.5391,  ..., -0.3789, -0.0332,  0.8203],
-        [-0.0625,  0.2051,  0.6406,  ..., -0.2227,  0.3633,  0.6055],
-        [ 0.0175,  0.0281,  0.5352,  ...,  0.5586, -0.5234,  0.6172]],
-       device='cuda:0', dtype=torch.bfloat16), tensor([[-2.1562e+00, -1.8555e-01,  2.8320e-01,  ..., -1.3672e+00,
-          6.3750e+00, -5.8984e-01],
-        [ 1.5156e+00,  1.1953e+00,  7.8125e-03,  ...,  1.2422e+00,
-         -4.9414e-01,  1.2734e+00],
-        [-1.0156e-01, -3.7500e-01,  1.0547e+00,  ...,  8.5938e-01,
-         -7.7344e-01,  3.0000e+00],
-        ...,
-        [ 1.3125e+00,  8.5938e-01,  1.9043e-01,  ...,  1.8203e+00,
-         -1.0312e+00,  1.8945e-01],
-        [ 3.0156e+00,  9.4141e-01, -8.4375e-01,  ...,  9.9219e-01,
-         -1.6250e+00,  3.2031e-01],
-        [ 1.5469e+00, -1.1094e+00, -5.5469e-01,  ..., -6.8359e-02,
-          9.7656e-04, -1.5703e+00]], device='cuda:0', dtype=torch.bfloat16))
+    Debug version of your steering hook with detailed logging
     """
-    # ---- pack Python lists → torch tensors once, outside the hook ----
     vec_BD = torch.stack(vectors)  # (B, d_model)
     pos_B = torch.tensor(positions, dtype=torch.long)  # (B,)
-
     B, d_model = vec_BD.shape
-    assert pos_B.shape == (B,)
-
     vec_BD = vec_BD.to(device, dtype)
     pos_B = pos_B.to(device)
-
+    
     def hook_fn(module, _input, output):
-        resid_flat, *rest = output  # (B*L, d_model)
-        total_tokens, _d_model = resid_flat.shape
+        # passed prompt lengths should line up hopefully
+        tokens_L = _input[0]
         
-        # Extract batch size and sequence length from the input
-        # From the comment example, _input[0] contains position indices that repeat every L tokens
-        position_indices = _input[0]  # tensor with position indices 0,1,2,...,L-1,0,1,2,...,L-1
-        
-        
-        # The actual sequence length should be inferred from total_tokens / B
-        # since we trust B and know total_tokens
-        L = total_tokens // B
-        B_actual = B  # Use provided batch size
+        if tokens_L.shape[0] == B:
+            return output
 
-        # Only apply steering during prompt pass (sequence length > 1)
-        if L <= 1:
-            return (resid_flat, *rest)
-        
-        # Debug: print position indices to understand the pattern
-        print(f"DEBUG: position_indices length: {len(position_indices)}")
-        print(f"DEBUG: position_indices first 20: {position_indices[:20]}")
-        print(f"DEBUG: total_tokens: {total_tokens}, d_model: {_d_model}")
-        
-        print(f"DEBUG: Calculated L={L}, B_actual={B_actual}, B={B}")
-        print(f"DEBUG: Expected reshape: {B_actual} * {L} * {_d_model} = {B_actual * L * _d_model}")
-        
-        
-        # Trust the provided batch size
-        
-        # Reshape flattened tensor to (B_actual, L, d_model) format using actual tensor dimensions
-        resid_BLD = resid_flat.view(B_actual, L, _d_model)
-        
-        # Safety: make sure every position is inside current sequence
-        if (pos_B >= L).any():
-            bad = pos_B[pos_B >= L].min().item()
-            raise IndexError(f"position {bad} is out of bounds for length {L}")
-        
-        # ---- compute norms of original activations at the target slots ----
-        batch_idx_B = torch.arange(B, device=device)  # (B,)
-        orig_BD = resid_BLD[batch_idx_B, pos_B]  # (B, d_model)
-        norms_B1 = orig_BD.norm(dim=-1, keepdim=True).detach()  # (B, 1)
-        
-        # ---- build steered vectors ----
-        steered_BD = torch.nn.functional.normalize(vec_BD, dim=-1) * norms_B1 * steering_coefficient  # (B, d_model)
-        
-        # ---- in-place replacement via advanced indexing ----
-        resid_BLD[batch_idx_B, pos_B] = steered_BD
-        
-        # Reshape back to flattened format (B*L, d_model)
-        resid_flat_modified = resid_BLD.view(total_tokens, _d_model)
-        
-        return (resid_flat_modified, *rest)
+        count = 0
+        for prompt_length in prompt_lengths:
 
+            expected_position_indices_L = torch.arange(prompt_length, device=device)
+
+            assert tokens_L[count:count+prompt_length].equal(expected_position_indices_L), f"Position indices mismatch at index {count}, expected {expected_position_indices_L}, got {tokens_L[count:count+prompt_length]}"
+
+            count += prompt_length
+
+
+        before_resid_flat, resid_flat, *rest = output
+
+        assert count == tokens_L.shape[0]
+        assert resid_flat.shape[0] == tokens_L.shape[0]
+        assert resid_flat.shape[1] == d_model
+        
+        intervention_indices_L = []
+        idx = 0
+
+        for i in range(len(prompt_lengths)):
+            intervention_idx = torch.tensor(idx + positions[i], device=device)
+            intervention_indices_L.append(intervention_idx)
+            idx += prompt_lengths[i]
+
+        assert idx >= tokens_L.shape[0]
+
+        intervention_indices_L = torch.stack(intervention_indices_L)
+
+        assert intervention_indices_L.shape[0] == B
+
+        orig_BD = resid_flat[intervention_indices_L]
+
+        assert orig_BD.shape == (B, d_model)
+        
+        # Compute norms and steering
+        norms_B1 = orig_BD.norm(dim=-1, keepdim=True).detach()
+        normalized_features = torch.nn.functional.normalize(vec_BD, dim=-1)
+        steered_BD = normalized_features * norms_B1 * steering_coefficient
+        
+        print(f"  Normalized feature norms: {normalized_features.norm(dim=-1).tolist()}")
+        print(f"  Original norms: {norms_B1.squeeze().tolist()}")
+        print(f"  Steered activation norms: {steered_BD.norm(dim=-1).tolist()}")
+        
+        # Calculate the change magnitude BEFORE applying
+        change_magnitude = (steered_BD - orig_BD).norm(dim=-1)
+        print(f"  Change magnitudes: {change_magnitude.tolist()}")
+        
+        if change_magnitude.max() < 1e-4:
+            print(f"  ⚠️  WARNING: Very small change magnitude!")
+        
+        # Apply the steering
+        print(f"  Applying steering at positions: {pos_B.tolist()}")
+        resid_flat[intervention_indices_L] = steered_BD
+        
+        return (before_resid_flat, resid_flat, *rest)
+    
     return hook_fn
-
 
 # SAE Classes
 class JumpReluSAE(nn.Module):
