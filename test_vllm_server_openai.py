@@ -34,8 +34,8 @@ async def test_chat_completion(
                 "content": "Can you explain to me what 'X' means? Format your final answer with <explanation>",
             }
         ],
-        max_tokens=50,
-        temperature=1.0,
+        max_tokens=1000,
+        temperature=0.0,  # stress test passing correct vectors.
         extra_body=extra_body if extra_body else None,
     )
 
@@ -72,20 +72,25 @@ async def main():
     tasks = Slist(
         [
             # Baseline (no steering)
-            test_chat_completion(client),
-            # 10027: good feature?
-            test_chat_completion(client, sae_index=10027),
-            # 10026 film feature
-            test_chat_completion(client, sae_index=10026),
-            test_chat_completion(client, sae_index=123),
-            test_chat_completion(client, sae_index=999),
+            # test_chat_completion(client),
+            10027,
+            10026,
+            123,
+            999,
         ]
-    )
+    ).repeat_until_size_or_raise(
+        40
+    )  # this is higher than the max batch size MAX_PARALLEL_REQUESTS of the server of 28. Server should run two generates. let's see what happens?
+    print(f"Running {len(tasks)} requests")
 
     # Run all tasks in parallel
-    results: Slist[TestChatCompletion | None] = await tasks.par_map_async(lambda x: x)
+    results: Slist[TestChatCompletion | None] = await tasks.par_map_async(
+        lambda x: test_chat_completion(client, sae_index=x)
+    )
+    success_results = results.flatten_option()
 
-    for result in results:
+    for result in success_results.sort_by(lambda x: x.sae_index if x.sae_index is not None else -1):
+        # par_map_async / gather is unordered , need to reorder.
         assert result is not None
         print(f"\n=== {result.sae_index if result.sae_index is not None else 'Baseline'} ===")
         print(f"Output: {result.response}")

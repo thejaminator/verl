@@ -31,7 +31,7 @@ os.environ["NVTE_ALLOW_NONDETERMINISTIC_ALGO"] = "1"
 MODEL_NAME = "google/gemma-2-9b-it"
 DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
-CTX_LEN = 512 * 4
+CTX_LEN = 2000
 LAYER = 9  # Target layer for activation steering (matching lightweight_sft.py)
 MAX_PARALLEL_REQUESTS = 28
 GENERATE_WAIT_SECONDS = 2
@@ -268,7 +268,10 @@ class VLLMServer:
             #  TODO: this is dumb but whatever
             temperature = batch_requests[0].request.temperature
             max_tokens = batch_requests[0].request.max_tokens
-            sampling_params = [SamplingParams(temperature=temperature, ignore_eos=False, max_tokens=max_tokens) for _ in range(len(batch_requests))]
+            sampling_params = [
+                SamplingParams(temperature=temperature, ignore_eos=False, max_tokens=max_tokens)
+                for _ in range(len(batch_requests))
+            ]
             prompt_lengths = [len(token_list) for token_list in token_lists]
 
             # Create steering hook for the entire batch
@@ -285,12 +288,12 @@ class VLLMServer:
             target_layer = self.model.model.layers[LAYER]
             with torch.no_grad():
                 with add_hook(target_layer, hook_fn):
-                        outputs = self.llm.generate(
-                            prompt_token_ids=token_lists,
-                            sampling_params=sampling_params,
-                            lora_request=lora_request,
-                            use_tqdm=False,
-                        )
+                    outputs = self.llm.generate(
+                        prompt_token_ids=token_lists,
+                        sampling_params=sampling_params,
+                        lora_request=lora_request,
+                        use_tqdm=False,
+                    )
 
             # Process outputs and set results
             for i, (queued_request, output) in enumerate(zip(batch_requests, outputs, strict=False)):
@@ -345,35 +348,35 @@ def get_activation_steering_hook(
     B, d_model = vec_BD.shape
     vec_BD = vec_BD.to(device, dtype)
     pos_B = pos_B.to(device)
-    
+
     def hook_fn(module, _input, output):
         # passed prompt lengths should line up hopefully
         tokens_L = _input[0]
-        
+
         if tokens_L.shape[0] == B:
             # means we are in decoding, not prefill. So no need to steer.
             return output
-        
+
         # if there aren't any 0s in tokens_L, then we are NOT in prefill. So skip
         if not torch.any(tokens_L == 0):
             return output
 
         count = 0
         for prompt_length in prompt_lengths:
-
             expected_position_indices_L = torch.arange(prompt_length, device=device)
 
-            assert tokens_L[count:count+prompt_length].equal(expected_position_indices_L), f"Position indices mismatch at index {count}, expected {expected_position_indices_L}, got {tokens_L[count:count+prompt_length]}"
+            assert tokens_L[count : count + prompt_length].equal(expected_position_indices_L), (
+                f"Position indices mismatch at index {count}, expected {expected_position_indices_L}, got {tokens_L[count : count + prompt_length]}"
+            )
 
             count += prompt_length
-
 
         before_resid_flat, resid_flat, *rest = output
 
         assert count == tokens_L.shape[0]
         assert resid_flat.shape[0] == tokens_L.shape[0]
         assert resid_flat.shape[1] == d_model
-        
+
         intervention_indices_L = []
         idx = 0
 
@@ -391,30 +394,31 @@ def get_activation_steering_hook(
         orig_BD = resid_flat[intervention_indices_L]
 
         assert orig_BD.shape == (B, d_model)
-        
+
         # Compute norms and steering
         norms_B1 = orig_BD.norm(dim=-1, keepdim=True).detach()
         normalized_features = torch.nn.functional.normalize(vec_BD, dim=-1)
         steered_BD = normalized_features * norms_B1 * steering_coefficient
-        
+
         print(f"  Normalized feature norms: {normalized_features.norm(dim=-1).tolist()}")
         print(f"  Original norms: {norms_B1.squeeze().tolist()}")
         print(f"  Steered activation norms: {steered_BD.norm(dim=-1).tolist()}")
-        
+
         # Calculate the change magnitude BEFORE applying
         change_magnitude = (steered_BD - orig_BD).norm(dim=-1)
         print(f"  Change magnitudes: {change_magnitude.tolist()}")
-        
+
         if change_magnitude.max() < 1e-4:
-            print(f"  ⚠️  WARNING: Very small change magnitude!")
-        
+            print("  ⚠️  WARNING: Very small change magnitude!")
+
         # Apply the steering
         print(f"  Applying steering at positions: {pos_B.tolist()}")
         resid_flat[intervention_indices_L] = steered_BD
-        
+
         return (before_resid_flat, resid_flat, *rest)
-    
+
     return hook_fn
+
 
 # SAE Classes
 class JumpReluSAE(nn.Module):

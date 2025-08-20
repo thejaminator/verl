@@ -834,8 +834,10 @@ def construct_batch(
 
         # Extract single position and single steering vector (simplified structure)
         assert len(data_point.positions) == 1, f"Expected exactly one position, got {len(data_point.positions)}"
-        assert len(data_point.steering_vectors) == 1, f"Expected exactly one steering vector, got {len(data_point.steering_vectors)}"
-        
+        assert len(data_point.steering_vectors) == 1, (
+            f"Expected exactly one steering vector, got {len(data_point.steering_vectors)}"
+        )
+
         single_position = data_point.positions[0] + padding_length
         single_steering_vector = data_point.steering_vectors[0]
 
