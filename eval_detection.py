@@ -11,6 +11,7 @@ from detection_eval.caller import (
     ChatHistory,
     ContentPolicyError,
     InferenceConfig,
+    OpenAICaller,
     load_multi_caller,
     read_jsonl_file_into_basemodel,
     write_jsonl_file_from_basemodel,
@@ -356,11 +357,7 @@ def extract_explanation_text(explanation_response: str) -> str:
         return explanation_response[start_idx:end_idx].strip()
     else:
         # Fallback: return the whole response if tags aren't found
-        return (
-            explanation_response.strip()
-            .replace("<explanation>", "")
-            .replace("</explanation>", "")
-        )
+        return explanation_response.strip().replace("<explanation>", "").replace("</explanation>", "")
 
 
 def create_detection_batch(
@@ -493,7 +490,14 @@ async def evaluate_sentence_matching(
     given_explanation_str = batch.target_explanation
 
     eval_log = eval_log.add_assistant(content=correctness_msg).add_user(
-        content=given_explanation_str + "\n\n" + retrieved_sentences_str + "\n\n" + correctness_msg
+        content="SAE ID: "
+        + str(batch.target_sae_id)
+        + "\n\n"
+        + given_explanation_str
+        + "\n\n"
+        + retrieved_sentences_str
+        + "\n\n"
+        + correctness_msg
     )
 
     # Use the stored positive and negative examples from the batch
@@ -752,9 +756,41 @@ class SAEExperimentConfig(BaseModel):
         return copy
 
 
+async def run_gemma_steering(
+    sae: SAETrainTest, gemma_caller: OpenAICaller, lora_model: str
+) -> SAETrainTestWithExplanation:
+    """
+    Run gemma steering for a single SAE.
+    """
+    history = ChatHistory.from_user("Can you explain to me what 'X' means? Format your final answer with <explanation>")
+    response = await gemma_caller.call(
+        messages=history,
+        config=InferenceConfig(
+            model=lora_model,
+            max_tokens=2000,
+            extra_body={
+                "sae_index": sae.sae_id,  # the server will use this to get the SAE feature vector
+            },
+        ),
+    )
+    explanation = response.first_response.strip()
+    # return the SAETrainTestWithExplanation
+    return SAETrainTestWithExplanation(
+        sae_id=sae.sae_id,
+        explanation=history.add_assistant(explanation),
+        explainer_model=lora_model,
+        # note: technically we didn't use these "train" things but we'll just pass it on.
+        train_hard_negatives=sae.train_hard_negatives,
+        train_activations=sae.train_activations,
+        feature_vector=sae.feature_vector,
+        test_activations=sae.test_activations,
+        test_hard_negatives=sae.test_hard_negatives,
+    )
+
+
 async def main(
     explainer_models: Slist[ModelInfo],
-    run_gemma_steering: bool,
+    use_gemma_steering: bool,
     sae_file: str,
     config: SAEExperimentConfig,
     max_par: int = 10,
@@ -821,13 +857,24 @@ async def main(
         )
         all_explanations: Slist[SAETrainTestWithExplanation] = _explanations.flatten_list()
 
-    if run_gemma_steering:
-        # Run gemma steering
-        gemma_caller = AsyncOpenAI(api_key="dummy api key", base_url="https://api.gemma.ai/v1")
-
-    # Run evaluations for each model's explanations
     caller_for_eval = load_multi_caller(cache_path="cache/sae_evaluations")
 
+    if use_gemma_steering:
+        # Run gemma steering
+        print("Running gemma steering")
+        lora_model = "thejaminator/sae-introspection-lora"
+        gemma_client = AsyncOpenAI(api_key="dummy api key", base_url="https://94nlcy6stx75yz-8000.proxy.runpod.net/v1")
+        gemma_caller = OpenAICaller(openai_client=gemma_client, cache_path="cache/steering_cache")
+        _gemma_explanations: Slist[SAETrainTestWithExplanation] = await split_sae_activations.par_map_async(
+            lambda sae: run_gemma_steering(sae, gemma_caller, lora_model),
+            max_par=max_par,
+        )
+        all_explanations = all_explanations + _gemma_explanations
+        explainer_models = explainer_models + [
+            ModelInfo(model=lora_model, display_name="Gemma-steering", reasoning_effort="medium")
+        ]
+
+    # Run evaluations for each model's explanations
     detection_config = InferenceConfig(
         model="gpt-5-mini-2025-08-07",
         # model="gpt-5-nano-2025-08-07",
@@ -968,6 +1015,7 @@ if __name__ == "__main__":
     asyncio.run(
         main(
             sae_file=sae_file,
+            use_gemma_steering=True,
             explainer_models=explainer_models,
             # config=hard_negatives_config,
             config=best_of_8_config,

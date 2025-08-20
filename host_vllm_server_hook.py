@@ -39,8 +39,8 @@ GENERATE_WAIT_SECONDS = 2
 # SAE Configuration
 SAE_REPO_ID = "google/gemma-scope-9b-it-res"
 load_loras = ["thejaminator/sae-introspection-lora"]
-SAE_WIDTH = 16  # Can be 16 or 131
-SAE_FILENAME = f"layer_{LAYER}/width_16k/average_l0_88/params.npz"
+SAE_WIDTH = 131  # Can be 16 or 131
+SAE_FILENAME = f"layer_{LAYER}/width_131k/average_l0_121/params.npz"
 STEERING_COEFFICIENT = 2.0
 
 

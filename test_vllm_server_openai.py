@@ -73,14 +73,16 @@ async def main():
         [
             # Baseline (no steering)
             # test_chat_completion(client),
+            0,
             10027,
             10026,
             123,
             999,
         ]
-    ).repeat_until_size_or_raise(
-        40
-    )  # this is higher than the max batch size MAX_PARALLEL_REQUESTS of the server of 28. Server should run two generates. let's see what happens?
+    )
+    # .repeat_until_size_or_raise(
+    #     40
+    # )  # this is higher than the max batch size MAX_PARALLEL_REQUESTS of the server of 28. Server should run two generates. let's see what happens?
     print(f"Running {len(saes)} requests")
 
     # Run all tasks in parallel
