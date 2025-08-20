@@ -33,16 +33,30 @@ class SAEExplained(BaseModel):
     f1: float
 
 
-def read_sae_file(sae_file: str, limit: int | None = None) -> Slist[SAE]:
-    if limit is None:
+def read_sae_file(sae_file: str, limit: int | None = None, start_index: int = 0) -> Slist[SAE]:
+    """Read SAEs from a JSONL file with optional start index and limit.
+
+    Args:
+        sae_file: Path to JSONL file.
+        limit: Maximum number of SAEs to read. If None, read all from start_index.
+        start_index: Number of initial lines to skip before reading.
+    """
+    if limit is None and start_index == 0:
         return read_jsonl_file_into_basemodel(sae_file, SAE)
     else:
         with open(sae_file) as f:
             output = Slist[SAE]()
+            # Skip the first `start_index` lines
+            for _ in range(start_index):
+                try:
+                    next(f)
+                except StopIteration:
+                    return output
+            # Read up to `limit` items (or rest of file if limit is None)
             for line in f:
                 sae = SAE.model_validate_json(line)
                 output.append(sae)
-                if len(output) >= limit:
+                if limit is not None and len(output) >= limit:
                     break
             return output
 
@@ -723,6 +737,7 @@ class SAEExperimentConfig(BaseModel):
     test_hard_negative_sentences: int
     test_hard_negative_saes: int
     saes_to_test: int
+    sae_start_index: int = 0
     best_of_n: int | None = None
 
     def replace(
@@ -757,7 +772,10 @@ class SAEExperimentConfig(BaseModel):
 
 
 async def run_gemma_steering(
-    sae: SAETrainTest, gemma_caller: OpenAICaller, lora_model: str, try_number: int = 1,
+    sae: SAETrainTest,
+    gemma_caller: OpenAICaller,
+    lora_model: str,
+    try_number: int = 1,
 ) -> SAETrainTestWithExplanation:
     """
     Run gemma steering for a single SAE.
@@ -788,6 +806,7 @@ async def run_gemma_steering(
         test_hard_negatives=sae.test_hard_negatives,
     )
 
+
 async def run_gemma_steering_best_of_n(
     sae: SAETrainTest, gemma_caller: OpenAICaller, lora_model: str, best_of_n: int
 ) -> Slist[SAETrainTestWithExplanation]:
@@ -797,9 +816,10 @@ async def run_gemma_steering_best_of_n(
     # Run gemma steering for each try number
     _explanations: Slist[SAETrainTestWithExplanation] = await Slist(range(best_of_n)).par_map_async(
         lambda try_number: run_gemma_steering(sae, gemma_caller, lora_model, try_number),
-        max_par=best_of_n,
+        max_par=best_of_n,  # already max_par in outer loop
     )
     return _explanations
+
 
 async def main(
     explainer_models: Slist[ModelInfo],
@@ -833,8 +853,8 @@ async def main(
     test_hard_negative_saes = config.test_hard_negative_saes
     test_hard_negative_sentences = config.test_hard_negative_sentences
 
-    saes: Slist[SAE] = read_sae_file(sae_file, limit=target_saes_to_test)
-    print(f"Loaded {len(saes)} SAE entries")
+    saes: Slist[SAE] = read_sae_file(sae_file, limit=target_saes_to_test, start_index=config.sae_start_index)
+    print(f"Loaded {len(saes)} SAE entries starting at index {config.sae_start_index}")
 
     def create_sae_train_test(sae: SAE) -> SAETrainTest | None:
         # Sample deterministically from test_target_activating_sentences using SAE ID as seed
@@ -877,19 +897,24 @@ async def main(
         print("Running gemma steering")
         lora_model = "thejaminator/sae-introspection-lora"
         gemma_client = AsyncOpenAI(api_key="dummy api key", base_url="https://94nlcy6stx75yz-8000.proxy.runpod.net/v1")
-        width = 131 # not cached by api call yet, so manually add to cache path
+        width = 131  # not cached by api call yet, so manually add to cache path
         gemma_caller = OpenAICaller(openai_client=gemma_client, cache_path=f"cache/steering_cache_{width}")
         best_of_n = config.best_of_n
         if best_of_n is not None:
-            best_of_n_gemma_explanations: Slist[Slist[SAETrainTestWithExplanation]] = await split_sae_activations.par_map_async(
+            max_par_bon = max_par // best_of_n
+            best_of_n_gemma_explanations: Slist[
+                Slist[SAETrainTestWithExplanation]
+            ] = await split_sae_activations.par_map_async(
                 lambda sae: run_gemma_steering_best_of_n(sae, gemma_caller, lora_model, best_of_n),
-                max_par=max_par,
+                max_par=max_par_bon,
+                tqdm=True,
             )
             _gemma_explanations = best_of_n_gemma_explanations.flatten_list()
         else:
             _gemma_explanations: Slist[SAETrainTestWithExplanation] = await split_sae_activations.par_map_async(
                 lambda sae: run_gemma_steering(sae, gemma_caller, lora_model),
                 max_par=max_par,
+                tqdm=True,
             )
         all_explanations = all_explanations + _gemma_explanations
         explainer_models = explainer_models + [
@@ -992,7 +1017,7 @@ if __name__ == "__main__":
             ModelInfo(model="gpt-5-mini-2025-08-07", display_name="GPT-5-mini", reasoning_effort="medium"),
             # ModelInfo(model="gpt-5-mini-2025-08-07", display_name="GPT-5-mini", reasoning_effort="low"),
             # meta-llama/llama-3-70b-instruct
-            # ModelInfo(model="meta-llama/llama-3-70b-instruct", display_name="Llama-3-70b-instruct"),
+            ModelInfo(model="meta-llama/llama-3-70b-instruct", display_name="Llama-3-70b-instruct"),
             # ModelInfo(model="gpt-4.1-2025-04-14", display_name="GPT-4.1"),
             # ModelInfo(model="gpt-4o-2024-08-06", display_name="GPT-4o"),
             # ModelInfo(model="claude-sonnet-4-20250514", display_name="Claude-3.5-Sonnet"),
@@ -1010,6 +1035,7 @@ if __name__ == "__main__":
     # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
     # Which to use for constructing explanations vs testing detection?
     saes_to_test = 100
+    sae_start_index = 2_000  # not in train set for the trained model
 
     hard_negatives_config = SAEExperimentConfig(
         test_target_activating_sentences=Slist([4, 5, 6, 7, 8]),
@@ -1021,6 +1047,7 @@ if __name__ == "__main__":
         test_hard_negative_sentences=6,
         saes_to_test=saes_to_test,
         best_of_n=None,  # Set to an integer (e.g., 3, 5) to enable best-of-n
+        sae_start_index=sae_start_index,
     )
 
     no_train_hard_negatives_config = hard_negatives_config.replace(train_hard_negative_saes=0)
@@ -1039,8 +1066,8 @@ if __name__ == "__main__":
             sae_file=sae_file,
             use_gemma_steering=True,
             explainer_models=explainer_models,
-            # config=hard_negatives_config,
-            config=best_of_8_config,
+            config=hard_negatives_config,
+            # config=best_of_8_config,
             # config=no_train_hard_negatives_config,
             # config=eight_positive_examples_config,
             # config=two_positive_examples,
