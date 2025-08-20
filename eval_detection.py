@@ -907,10 +907,6 @@ async def main(
     test_hard_negative_saes = config.test_hard_negative_saes
     test_hard_negative_sentences = config.test_hard_negative_sentences
 
-    # saes: Slist[SAE] = read_sae_file(sae_file, limit=target_saes_to_test, start_index=config.sae_start_index)
-    # sae_lines = read_sae_file_to_str(sae_file, limit=target_saes_to_test, start_index=config.sae_start_index)
-    # print("validating")
-    # saes = sae_lines.map(lambda x: SAE.model_validate_json(x))
     saes = read_sae_file(sae_file, limit=target_saes_to_test, start_index=config.sae_start_index)
     print(f"Loaded {len(saes)} SAE entries starting at index {config.sae_start_index}")
 
@@ -1030,12 +1026,7 @@ async def main(
         lambda x: x.explainer_model
     )
 
-    # Plot F1 scores by model
-    rename_map = {m.model: m.display_name for m in explainer_models}
-    # plot_f1_scores_by_model(groupby_by_model, rename_map)
-
-    # Plot precision vs recall by model
-    # plot_precision_vs_recall_by_model(groupby_by_model)
+    
 
     for model_name, evaluation_results in groupby_by_model:
         if len(evaluation_results) == 0:
@@ -1077,6 +1068,13 @@ async def main(
         sae_explanations_output_file = f"20aug_sae_sfted_{safe_model_name}.jsonl"
         write_jsonl_file_from_basemodel(path=sae_explanations_output_file, basemodels=sft_data)
         print(f"  SAE explanations saved to {sae_explanations_output_file}")
+
+    # Plot F1 scores by model
+    rename_map = {m.model: m.display_name for m in explainer_models}
+    plot_f1_scores_by_model(groupby_by_model, rename_map)
+
+    # Plot precision vs recall by model
+    plot_precision_vs_recall_by_model(groupby_by_model)
 
 
 if __name__ == "__main__":
