@@ -1,4 +1,5 @@
 import asyncio
+from enum import unique
 from typing import Sequence
 
 import plotly.graph_objects as go
@@ -264,6 +265,16 @@ class SAETrainTestWithExplanation(BaseModel):
     test_hard_negatives: list[SAEActivations]
     explanation: ChatHistory
     explainer_model: str
+
+    @property
+    def explanation_text(self) -> str:
+        return extract_explanation_text(self.explanation.messages[-1].content)
+
+    def replace_explanation(self, explanation: ChatHistory, explainer_model: str) -> "SAETrainTestWithExplanation":
+        new = self.model_copy()
+        new.explanation = explanation
+        new.explainer_model = explainer_model
+        return new
 
 
 class MixedSentencesBatch(BaseModel):
@@ -625,7 +636,7 @@ async def run_best_of_n_evaluation_for_explanations(
     return best_results
 
 
-def plot_f1_scores_by_model(groupby_by_model: Slist[Group[str, Slist[DetectionResult]]]) -> None:
+def plot_f1_scores_by_model(groupby_by_model: Slist[Group[str, Slist[DetectionResult]]], rename_map: dict[str, str] = {}) -> None:
     """Plot F1 scores by model using plotly."""
     # Extract model names and average F1 scores
     model_names = []
@@ -636,7 +647,7 @@ def plot_f1_scores_by_model(groupby_by_model: Slist[Group[str, Slist[DetectionRe
             continue  # Skip models with no results
 
         avg_f1 = evaluation_results.map(lambda x: x.f1_score).sum() / len(evaluation_results)
-        model_names.append(model_name)
+        model_names.append(rename_map.get(model_name, model_name))
         avg_f1_scores.append(avg_f1 * 100)  # Convert to percentage
 
     # Create the bar chart
@@ -653,7 +664,7 @@ def plot_f1_scores_by_model(groupby_by_model: Slist[Group[str, Slist[DetectionRe
 
     # Update layout
     fig.update_layout(
-        title="F1 Score by Model",
+        title="F1 Score by Model on Detection Eval",
         xaxis_title="Model",
         yaxis_title="F1 Score (%)",
         font=dict(size=16),
@@ -663,7 +674,7 @@ def plot_f1_scores_by_model(groupby_by_model: Slist[Group[str, Slist[DetectionRe
             range=[0, 100],  # Set y-axis range from 0 to 100%
         ),
         showlegend=False,
-        width=800,
+        width=1000,
         height=600,
     )
 
@@ -821,9 +832,22 @@ async def run_gemma_steering_best_of_n(
     return _explanations
 
 
+def make_random_explanation(items: Slist[SAETrainTestWithExplanation], name: str) -> Slist[SAETrainTestWithExplanation]:
+    # sort by for determinism
+    uniques = items.sort_by(lambda x: (x.sae_id, x.explainer_model, x.explanation_text)).shuffle("42").distinct_by(lambda x: x.sae_id)
+    # reshuffle for random explanation
+    shuffled_explanations = uniques.shuffle("42")
+    zipped = shuffled_explanations.zip(uniques)
+    return zipped.map(lambda x: x[0].replace_explanation(x[1].explanation, name))
+
+
+
+
+
 async def main(
     explainer_models: Slist[ModelInfo],
     use_gemma_steering: bool,
+    add_random_explanations: bool,
     sae_file: str,
     config: SAEExperimentConfig,
     max_par: int = 10,
@@ -888,9 +912,11 @@ async def main(
             ),
             max_par=max_par,
         )
-        all_explanations: Slist[SAETrainTestWithExplanation] = _explanations.flatten_list()
+        non_gemma_explanations = _explanations.flatten_list()
+        all_explanations: Slist[SAETrainTestWithExplanation] = non_gemma_explanations
 
     caller_for_eval = load_multi_caller(cache_path="cache/sae_evaluations")
+
 
     if use_gemma_steering:
         # Run gemma steering
@@ -918,9 +944,16 @@ async def main(
             )
         all_explanations = all_explanations + _gemma_explanations
         explainer_models = explainer_models + [
-            ModelInfo(model=lora_model, display_name="Gemma-steering", reasoning_effort="medium")
+            ModelInfo(model=lora_model, display_name="Light SFT Gemma<br>(Introspecting<br>feature vector)", reasoning_effort="medium")
         ]
 
+    if add_random_explanations:
+        name = "Random explanation"
+        all_explanations = all_explanations + make_random_explanation(non_gemma_explanations, name)
+        explainer_models = explainer_models + [
+            ModelInfo(model=name, display_name=name, reasoning_effort="low")
+        ]
+        
     # Run evaluations for each model's explanations
     detection_config = InferenceConfig(
         model="gpt-5-mini-2025-08-07",
@@ -963,7 +996,8 @@ async def main(
     )
 
     # Plot F1 scores by model
-    plot_f1_scores_by_model(groupby_by_model)
+    rename_map = {m.model: m.display_name for m in explainer_models}
+    plot_f1_scores_by_model(groupby_by_model, rename_map)
 
     # Plot precision vs recall by model
     plot_precision_vs_recall_by_model(groupby_by_model)
@@ -1014,10 +1048,10 @@ if __name__ == "__main__":
     # Define explainer models to test
     explainer_models = Slist(
         [
-            ModelInfo(model="gpt-5-mini-2025-08-07", display_name="GPT-5-mini", reasoning_effort="medium"),
+            ModelInfo(model="gpt-5-mini-2025-08-07", display_name="GPT-5-mini<br>(extrospecting<br>activating sentences)", reasoning_effort="medium"),
+            ModelInfo(model="meta-llama/llama-3-70b-instruct", display_name="Llama-3-70b<br>(extrospecting<br>activating sentences)"),
             # ModelInfo(model="gpt-5-mini-2025-08-07", display_name="GPT-5-mini", reasoning_effort="low"),
             # meta-llama/llama-3-70b-instruct
-            ModelInfo(model="meta-llama/llama-3-70b-instruct", display_name="Llama-3-70b-instruct"),
             # ModelInfo(model="gpt-4.1-2025-04-14", display_name="GPT-4.1"),
             # ModelInfo(model="gpt-4o-2024-08-06", display_name="GPT-4o"),
             # ModelInfo(model="claude-sonnet-4-20250514", display_name="Claude-3.5-Sonnet"),
@@ -1066,6 +1100,7 @@ if __name__ == "__main__":
             sae_file=sae_file,
             use_gemma_steering=True,
             explainer_models=explainer_models,
+            add_random_explanations=True,
             config=hard_negatives_config,
             # config=best_of_8_config,
             # config=no_train_hard_negatives_config,
