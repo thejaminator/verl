@@ -69,7 +69,7 @@ async def main():
     print("Running all requests in parallel...")
 
     # Create all tasks to run in parallel
-    tasks = Slist(
+    saes: Slist[int] = Slist(
         [
             # Baseline (no steering)
             # test_chat_completion(client),
@@ -81,10 +81,10 @@ async def main():
     ).repeat_until_size_or_raise(
         40
     )  # this is higher than the max batch size MAX_PARALLEL_REQUESTS of the server of 28. Server should run two generates. let's see what happens?
-    print(f"Running {len(tasks)} requests")
+    print(f"Running {len(saes)} requests")
 
     # Run all tasks in parallel
-    results: Slist[TestChatCompletion | None] = await tasks.par_map_async(
+    results: Slist[TestChatCompletion | None] = await saes.par_map_async(
         lambda x: test_chat_completion(client, sae_index=x)
     )
     success_results = results.flatten_option()
