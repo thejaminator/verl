@@ -3,6 +3,7 @@ from typing import Callable, Sequence
 
 import torch
 
+from detection_eval.steering_hooks import get_vllm_steering_hook
 from verl import DataProto
 from verl.single_controller.base.decorator import Dispatch, register
 from verl.utils.device import get_device_id, get_torch_device
@@ -20,74 +21,6 @@ def get_feature_vector(prompts: DataProto) -> Sequence[Sequence[float]]:
     for item in prompts.non_tensor_batch["sae"]:
         output.append(item["feature_vector"])  # type: ignore
     return output
-
-
-def get_activation_steering_hook(
-    vectors: list[torch.Tensor],  # [B] each with shape [d_model]
-    positions: list[int],  # [B]
-    steering_coefficient: float,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> Callable:
-    """
-    Returns a forward hook that *replaces* specified residual-stream activations
-    during the initial prompt pass of `model.generate`.
-
-    • vectors[b]   – feature vector to inject for batch b
-    • positions[b] – token index (0-based, within prompt only)
-    """
-
-    # ---- pack Python lists → torch tensors once, outside the hook ----
-    vec_BD = torch.stack(vectors)  # (B, d_model)
-    pos_B = torch.tensor(positions, dtype=torch.long)  # (B,)
-
-    B, d_model = vec_BD.shape
-    assert pos_B.shape == (B,)
-
-    vec_BD = vec_BD.to(device, dtype)
-    pos_B = pos_B.to(device)
-
-    def hook_fn(module, _input, output):
-        print(f"🔥 HOOK CALLED! Module: {type(module).__name__}")
-        resid_flat, *rest = output  # vLLM uses flattened layout: (batch_size * seq_len, d_model)
-        total_tokens, d_model = resid_flat.shape
-        print(f"🔥 Hook processing: total_tokens {total_tokens}, d_model {d_model}, shape {resid_flat.shape}")
-
-        # vLLM flattens (B, L) -> (B*L), so we need to infer L from total_tokens
-        # Assuming all sequences have the same length L
-        L = total_tokens // B
-        print(f"🔥 Inferred: batch_size={B}, seq_len={L}")
-
-        # Only touch the *prompt* forward pass (sequence length > 1)
-        if L <= 1:
-            print(f"Skipping hook because sequence length is <= 1, total_tokens: {total_tokens}")
-            return (resid_flat, *rest)
-
-        print(f"Applying feature vector on module {type(module).__name__}. Sequence length: {L}, Batch size: {B}")
-
-        # Safety: make sure every position is inside current sequence
-        if (pos_B >= L).any():
-            bad = pos_B[pos_B >= L].min().item()
-            raise IndexError(f"position {bad} is out of bounds for length {L}")
-
-        # ---- compute flat indices for vLLM's layout ----
-        # For batch b at position p: flat_index = b * L + p
-        batch_offsets = torch.arange(B, device=device) * L  # (B,)
-        flat_indices = batch_offsets + pos_B  # (B,)
-
-        # ---- compute norms of original activations at the target slots ----
-        orig_BD = resid_flat[flat_indices]  # (B, d_model)
-        norms_B1 = orig_BD.norm(dim=-1, keepdim=True)  # (B, 1)
-
-        # ---- build steered vectors ----
-        steered_BD = torch.nn.functional.normalize(vec_BD, dim=-1) * norms_B1 * steering_coefficient  # (B, d_model)
-
-        # ---- in-place replacement via flat indexing ----
-        resid_flat[flat_indices] = steered_BD
-
-        return (resid_flat, *rest)
-
-    return hook_fn
 
 
 @contextlib.contextmanager
@@ -190,7 +123,17 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
                 vectors.append(feature_vec)
                 positions.append(x_position)
 
-            hook = get_activation_steering_hook(vectors, positions, steering_coefficient, device, dtype)
+            # input_ids
+            input_ids = prompts.batch["input_ids"]
+            prompt_lengths = [len(input_id) for input_id in input_ids]
+            hook = get_vllm_steering_hook(
+                vectors=vectors,
+                positions=positions,
+                prompt_lengths=prompt_lengths,
+                steering_coefficient=steering_coefficient,
+                device=device,
+                dtype=dtype,
+            )
 
             processed_prompts = self.rollout_sharding_manager.preprocess_data(prompts)
             # NOTE: Need to enforce eager

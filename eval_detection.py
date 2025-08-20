@@ -1,5 +1,4 @@
 import asyncio
-from enum import unique
 import time
 from typing import Sequence
 
@@ -64,6 +63,7 @@ def read_sae_file(sae_file: str, limit: int | None = None, start_index: int = 0)
             end_time = time.time()
             print(f"Read {len(output)} SAEs in {end_time - start_time:.2f} seconds")
             return output
+
 
 def read_sae_file_to_str(sae_file: str, limit: int | None = None, start_index: int = 0) -> Slist[str]:
     start_time = time.time()
@@ -663,7 +663,9 @@ async def run_best_of_n_evaluation_for_explanations(
     return best_results
 
 
-def plot_f1_scores_by_model(groupby_by_model: Slist[Group[str, Slist[DetectionResult]]], rename_map: dict[str, str] = {}) -> None:
+def plot_f1_scores_by_model(
+    groupby_by_model: Slist[Group[str, Slist[DetectionResult]]], rename_map: dict[str, str] = {}
+) -> None:
     """Plot F1 scores by model using plotly."""
     # Extract model names and average F1 scores
     model_names = []
@@ -861,14 +863,15 @@ async def run_gemma_steering_best_of_n(
 
 def make_random_explanation(items: Slist[SAETrainTestWithExplanation], name: str) -> Slist[SAETrainTestWithExplanation]:
     # sort by for determinism
-    uniques = items.sort_by(lambda x: (x.sae_id, x.explainer_model, x.explanation_text)).shuffle("42").distinct_by(lambda x: x.sae_id)
+    uniques = (
+        items.sort_by(lambda x: (x.sae_id, x.explainer_model, x.explanation_text))
+        .shuffle("42")
+        .distinct_by(lambda x: x.sae_id)
+    )
     # reshuffle for random explanation
     shuffled_explanations = uniques.shuffle("42")
     zipped = shuffled_explanations.zip(uniques)
     return zipped.map(lambda x: x[0].replace_explanation(x[1].explanation, name))
-
-
-
 
 
 async def main(
@@ -948,7 +951,6 @@ async def main(
 
     caller_for_eval = load_multi_caller(cache_path="cache/sae_evaluations")
 
-
     if use_gemma_steering:
         # Run gemma steering
         print("Running gemma steering")
@@ -975,16 +977,18 @@ async def main(
             )
         all_explanations = all_explanations + _gemma_explanations
         explainer_models = explainer_models + [
-            ModelInfo(model=lora_model, display_name="Light SFT Gemma<br>(Introspecting<br>feature vector)", reasoning_effort="medium")
+            ModelInfo(
+                model=lora_model,
+                display_name="Light SFT Gemma<br>(Introspecting<br>feature vector)",
+                reasoning_effort="medium",
+            )
         ]
 
     if add_random_explanations:
         name = "Random explanation"
         all_explanations = all_explanations + make_random_explanation(non_gemma_explanations, name)
-        explainer_models = explainer_models + [
-            ModelInfo(model=name, display_name=name, reasoning_effort="low")
-        ]
-        
+        explainer_models = explainer_models + [ModelInfo(model=name, display_name=name, reasoning_effort="low")]
+
     # Run evaluations for each model's explanations
     detection_config = InferenceConfig(
         model="gpt-5-mini-2025-08-07",
@@ -1079,7 +1083,11 @@ if __name__ == "__main__":
     # Define explainer models to test
     explainer_models = Slist(
         [
-            ModelInfo(model="gpt-5-mini-2025-08-07", display_name="GPT-5-mini<br>(extrospecting<br>activating sentences)", reasoning_effort="medium"),
+            ModelInfo(
+                model="gpt-5-mini-2025-08-07",
+                display_name="GPT-5-mini<br>(extrospecting<br>activating sentences)",
+                reasoning_effort="medium",
+            ),
             # ModelInfo(model="meta-llama/llama-3-70b-instruct", display_name="Llama-3-70b<br>(extrospecting<br>activating sentences)"),
             # ModelInfo(model="gpt-5-mini-2025-08-07", display_name="GPT-5-mini", reasoning_effort="low"),
             # meta-llama/llama-3-70b-instruct
@@ -1099,7 +1107,7 @@ if __name__ == "__main__":
     sae_file = "data/10k_hard_negatives_results.jsonl"
     # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
     # Which to use for constructing explanations vs testing detection?
-    saes_to_test = 8_000
+    saes_to_test = 14_00
     # sae_start_index = 2_000  # not in train set for the trained model
     sae_start_index = 0
 
