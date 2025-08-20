@@ -39,9 +39,10 @@ GENERATE_WAIT_SECONDS = 2
 # SAE Configuration
 SAE_REPO_ID = "google/gemma-scope-9b-it-res"
 load_loras = ["thejaminator/sae-introspection-lora"]
-SAE_WIDTH = 131  # Can be 16 or 131
+SAE_WIDTH = 131  # Can be 16 or 131. Check what we trained with?
 SAE_FILENAME = f"layer_{LAYER}/width_131k/average_l0_121/params.npz"
 STEERING_COEFFICIENT = 2.0
+gpu_memory_utilization=0.8
 
 
 class Message(BaseModel):
@@ -116,7 +117,7 @@ class VLLMServer:
             enforce_eager=True,
             dtype=DTYPE,
             disable_async_output_proc=True,
-            gpu_memory_utilization=0.5,
+            gpu_memory_utilization=gpu_memory_utilization,
             enable_lora=True,
             max_lora_rank=64,
         )

@@ -35,7 +35,7 @@ async def test_chat_completion(
             }
         ],
         max_tokens=1000,
-        temperature=0.0,  # stress test passing correct vectors.
+        temperature=1.0,  # stress test passing correct vectors.
         extra_body=extra_body if extra_body else None,
     )
 
@@ -74,6 +74,9 @@ async def main():
             # Baseline (no steering)
             # test_chat_completion(client),
             0,
+            1,
+            2,
+            3,
             10027,
             10026,
             123,

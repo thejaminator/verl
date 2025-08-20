@@ -757,7 +757,7 @@ class SAEExperimentConfig(BaseModel):
 
 
 async def run_gemma_steering(
-    sae: SAETrainTest, gemma_caller: OpenAICaller, lora_model: str
+    sae: SAETrainTest, gemma_caller: OpenAICaller, lora_model: str, try_number: int = 1,
 ) -> SAETrainTestWithExplanation:
     """
     Run gemma steering for a single SAE.
@@ -772,6 +772,7 @@ async def run_gemma_steering(
                 "sae_index": sae.sae_id,  # the server will use this to get the SAE feature vector
             },
         ),
+        try_number=try_number,
     )
     explanation = response.first_response.strip()
     # return the SAETrainTestWithExplanation
@@ -787,6 +788,18 @@ async def run_gemma_steering(
         test_hard_negatives=sae.test_hard_negatives,
     )
 
+async def run_gemma_steering_best_of_n(
+    sae: SAETrainTest, gemma_caller: OpenAICaller, lora_model: str, best_of_n: int
+) -> Slist[SAETrainTestWithExplanation]:
+    """
+    Run gemma steering for a single SAE with best-of-n.
+    """
+    # Run gemma steering for each try number
+    _explanations: Slist[SAETrainTestWithExplanation] = await Slist(range(best_of_n)).par_map_async(
+        lambda try_number: run_gemma_steering(sae, gemma_caller, lora_model, try_number),
+        max_par=best_of_n,
+    )
+    return _explanations
 
 async def main(
     explainer_models: Slist[ModelInfo],
@@ -864,11 +877,20 @@ async def main(
         print("Running gemma steering")
         lora_model = "thejaminator/sae-introspection-lora"
         gemma_client = AsyncOpenAI(api_key="dummy api key", base_url="https://94nlcy6stx75yz-8000.proxy.runpod.net/v1")
-        gemma_caller = OpenAICaller(openai_client=gemma_client, cache_path="cache/steering_cache")
-        _gemma_explanations: Slist[SAETrainTestWithExplanation] = await split_sae_activations.par_map_async(
-            lambda sae: run_gemma_steering(sae, gemma_caller, lora_model),
-            max_par=max_par,
-        )
+        width = 131 # not cached by api call yet, so manually add to cache path
+        gemma_caller = OpenAICaller(openai_client=gemma_client, cache_path=f"cache/steering_cache_{width}")
+        best_of_n = config.best_of_n
+        if best_of_n is not None:
+            best_of_n_gemma_explanations: Slist[Slist[SAETrainTestWithExplanation]] = await split_sae_activations.par_map_async(
+                lambda sae: run_gemma_steering_best_of_n(sae, gemma_caller, lora_model, best_of_n),
+                max_par=max_par,
+            )
+            _gemma_explanations = best_of_n_gemma_explanations.flatten_list()
+        else:
+            _gemma_explanations: Slist[SAETrainTestWithExplanation] = await split_sae_activations.par_map_async(
+                lambda sae: run_gemma_steering(sae, gemma_caller, lora_model),
+                max_par=max_par,
+            )
         all_explanations = all_explanations + _gemma_explanations
         explainer_models = explainer_models + [
             ModelInfo(model=lora_model, display_name="Gemma-steering", reasoning_effort="medium")
@@ -984,10 +1006,10 @@ if __name__ == "__main__":
     )
 
     # created with create_hard_negative_and_feature_vector.py
-    sae_file = "data/19_aug_hard_negatives_results.jsonl"
+    sae_file = "data/10k_hard_negatives_results.jsonl"
     # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
     # Which to use for constructing explanations vs testing detection?
-    saes_to_test = 10
+    saes_to_test = 100
 
     hard_negatives_config = SAEExperimentConfig(
         test_target_activating_sentences=Slist([4, 5, 6, 7, 8]),
