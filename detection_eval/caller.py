@@ -595,7 +595,9 @@ class OpenAICaller(Caller):
     ) -> OpenaiResponse:
         if not isinstance(messages, ChatHistory):
             messages = ChatHistory(messages=messages)
-        maybe_result: OpenaiResponse | None = await self.get_cache(config.model).get_model_call(messages, config, try_number, tool_args)
+        maybe_result: OpenaiResponse | None = await self.get_cache(config.model).get_model_call(
+            messages, config, try_number, tool_args
+        )
         if maybe_result is not None:
             return maybe_result
 
