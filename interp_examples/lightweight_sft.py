@@ -23,6 +23,7 @@ import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 import contextlib
+import datetime
 import gc
 import json
 
@@ -1274,14 +1275,10 @@ def train_model(
     device: torch.device,
     dtype: torch.dtype,
     verbose: bool = False,
-    use_wandb: bool = True,
 ):
     max_grad_norm = 1.0
     wandb_project = "sae_introspection"
     run_name = f"{cfg.model_name}-layer{cfg.sae_layer}-decoder-shorter-prompt"
-
-    if use_wandb:
-        wandb.init(project=wandb_project, name=run_name, config=asdict(cfg))
 
     model.train()
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr)
@@ -1320,14 +1317,13 @@ def train_model(
             scheduler.step()
             optimizer.zero_grad()
 
-            if use_wandb:
-                wandb.log(
-                    {
-                        "train/loss": loss.item(),
-                        "train/learning_rate": scheduler.get_last_lr()[0],
-                    },
-                    step=global_step,
-                )
+            wandb.log(
+                {
+                    "train/loss": loss.item(),
+                    "train/learning_rate": scheduler.get_last_lr()[0],
+                },
+                step=global_step,
+            )
             if verbose:
                 print(f"Step {global_step} loss: {loss.item()}")
 
@@ -1382,10 +1378,10 @@ def train_model(
             private=cfg.hf_private_repo,
         )
 
-    wandb.finish()
+    # wandb finishing is handled in main()
 
 
-def main(explanations_file: str):
+def main(explanations_file: str, hf_repo_name: Optional[str] = None):
     """Main script logic."""
 
     # Set up Hugging Face login at the start
@@ -1396,6 +1392,16 @@ def main(explanations_file: str):
         login()
     else:
         print("Already logged in to Hugging Face.")
+
+    # Determine default HF repo name if not provided
+    date_str = datetime.datetime.now().strftime("%Y%m%d")
+    if not hf_repo_name:
+        hf_repo_name = f"gemma-introspection-{date_str}"
+
+    # Compose full repo_id with current username
+    user_info = whoami()
+    owner = user_info.get("name") if isinstance(user_info, dict) else None
+    hf_repo_id_computed = f"{owner}/{hf_repo_name}" if owner else hf_repo_name
 
     cfg = SelfInterpTrainingConfig(
         # Model settings
@@ -1429,7 +1435,7 @@ def main(explanations_file: str):
         save_dir="checkpoints",
         # Hugging Face settings - set these based on your needs
         hf_push_to_hub=True,  # Only enable if login successful
-        hf_repo_id="thejaminator/sae-introspection-lora",  # Update this to your desired repo
+        hf_repo_id=hf_repo_id_computed,
         hf_private_repo=True,  # Set to False if you want public repo
         positive_negative_examples=False,
     )
@@ -1438,7 +1444,21 @@ def main(explanations_file: str):
     dtype = torch.bfloat16
     device = torch.device("cuda")
 
-    explanations = load_explanations_from_jsonl(explanations_file)
+    # Initialize wandb and upload the explanations file as an artifact at script start
+    wandb_project = "sae_introspection"
+    run_name = f"{cfg.model_name}-layer{cfg.sae_layer}-decoder-shorter-prompt"
+    wandb.init(project=wandb_project, name=run_name, config=asdict(cfg))
+
+    artifact_base = os.path.splitext(os.path.basename(explanations_file))[0]
+    explanations_artifact = wandb.Artifact(
+        name=f"explanations-{artifact_base}",
+        type="dataset",
+        description="SAE explanations JSONL used for training",
+    )
+    explanations_artifact.add_file(explanations_file)
+    wandb.run.log_artifact(explanations_artifact)
+
+    explanations: list[SAEExplained] = load_explanations_from_jsonl(explanations_file)
     training_examples = [
         TrainingExample.with_positive_and_negative_examples(exp)
         if cfg.positive_negative_examples
@@ -1509,17 +1529,11 @@ def main(explanations_file: str):
         device,
         dtype,
         verbose=True,
-        use_wandb=True,
     )
+
+    wandb.finish()
 
 
 if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) > 1:
-        explanations_file = sys.argv[1]
-    else:
-        # Default filename - update this to your actual file
-        explanations_file = "sae_sfted_gpt-5-mini-2025-08-07.jsonl"
-
+    explanations_file = "sae_sfted_gpt-5-mini-2025-08-07.jsonl"
     main(explanations_file)
