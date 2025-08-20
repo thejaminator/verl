@@ -1032,10 +1032,10 @@ async def main(
 
     # Plot F1 scores by model
     rename_map = {m.model: m.display_name for m in explainer_models}
-    plot_f1_scores_by_model(groupby_by_model, rename_map)
+    # plot_f1_scores_by_model(groupby_by_model, rename_map)
 
     # Plot precision vs recall by model
-    plot_precision_vs_recall_by_model(groupby_by_model)
+    # plot_precision_vs_recall_by_model(groupby_by_model)
 
     for model_name, evaluation_results in groupby_by_model:
         if len(evaluation_results) == 0:
