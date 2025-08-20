@@ -361,7 +361,11 @@ async def call_model_for_sae_explanation(
     # prefill assistant sside for gemma cos gemma is dumb
     # if "gemma" in model_info.model:
     #     chat_history = chat_history.add_assistant(content="<explanation>")
-    response = await caller.call(chat_history, config)
+    try:
+        response = await caller.call(chat_history, config)
+    except ContentPolicyError as e:
+        print(f"Content policy error: {e}")
+        return Slist()
     if best_of_n is None:
         return Slist(
             [
