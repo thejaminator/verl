@@ -533,9 +533,9 @@ async def evaluate_sentence_matching(
 
     retrieved_sentences_with_emojis = []
     for i, sentence_idx in enumerate(answer):
-        sentence = batch.shuffled_sentences[sentence_idx]
+        sentence = batch.shuffled_sentences[sentence_idx] if sentence_idx < len(batch.shuffled_sentences) else None
         emoji = "✅" if sentence_idx in batch.target_indices else "❌"
-        sentence_text = sentence_to_prompt_text_only(sentence)
+        sentence_text = sentence_to_prompt_text_only(sentence) if sentence is not None else "Wrong index"
         retrieved_sentences_with_emojis.append(f"{emoji} {sentence_text}")
 
     retrieved_sentences_str = "\n".join(retrieved_sentences_with_emojis)
