@@ -1066,7 +1066,7 @@ async def main(
 
         sft_data = evaluation_results.map(lambda x: x.to_sae_explained()).filter(lambda x: x.f1 > 0.8)
         # Save the SAE explanations
-        sae_explanations_output_file = f"sae_sfted_{safe_model_name}.jsonl"
+        sae_explanations_output_file = f"20aug_sae_sfted_{safe_model_name}.jsonl"
         write_jsonl_file_from_basemodel(path=sae_explanations_output_file, basemodels=sft_data)
         print(f"  SAE explanations saved to {sae_explanations_output_file}")
 
