@@ -2,7 +2,7 @@ import asyncio
 from typing import Sequence
 
 import plotly.graph_objects as go
-from openai import BaseModel
+from openai import AsyncOpenAI, BaseModel
 from pydantic import BaseModel
 from slist import Group, Slist
 
@@ -234,9 +234,9 @@ When writing the explanation, explain straightaway, don't say 'This feature dete
 3. Your explanation should be precise. It should be broad enough to cover the meaning of the positive examples. But at the same time, it should be precise enough to distinguish from the negative examples.
 
 Please write your final answer of what this SAE feature explains in the following format:
-<sae_feature_explanation>
+<explanation>
 ...
-</sae_feature_explanation>"""
+</explanation>"""
     return prompt
 
 
@@ -311,7 +311,7 @@ async def call_model_for_sae_explanation(
     chat_history = ChatHistory().add_user(content=prompt)
     # prefill assistant sside for gemma cos gemma is dumb
     # if "gemma" in model_info.model:
-    #     chat_history = chat_history.add_assistant(content="<sae_feature_explanation>")
+    #     chat_history = chat_history.add_assistant(content="<explanation>")
     response = await caller.call(chat_history, config)
     if best_of_n is None:
         return Slist(
@@ -345,8 +345,8 @@ async def call_model_for_sae_explanation(
 
 def extract_explanation_text(explanation_response: str) -> str:
     """Extract the explanation text from between XML tags."""
-    start_tag = "<sae_feature_explanation>"
-    end_tag = "</sae_feature_explanation>"
+    start_tag = "<explanation>"
+    end_tag = "</explanation>"
 
     start_idx = explanation_response.find(start_tag)
     end_idx = explanation_response.find(end_tag)
@@ -358,8 +358,8 @@ def extract_explanation_text(explanation_response: str) -> str:
         # Fallback: return the whole response if tags aren't found
         return (
             explanation_response.strip()
-            .replace("<sae_feature_explanation>", "")
-            .replace("</sae_feature_explanation>", "")
+            .replace("<explanation>", "")
+            .replace("</explanation>", "")
         )
 
 
@@ -418,9 +418,9 @@ def create_evaluation_prompt(batch: MixedSentencesBatch) -> str:
 
     prompt = f"""I will provide you with an SAE feature explanation and {num_sentences} sentences. Your task is to identify which sentence numbers correspond to the given explanation.
 
-<sae_feature_explanation>
+<explanation>
 {batch.target_explanation}
-</sae_feature_explanation>
+</explanation>
 
 <sentences>
 """
@@ -754,6 +754,7 @@ class SAEExperimentConfig(BaseModel):
 
 async def main(
     explainer_models: Slist[ModelInfo],
+    run_gemma_steering: bool,
     sae_file: str,
     config: SAEExperimentConfig,
     max_par: int = 10,
@@ -800,7 +801,9 @@ async def main(
         )
 
     _split_sae_activations = saes.map(create_sae_train_test)
-    split_sae_activations = _split_sae_activations.flatten_option()
+
+    # These are the "train" SAEs that we will use for explanation generation
+    split_sae_activations: Slist[SAETrainTest] = _split_sae_activations.flatten_option()
 
     print(f"Loaded {len(split_sae_activations)} valid SAE entries")
 
@@ -816,7 +819,11 @@ async def main(
             ),
             max_par=max_par,
         )
-        all_explanations = _explanations.flatten_list()
+        all_explanations: Slist[SAETrainTestWithExplanation] = _explanations.flatten_list()
+
+    if run_gemma_steering:
+        # Run gemma steering
+        gemma_caller = AsyncOpenAI(api_key="dummy api key", base_url="https://api.gemma.ai/v1")
 
     # Run evaluations for each model's explanations
     caller_for_eval = load_multi_caller(cache_path="cache/sae_evaluations")
