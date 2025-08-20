@@ -137,6 +137,11 @@ class OpenaiResponse(BaseModel):
             return content
         except TypeError:
             raise ValueError(f"No content found in OpenaiResponse: {self}")
+        
+    @property
+    def responses(self) -> Slist[str]:
+        # When n > 1, we get a list of responses.
+        return Slist(self.choices).map(lambda x: x["message"]["content"])
 
     @property
     def all_responses(self) -> list[str]:
@@ -538,6 +543,10 @@ class CallerCache(Generic[GenericBaseModel]):
             await cache.flush()
 
 
+class ContentPolicyError(Exception):
+    pass
+
+
 class OpenAICaller(Caller):
     def __init__(
         self,
@@ -556,11 +565,7 @@ class OpenAICaller(Caller):
                 )
                 api_key = env_key
             self.client = AsyncOpenAI(api_key=api_key, organization=organization)
-        self.cache_by_model = (
-            CallerCache(Path(cache_path), cache_type=OpenaiResponse)
-            if not isinstance(cache_path, CallerCache)
-            else cache_path
-        )
+        self.cache_by_model = CallerCache(Path(cache_path)) if not isinstance(cache_path, CallerCache) else cache_path
 
     async def flush(self) -> None:
         await self.cache_by_model.flush()
@@ -585,17 +590,27 @@ class OpenAICaller(Caller):
     )
     async def call(
         self,
-        messages: ChatHistory,
+        messages: ChatHistory | Sequence[ChatMessage],  # backwards compat
         config: InferenceConfig,
         try_number: int = 1,
         tool_args: ToolArgs | None = None,
     ) -> OpenaiResponse:
-        maybe_result = await self.get_cache(config.model).get_model_call(messages, config, try_number, tool_args)
-        if maybe_result is not None:
+        if not isinstance(messages, ChatHistory):
+            messages = ChatHistory(messages=messages)
+        maybe_result = await self.get_cache(config.model).get_model_call(
+            messages, config, try_number, tool_args
+        )
+        if not isinstance(maybe_result, str):
+            assert maybe_result is not None, (
+                f"maybe_result is None for model {config.model}. Prompt: {messages}. maybe_result: {maybe_result}"
+            )
             return maybe_result
+        # print(f"DEBUG: Calling {config.model} with {messages=}")
+        key: str = maybe_result
+        # print(f"DEBUG: {key} cache miss. {messages=}\n{config=}\n{tool_args=}")
 
         assert len(messages.messages) > 0, "Messages must be non-empty"
-        extra_body = config.extra_body or {}
+        extra_body = config.extra_body.copy() if config.extra_body is not None else {}
         if config.continue_final_message:
             # https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html
             # disable add_generation_prompt to continue the conversation
@@ -612,15 +627,17 @@ class OpenAICaller(Caller):
                 ),
                 top_p=config.top_p if config.top_p is not None else NOT_GIVEN,
                 frequency_penalty=config.frequency_penalty if config.frequency_penalty != 0.0 else NOT_GIVEN,
+                response_format=config.response_format if config.response_format is not None else NOT_GIVEN,  # type: ignore
                 tools=tool_args.tools if tool_args is not None else NOT_GIVEN,  # type: ignore
                 extra_body=extra_body or None,
-                n=config.n,
-                reasoning_effort=config.reasoning_effort if config.reasoning_effort is not None else NOT_GIVEN,  # type: ignore
+                timeout=1200,
+                n=config.n if config.n is not None else NOT_GIVEN,
             )
         except Exception as e:
-            note = f"Model: {config.model}. API domain: {self.client.base_url}"
+            note = f"Model: {config.model}. API domain: {self.client.base_url}."
             e.add_note(note)
             raise e
+        # print(f"DEBUG: Got response")
 
         try:
             resp = OpenaiResponse.model_validate(chat_completion.model_dump())
@@ -631,9 +648,18 @@ class OpenAICaller(Caller):
             raise e
 
         await self.get_cache(config.model).add_model_call(
-            messages=messages, config=config, try_number=try_number, response=resp, tools=tool_args
+            messages=messages,
+            config=config,
+            try_number=try_number,
+            response=resp,
+            tools=tool_args,
+        )
+        # print(f"DEBUG: Added {key} to cache")
+        assert resp is not None, (
+            f"Response is None for model {config.model}. Prompt: {messages}. resp: {chat_completion.model_dump()}"
         )
         return resp
+
 
     @retry(
         stop=(stop_after_attempt(5)),
@@ -653,6 +679,8 @@ class OpenAICaller(Caller):
     ) -> GenericBaseModel:
         maybe_result = await self.get_cache(config.model).get_model_call(messages, config, try_number, tool_args)
         if maybe_result is not None:
+            if "content_error" in maybe_result.choices[0]:
+                raise ContentPolicyError(maybe_result.choices[0]["content_error"]["message"])
             return schema.model_validate_json(maybe_result.first_response)
         try:
             chat_completion = await self.client.beta.chat.completions.parse(
@@ -660,16 +688,34 @@ class OpenAICaller(Caller):
                 messages=[msg.to_openai_content() for msg in messages.messages],  # type: ignore
                 temperature=config.temperature if config.temperature is not None else NOT_GIVEN,
                 max_tokens=config.max_tokens if config.max_tokens is not None else NOT_GIVEN,
-                max_completion_tokens=(
-                    config.max_completion_tokens if config.max_completion_tokens is not None else NOT_GIVEN
-                ),
+                max_completion_tokens=config.max_completion_tokens
+                if config.max_completion_tokens is not None
+                else NOT_GIVEN,
                 top_p=config.top_p if config.top_p is not None else NOT_GIVEN,
-                frequency_penalty=config.frequency_penalty if config.frequency_penalty != 0.0 else NOT_GIVEN,
+                frequency_penalty=config.frequency_penalty if config.frequency_penalty is not None else NOT_GIVEN,
                 response_format=schema,
                 extra_body=config.extra_body or {},
                 reasoning_effort=config.reasoning_effort if config.reasoning_effort is not None else NOT_GIVEN,  # type: ignore
-                n=config.n if config.n is not None else NOT_GIVEN,
             )
+        except openai.BadRequestError as e:
+            if "limited access to this content for safety reasons." in e.message:
+                # cache the error response
+                await self.get_cache(config.model).add_model_call(
+                    messages=messages,
+                    config=config,
+                    try_number=try_number,
+                    response=OpenaiResponse(
+                        id=None,
+                        choices=[{"content_error": {"message": e.message, "type": "content_policy_violation"}}],
+                        created=0,
+                        model=config.model,
+                        usage={},
+                    ),
+                    tools=tool_args,
+                )
+                raise ContentPolicyError(e.message)
+            else:
+                raise e
         except Exception as e:
             api_key = self.client.api_key
             api_domain = self.client.base_url
@@ -709,8 +755,8 @@ class OpenAICaller(Caller):
             n=config.n,
             stream=False,
             logprobs=True,
+            extra_body=config.extra_body or {},
             top_logprobs=top_logprobs,
-            reasoning_effort=config.reasoning_effort if config.reasoning_effort is not None else NOT_GIVEN,  # type: ignore
         )
         resp = OpenaiResponseWithLogProbs.model_validate(result.model_dump())
 

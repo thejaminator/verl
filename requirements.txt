@@ -29,3 +29,6 @@ pydantic
 regex
 dotenv
 slist
+plotly
+anthropic
+openai
