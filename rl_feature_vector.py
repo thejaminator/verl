@@ -10,7 +10,7 @@ Based on the verl documentation and examples.
 import json
 import os
 
-from create_hard_negative_and_feature_vector import SAE
+from detection_eval.detection_basemodels import SAE
 
 # set HF_HOME to /workspace
 os.environ["HF_HOME"] = "/workspace"

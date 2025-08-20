@@ -1,36 +1,27 @@
 import asyncio
-from typing import List, Set, Sequence
+from typing import Sequence
+
+import plotly.graph_objects as go
 from openai import BaseModel
 from pydantic import BaseModel
 from slist import Group, Slist
-import plotly.graph_objects as go
 
-from create_hard_negative_and_feature_vector import SAEActivations, SentenceInfo, TokenActivation
 from detection_eval.caller import (
-    read_jsonl_file_into_basemodel,
-    ChatHistory,
-    InferenceConfig,
-    write_jsonl_file_from_basemodel,
     Caller,
+    ChatHistory,
     ContentPolicyError,
+    InferenceConfig,
     load_multi_caller,
+    read_jsonl_file_into_basemodel,
+    write_jsonl_file_from_basemodel,
 )
+from detection_eval.detection_basemodels import SAE, SAEActivations, SentenceInfo, TokenActivation
 
 
 class ModelInfo(BaseModel):
     model: str
     display_name: str
     reasoning_effort: str | None = None
-
-
-class SAE(BaseModel):
-    sae_id: int
-    feature_vector: Sequence[float]
-    activations: SAEActivations
-    # Sentences that do not activate for the given sae_id. But come from a similar SAE
-    # Here the sae_id correspond to different similar SAEs.
-    # The activations are the activations w.r.t this SAE. And should be low.
-    hard_negatives: list[SAEActivations]
 
 
 class SAEExplained(BaseModel):
@@ -266,18 +257,18 @@ class MixedSentencesBatch(BaseModel):
     target_sae_id: int
     explanation_history: ChatHistory
     target_explanation: str
-    positive_examples: List[SentenceInfo]  # Sentences that should activate the feature
-    negative_examples: List[SentenceInfo]  # Sentences that should NOT activate the feature
-    shuffled_sentences: List[SentenceInfo]  # All sentences shuffled for evaluation
-    target_indices: Set[int]  # Indices in shuffled_sentences that correspond to positive examples
+    positive_examples: list[SentenceInfo]  # Sentences that should activate the feature
+    negative_examples: list[SentenceInfo]  # Sentences that should NOT activate the feature
+    shuffled_sentences: list[SentenceInfo]  # All sentences shuffled for evaluation
+    target_indices: set[int]  # Indices in shuffled_sentences that correspond to positive examples
 
 
 class DetectionResult(BaseModel):
     """Results of precision/recall evaluation."""
 
     target_sae_id: int
-    predicted_indices: Set[int]
-    true_indices: Set[int]
+    predicted_indices: set[int]
+    true_indices: set[int]
     precision: float
     recall: float
     f1_score: float
@@ -561,7 +552,7 @@ async def run_evaluation_for_explanations(
     )
 
     # Create evaluation batches
-    detection_batches: List[tuple[MixedSentencesBatch, str]] = []
+    detection_batches: list[tuple[MixedSentencesBatch, str]] = []
     for target_sae in explanations_with_hard_negatives:
         batch = create_detection_batch(target_sae=target_sae)
         detection_batches.append((batch, target_sae.explainer_model))

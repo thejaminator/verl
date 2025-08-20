@@ -1,28 +1,26 @@
 import hashlib
-from json import JSONDecodeError
 import math
+import os
+import random
 import time
-import anthropic
-from datetime import datetime
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from datetime import datetime
+from json import JSONDecodeError
 from pathlib import Path
-from typing import Any, Generic, Mapping, Optional, Sequence, Type, TypeVar
+from typing import Any, Generic, Mapping, Optional, Sequence, TypeVar
+
+import anthropic
+import anyio
+import openai
 from anthropic.types.message import Message
 from anyio import Path as AnyioPath
-
-import anyio
 from dotenv import load_dotenv
 from openai import NOT_GIVEN, AsyncOpenAI, InternalServerError
-import os
 from openai.types.moderation_create_response import ModerationCreateResponse
 from pydantic import BaseModel, ValidationError
 from slist import Slist
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
-
-from dataclasses import dataclass
-import random
-import openai
-
 
 GenericBaseModel = TypeVar("GenericBaseModel", bound=BaseModel)
 
@@ -137,7 +135,7 @@ class OpenaiResponse(BaseModel):
             return content
         except TypeError:
             raise ValueError(f"No content found in OpenaiResponse: {self}")
-        
+
     @property
     def responses(self) -> Slist[str]:
         # When n > 1, we get a list of responses.
@@ -245,7 +243,7 @@ def write_jsonl_file_from_basemodel(path: Path | str, basemodels: Sequence[BaseM
             f.write(basemodel.model_dump_json() + "\n")
 
 
-def read_jsonl_file_into_basemodel(path: Path | str, basemodel: Type[GenericBaseModel]) -> Slist[GenericBaseModel]:
+def read_jsonl_file_into_basemodel(path: Path | str, basemodel: type[GenericBaseModel]) -> Slist[GenericBaseModel]:
     with open(path) as f:
         return Slist(basemodel.model_validate_json(line) for line in f)
 
@@ -254,7 +252,7 @@ def deterministic_hash(something: str) -> str:
     return hashlib.sha1(something.encode()).hexdigest()
 
 
-def validate_json_item(item: str, model: Type[GenericBaseModel]) -> GenericBaseModel | None:
+def validate_json_item(item: str, model: type[GenericBaseModel]) -> GenericBaseModel | None:
     try:
         return model.model_validate_json(item)
     except ValidationError:
@@ -373,7 +371,7 @@ def file_cache_key(
 
 
 async def read_jsonl_file_into_basemodel_async(
-    path: AnyioPath, basemodel: Type[GenericBaseModel]
+    path: AnyioPath, basemodel: type[GenericBaseModel]
 ) -> Slist[GenericBaseModel]:
     async with await anyio.open_file(path, "r") as f:
         return Slist([basemodel.model_validate_json(line) for line in await f.readlines()])
@@ -393,7 +391,7 @@ class Caller(ABC):
     async def call_with_schema(
         self,
         messages: ChatHistory,
-        schema: Type[GenericBaseModel],
+        schema: type[GenericBaseModel],
         config: InferenceConfig,
         try_number: int = 1,
     ) -> GenericBaseModel:
@@ -423,7 +421,7 @@ class Caller(ABC):
 
 
 class APIRequestCache(Generic[GenericBaseModel]):
-    def __init__(self, cache_path: Path | str, response_type: Type[GenericBaseModel]):
+    def __init__(self, cache_path: Path | str, response_type: type[GenericBaseModel]):
         self.cache_path = AnyioPath(cache_path)
         self.response_type = response_type
         self.data: dict[str, str] = {}
@@ -516,7 +514,7 @@ class APIRequestCache(Generic[GenericBaseModel]):
 class CallerCache(Generic[GenericBaseModel]):
     """Will create a jsonl cache for each model."""
 
-    def __init__(self, cache_path: Path, cache_type: Type[GenericBaseModel] = OpenaiResponse):
+    def __init__(self, cache_path: Path, cache_type: type[GenericBaseModel] = OpenaiResponse):
         self.cache_path = Path(cache_path)
         # if not exists, create it
         if not self.cache_path.exists():
@@ -585,7 +583,7 @@ class OpenAICaller(Caller):
     @retry(
         stop=(stop_after_attempt(10)),
         wait=(wait_fixed(30)),  # for rate limits, wait longer
-        retry=(retry_if_exception_type((openai.RateLimitError))),
+        retry=(retry_if_exception_type(openai.RateLimitError)),
         reraise=True,
     )
     async def call(
@@ -597,17 +595,9 @@ class OpenAICaller(Caller):
     ) -> OpenaiResponse:
         if not isinstance(messages, ChatHistory):
             messages = ChatHistory(messages=messages)
-        maybe_result = await self.get_cache(config.model).get_model_call(
-            messages, config, try_number, tool_args
-        )
-        if not isinstance(maybe_result, str):
-            assert maybe_result is not None, (
-                f"maybe_result is None for model {config.model}. Prompt: {messages}. maybe_result: {maybe_result}"
-            )
+        maybe_result: OpenaiResponse | None = await self.get_cache(config.model).get_model_call(messages, config, try_number, tool_args)
+        if maybe_result is not None:
             return maybe_result
-        # print(f"DEBUG: Calling {config.model} with {messages=}")
-        key: str = maybe_result
-        # print(f"DEBUG: {key} cache miss. {messages=}\n{config=}\n{tool_args=}")
 
         assert len(messages.messages) > 0, "Messages must be non-empty"
         extra_body = config.extra_body.copy() if config.extra_body is not None else {}
@@ -627,7 +617,6 @@ class OpenAICaller(Caller):
                 ),
                 top_p=config.top_p if config.top_p is not None else NOT_GIVEN,
                 frequency_penalty=config.frequency_penalty if config.frequency_penalty != 0.0 else NOT_GIVEN,
-                response_format=config.response_format if config.response_format is not None else NOT_GIVEN,  # type: ignore
                 tools=tool_args.tools if tool_args is not None else NOT_GIVEN,  # type: ignore
                 extra_body=extra_body or None,
                 timeout=1200,
@@ -660,7 +649,6 @@ class OpenAICaller(Caller):
         )
         return resp
 
-
     @retry(
         stop=(stop_after_attempt(5)),
         wait=(wait_fixed(5)),
@@ -672,7 +660,7 @@ class OpenAICaller(Caller):
     async def call_with_schema(
         self,
         messages: ChatHistory,
-        schema: Type[GenericBaseModel],
+        schema: type[GenericBaseModel],
         config: InferenceConfig,
         try_number: int = 1,
         tool_args: ToolArgs | None = None,
@@ -850,13 +838,13 @@ class AnthropicCaller(Caller):
     @retry(
         stop=(stop_after_attempt(5)),
         wait=(wait_fixed(5)),
-        retry=(retry_if_exception_type((ValidationError))),
+        retry=(retry_if_exception_type(ValidationError)),
         reraise=True,
     )
     async def call_with_schema(
         self,
         messages: ChatHistory,
-        schema: Type[GenericBaseModel],
+        schema: type[GenericBaseModel],
         config: InferenceConfig,
         try_number: int = 1,
     ) -> GenericBaseModel:
@@ -906,7 +894,7 @@ class MultiClientCaller(Caller):
     async def call_with_schema(
         self,
         messages: ChatHistory,
-        schema: Type[GenericBaseModel],
+        schema: type[GenericBaseModel],
         config: InferenceConfig,
         try_number: int = 1,
     ) -> GenericBaseModel:
@@ -944,7 +932,7 @@ class PooledCaller(Caller):
     async def call_with_schema(
         self,
         messages: ChatHistory,
-        schema: Type[GenericBaseModel],
+        schema: type[GenericBaseModel],
         config: InferenceConfig,
         try_number: int = 1,
     ) -> GenericBaseModel:
