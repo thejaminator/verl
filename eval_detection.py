@@ -1,5 +1,6 @@
 import asyncio
 from enum import unique
+import time
 from typing import Sequence
 
 import plotly.graph_objects as go
@@ -45,6 +46,7 @@ def read_sae_file(sae_file: str, limit: int | None = None, start_index: int = 0)
     if limit is None and start_index == 0:
         return read_jsonl_file_into_basemodel(sae_file, SAE)
     else:
+        start_time = time.time()
         with open(sae_file) as f:
             output = Slist[SAE]()
             # Skip the first `start_index` lines
@@ -59,7 +61,28 @@ def read_sae_file(sae_file: str, limit: int | None = None, start_index: int = 0)
                 output.append(sae)
                 if limit is not None and len(output) >= limit:
                     break
+            end_time = time.time()
+            print(f"Read {len(output)} SAEs in {end_time - start_time:.2f} seconds")
             return output
+
+def read_sae_file_to_str(sae_file: str, limit: int | None = None, start_index: int = 0) -> Slist[str]:
+    start_time = time.time()
+    with open(sae_file) as f:
+        output = Slist[str]()
+        # Skip the first `start_index` lines
+        for _ in range(start_index):
+            try:
+                next(f)
+            except StopIteration:
+                return output
+        # Read up to `limit` items (or rest of file if limit is None)
+        for line in f:
+            output.append(line)
+            if limit is not None and len(output) >= limit:
+                break
+        end_time = time.time()
+        print(f"Read {len(output)} SAEs in {end_time - start_time:.2f} seconds")
+        return output
 
 
 def sentence_to_prompt_with_vector(sentence: SentenceInfo) -> str:
@@ -205,9 +228,9 @@ class SAETrainTest(BaseModel):
 
         total_train_hard_negatives = len(train_hard_negatives) * train_hard_negative_sentences
         total_test_hard_negatives = len(test_hard_negatives) * test_hard_negative_sentences
-        print(
-            f"SAE {sae.sae_id} has {total_train_hard_negatives} train hard negatives and {total_test_hard_negatives} test hard negatives"
-        )
+        # print(
+        #     f"SAE {sae.sae_id} has {total_train_hard_negatives} train hard negatives and {total_test_hard_negatives} test hard negatives"
+        # )
 
         return SAETrainTest(
             sae_id=sae.sae_id,
@@ -877,7 +900,11 @@ async def main(
     test_hard_negative_saes = config.test_hard_negative_saes
     test_hard_negative_sentences = config.test_hard_negative_sentences
 
-    saes: Slist[SAE] = read_sae_file(sae_file, limit=target_saes_to_test, start_index=config.sae_start_index)
+    # saes: Slist[SAE] = read_sae_file(sae_file, limit=target_saes_to_test, start_index=config.sae_start_index)
+    # sae_lines = read_sae_file_to_str(sae_file, limit=target_saes_to_test, start_index=config.sae_start_index)
+    # print("validating")
+    # saes = sae_lines.map(lambda x: SAE.model_validate_json(x))
+    saes = read_sae_file(sae_file, limit=target_saes_to_test, start_index=config.sae_start_index)
     print(f"Loaded {len(saes)} SAE entries starting at index {config.sae_start_index}")
 
     def create_sae_train_test(sae: SAE) -> SAETrainTest | None:
@@ -1049,7 +1076,7 @@ if __name__ == "__main__":
     explainer_models = Slist(
         [
             ModelInfo(model="gpt-5-mini-2025-08-07", display_name="GPT-5-mini<br>(extrospecting<br>activating sentences)", reasoning_effort="medium"),
-            ModelInfo(model="meta-llama/llama-3-70b-instruct", display_name="Llama-3-70b<br>(extrospecting<br>activating sentences)"),
+            # ModelInfo(model="meta-llama/llama-3-70b-instruct", display_name="Llama-3-70b<br>(extrospecting<br>activating sentences)"),
             # ModelInfo(model="gpt-5-mini-2025-08-07", display_name="GPT-5-mini", reasoning_effort="low"),
             # meta-llama/llama-3-70b-instruct
             # ModelInfo(model="gpt-4.1-2025-04-14", display_name="GPT-4.1"),
@@ -1068,8 +1095,9 @@ if __name__ == "__main__":
     sae_file = "data/10k_hard_negatives_results.jsonl"
     # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
     # Which to use for constructing explanations vs testing detection?
-    saes_to_test = 100
-    sae_start_index = 2_000  # not in train set for the trained model
+    saes_to_test = 8_000
+    # sae_start_index = 2_000  # not in train set for the trained model
+    sae_start_index = 0
 
     hard_negatives_config = SAEExperimentConfig(
         test_target_activating_sentences=Slist([4, 5, 6, 7, 8]),
@@ -1098,11 +1126,12 @@ if __name__ == "__main__":
     asyncio.run(
         main(
             sae_file=sae_file,
-            use_gemma_steering=True,
+            # use_gemma_steering=True,
+            use_gemma_steering=False,
             explainer_models=explainer_models,
-            add_random_explanations=True,
-            config=hard_negatives_config,
-            # config=best_of_8_config,
+            add_random_explanations=False,
+            # config=hard_negatives_config,
+            config=best_of_8_config,
             # config=no_train_hard_negatives_config,
             # config=eight_positive_examples_config,
             # config=two_positive_examples,

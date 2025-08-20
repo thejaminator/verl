@@ -588,17 +588,17 @@ class OpenAICaller(Caller):
     )
     async def call(
         self,
-        messages: ChatHistory | Sequence[ChatMessage],  # backwards compat
+        messages: ChatHistory,
         config: InferenceConfig,
         try_number: int = 1,
         tool_args: ToolArgs | None = None,
     ) -> OpenaiResponse:
-        if not isinstance(messages, ChatHistory):
-            messages = ChatHistory(messages=messages)
         maybe_result: OpenaiResponse | None = await self.get_cache(config.model).get_model_call(
             messages, config, try_number, tool_args
         )
         if maybe_result is not None:
+            if "content_error" in maybe_result.choices[0]:
+                raise ContentPolicyError(maybe_result.choices[0]["content_error"]["message"])
             return maybe_result
 
         assert len(messages.messages) > 0, "Messages must be non-empty"
@@ -624,6 +624,25 @@ class OpenAICaller(Caller):
                 timeout=1200,
                 n=config.n if config.n is not None else NOT_GIVEN,
             )
+        except openai.BadRequestError as e:
+            if "limited access to this content for safety reasons." in e.message:
+                # cache the error response
+                await self.get_cache(config.model).add_model_call(
+                    messages=messages,
+                    config=config,
+                    try_number=try_number,
+                    response=OpenaiResponse(
+                        id=None,
+                        choices=[{"content_error": {"message": e.message, "type": "content_policy_violation"}}],
+                        created=0,
+                        model=config.model,
+                        usage={},
+                    ),
+                    tools=tool_args,
+                )
+                raise ContentPolicyError(e.message)
+            else:
+                raise e
         except Exception as e:
             note = f"Model: {config.model}. API domain: {self.client.base_url}."
             e.add_note(note)
