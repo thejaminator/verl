@@ -33,7 +33,7 @@ DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
 CTX_LEN = 512 * 4
 LAYER = 9  # Target layer for activation steering (matching lightweight_sft.py)
-MAX_PARALLEL_REQUESTS = 30
+MAX_PARALLEL_REQUESTS = 28
 GENERATE_WAIT_SECONDS = 2
 
 # SAE Configuration
@@ -352,6 +352,10 @@ def get_activation_steering_hook(
         
         if tokens_L.shape[0] == B:
             # means we are in decoding, not prefill. So no need to steer.
+            return output
+        
+        # if there aren't any 0s in tokens_L, then we are NOT in prefill. So skip
+        if not torch.any(tokens_L == 0):
             return output
 
         count = 0
