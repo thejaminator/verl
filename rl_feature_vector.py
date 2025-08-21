@@ -555,6 +555,7 @@ if __name__ == "__main__":
         # smaller model for testing
         model_name="google/gemma-2-2b-it",
         use_feature_vector=False, # debugging logprobs
+        train_path="hard_negatives_100_000_to_100_800.jsonl",
         num_generations=16,  # Bigger group size since noisy explanations
         # micro_batch=8,
         # micro_batch_size_per_gpu=8,
@@ -575,7 +576,6 @@ if __name__ == "__main__":
         layered_summon=False,
         max_steps=4000,
         output_dir="/workspace/verl_outputs_feature_vector",
-        train_path="hard_negatives_results.jsonl",
         eval_path=None,
         save_steps=10,
         n_gpus=1,
