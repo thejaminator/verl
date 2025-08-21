@@ -46,7 +46,6 @@ def get_sae_info(sae_repo_id: str) -> tuple[int, int, int, str]:
     sae_width = 131
 
     if sae_repo_id == "google/gemma-scope-9b-it-res":
-
         if sae_width == 16:
             sae_filename = f"layer_{sae_layer}/width_16k/average_l0_88/params.npz"
         elif sae_width == 131:
@@ -558,6 +557,9 @@ def compute_sae_activations_for_sentences(
                     sentence_infos.append(sentence_info)
 
             except Exception as e:
+                if "CUDA out of memory" in str(e):
+                    raise e
+
                 print(f"WARNING: Error processing batch: {e}")
                 print(f"Batch sentences: {batch_sentences}")
                 continue
@@ -747,4 +749,10 @@ if __name__ == "__main__":
     # Example usage - customize the feature_idxs and other parameters as needed
     target_features = list(range(100_000, 100_800))
     # actually we want 32, but sometimes it fails, so need some buffer.
-    main(target_features=target_features, top_k_similar_features=34, batch_size=1024, target_sentences=32, output="hard_negatives_100_000_to_100_800.jsonl")
+    main(
+        target_features=target_features,
+        top_k_similar_features=34,
+        batch_size=1024,
+        target_sentences=32,
+        output="hard_negatives_100_000_to_100_800.jsonl",
+    )
