@@ -98,10 +98,7 @@ def push_lora_to_hf(
 # ==============================================================================
 
 
-def get_sae_info(sae_repo_id: str, sae_width: int) -> tuple[int, int, int, str]:
-    sae_layer = 9
-    sae_layer_percent = 25
-
+def get_sae_info(sae_repo_id: str, sae_width: int, sae_layer: int) -> str:
     if sae_repo_id == "google/gemma-scope-9b-it-res":
 
         if sae_width == 16:
@@ -110,12 +107,15 @@ def get_sae_info(sae_repo_id: str, sae_width: int) -> tuple[int, int, int, str]:
             sae_filename = f"layer_{sae_layer}/width_131k/average_l0_121/params.npz"
         else:
             raise ValueError(f"Unknown SAE width: {sae_width}")
-    elif sae_repo_id == "fnlp/Llama3_1-8B-Base-LXR-32x":
-        sae_width = 32
-        sae_filename = ""
+        return sae_filename
+    # elif sae_repo_id == "fnlp/Llama3_1-8B-Base-LXR-32x":
+    #     if sae_width != 32:
+    #         raise ValueError(
+    #             f"Only expansion factor 32x is supported for {sae_repo_id}. Got: {sae_width}"
+    #         )
+    #     return ""
     else:
         raise ValueError(f"Unknown SAE repo ID: {sae_repo_id}")
-    return sae_width, sae_layer, sae_layer_percent, sae_filename
 
 
 @dataclass
@@ -164,8 +164,8 @@ class SelfInterpTrainingConfig:
 
     def __post_init__(self):
         """Called after the dataclass is initialized."""
-        self.sae_width, self.sae_layer, self.sae_layer_percent, self.sae_filename = get_sae_info(self.sae_repo_id, self.sae_width)
-
+        sae_filename = get_sae_info(self.sae_repo_id, self.sae_width, self.sae_layer)
+        self.sae_filename = sae_filename
 
 # ==============================================================================
 # 3. DATA MODELS
@@ -1501,12 +1501,16 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
     print(f"train examples: {len(training_examples)}")
     print(f"Train features: {len(train_features)}")
 
-    # Use a subset of training features for evaluation
-    # 0 to 10, then 20_000 to 20_020
-    # 0 to 10 is in training, 20_000 to 20_020 is in eval
-    cfg.eval_features = [i for i in range(10)] + [i for i in range(20_000, 20_020)]
+    # Use provided eval features unless empty, then set a default
+    if not cfg.eval_features:
+        cfg.eval_features = [i for i in range(10)] + [i for i in range(20_000, 20_020)]
 
-    print(f"Using {len(cfg.eval_features)} features for evaluation")
+    # Respect eval_set_size by slicing the features list
+    selected_eval_features = cfg.eval_features
+    if cfg.eval_set_size and cfg.eval_set_size > 0:
+        selected_eval_features = cfg.eval_features[: cfg.eval_set_size]
+
+    print(f"Using {len(selected_eval_features)} features for evaluation")
 
     train_eval_prompt = build_training_prompt(cfg.positive_negative_examples)
 
@@ -1522,9 +1526,9 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
 
     eval_data = construct_eval_dataset(
         cfg,
-        len(cfg.eval_features),
+        len(selected_eval_features),
         train_eval_prompt,
-        cfg.eval_features,
+        selected_eval_features,
         {},  # Empty dict since we don't use api_data anymore
         sae,
         tokenizer,
