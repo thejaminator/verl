@@ -49,6 +49,7 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 def get_gemma_layer_module(actor_module: nn.Module, layer_number: int) -> nn.Module:
+    # actor_module: <class 'torch.distributed.fsdp._fully_shard._fully_shard.FSDPPeftModelForCausalLM'>
     """Return the Gemma decoder layer module from an actor under FSDP/PEFT wrappers.
 
     This mirrors how the demo accesses layers in
@@ -68,83 +69,39 @@ def get_gemma_layer_module(actor_module: nn.Module, layer_number: int) -> nn.Mod
         ValueError: If the layer cannot be located.
     """
     # --- unwrap common wrappers (FSDP, DDP, etc.) ---
-    module = actor_module
+    # TODO: Step into debugger and see what the unwrapped_module realy is instead of this hack
+    unwrapped_module = actor_module
     # unwrap .module repeatedly if present
     max_unwrap = 3
     for _ in range(max_unwrap):
-        if hasattr(module, "module") and isinstance(getattr(module, "module"), nn.Module):
-            module = module.module
+        if hasattr(unwrapped_module, "module") and isinstance(getattr(unwrapped_module, "module"), nn.Module):
+            unwrapped_module = unwrapped_module.module
         else:
             break
 
     # --- unwrap PEFT if present ---
     # Prefer using get_base_model if available
-    if hasattr(module, "get_base_model") and callable(getattr(module, "get_base_model")):
+    if hasattr(unwrapped_module, "get_base_model") and callable(getattr(unwrapped_module, "get_base_model")):
         try:
-            base = module.get_base_model()
+            base = unwrapped_module.get_base_model() # type: ignore
             if isinstance(base, nn.Module):
-                module = base
+                unwrapped_module = base
         except Exception:
             pass
 
     # Some PEFT wrappers expose .base_model
-    if hasattr(module, "base_model") and isinstance(getattr(module, "base_model"), nn.Module):
-        module = module.base_model
+    if hasattr(unwrapped_module, "base_model") and isinstance(getattr(unwrapped_module, "base_model"), nn.Module):
+        unwrapped_module = unwrapped_module.base_model
 
-    # --- try known attribute chains used by HF Gemma ---
-    def _get_attr(obj, attr):
-        return getattr(obj, attr, None)
+    assert unwrapped_module
 
-    candidate_layers = []
-    # 1) model.model.layers
-    m1 = _get_attr(module, "model")
-    m1m = _get_attr(m1, "model") if isinstance(m1, nn.Module) else None
-    layers_1 = _get_attr(m1m, "layers") if isinstance(m1m, nn.Module) else None
-    if isinstance(layers_1, (list, nn.ModuleList)):
-        candidate_layers.append(("model.model.layers", layers_1))
+    from transformers.models.gemma2.modeling_gemma2 import Gemma2Model
+    if isinstance(unwrapped_module, Gemma2Model):
+        return unwrapped_module.layers[layer_number]
+    else:
+        raise ValueError(f"Unwrapped module is not a Gemma2Model: {type(unwrapped_module)}")
+    
 
-    # # 2) base_model.model.model.layers (in case we didn't unwrap fully)
-    # bm = _get_attr(module, "base_model") if not candidate_layers else None
-    # bm_m = _get_attr(bm, "model") if isinstance(bm, nn.Module) else None
-    # bm_m_m = _get_attr(bm_m, "model") if isinstance(bm_m, nn.Module) else None
-    # layers_2 = _get_attr(bm_m_m, "layers") if isinstance(bm_m_m, nn.Module) else None
-    # if isinstance(layers_2, (list, nn.ModuleList)):
-    #     candidate_layers.append(("base_model.model.model.layers", layers_2))
-
-    # # 3) model.layers
-    # layers_3 = _get_attr(m1, "layers") if isinstance(m1, nn.Module) else None
-    # if isinstance(layers_3, (list, nn.ModuleList)):
-    #     candidate_layers.append(("model.layers", layers_3))
-
-    # # 4) layers (direct)
-    # layers_4 = _get_attr(module, "layers")
-    # if isinstance(layers_4, (list, nn.ModuleList)):
-    #     candidate_layers.append(("layers", layers_4))
-
-    for path, layers in candidate_layers:
-        try:
-            return layers[layer_number]
-        except Exception:
-            pass
-
-    # --- last-resort: scan by class name 'GemmaDecoderLayer' and index ---
-    # matches = []
-    # for name, sub in module.named_modules() if isinstance(module, nn.Module) else []:
-    #     if getattr(sub, "__class__", None) and sub.__class__.__name__ == "GemmaDecoderLayer":
-    #         matches.append(sub)
-    # if matches and 0 <= layer_number < len(matches):
-    #     return matches[layer_number]
-
-    # If still not found, provide diagnostics
-    info_lines = [
-        f"actor_module type: {type(actor_module)}",
-        f"unwrapped type: {type(module)}",
-        f"candidate paths tried: {[p for p, _ in candidate_layers] or 'none'}",
-    ]
-    raise ValueError(
-        "Cannot locate Gemma decoder layer. "
-        + " | ".join(info_lines)
-    )
 
 class DataParallelPPOActor(BasePPOActor):
     """FSDP DataParallel PPO Actor or Ref worker
@@ -192,6 +149,7 @@ class DataParallelPPOActor(BasePPOActor):
             entropy: # (bs, response_len)
             log_probs: # (bs, response_len)
         """
+        print(f"micro_batch keys: {micro_batch.keys()}")
         response_length = micro_batch["responses"].size(-1)
         multi_modal_inputs = {}
         if "multi_modal_inputs" in micro_batch.keys():
@@ -282,10 +240,10 @@ class DataParallelPPOActor(BasePPOActor):
 
                 # get the gemma layer module
                 gemma_layer_module = get_gemma_layer_module(self.actor_module, 9)
+                
                 print(f"gemma_layer_module: {gemma_layer_module}")
 
                 # What is the type of actor_module?
-                # "(WorkerDict pid=44981) actor_module: <class 'torch.distributed.fsdp._fully_shard._fully_shard.FSDPPeftModelForCausalLM'>
                 # Need to get the specific gemma layer module
                 print(f"actor_module: {type(self.actor_module)}")
 
