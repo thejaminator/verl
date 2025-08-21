@@ -24,6 +24,7 @@ class ModelInfo(BaseModel):
     model: str
     display_name: str
     reasoning_effort: str | None = None
+    use_steering: bool = False
 
 
 class SAEExplained(BaseModel):
@@ -711,7 +712,9 @@ def plot_f1_scores_by_model(
     fig.show()
 
 
-def plot_precision_vs_recall_by_model(groupby_by_model: Slist[Group[str, Slist[DetectionResult]]]) -> None:
+def plot_precision_vs_recall_by_model(
+    groupby_by_model: Slist[Group[str, Slist[DetectionResult]]], rename_map: dict[str, str] = {}
+) -> None:
     """Plot precision vs recall with models as dots using plotly."""
     # Extract model names and average precision/recall scores
     model_names = []
@@ -725,7 +728,12 @@ def plot_precision_vs_recall_by_model(groupby_by_model: Slist[Group[str, Slist[D
         avg_precision = evaluation_results.map(lambda x: x.precision).sum() / len(evaluation_results)
         avg_recall = evaluation_results.map(lambda x: x.recall).sum() / len(evaluation_results)
 
-        model_names.append(model_name)
+        try_retrieve_name = rename_map.get(model_name, model_name)
+        if try_retrieve_name is None:
+            print(f"Warning: Model name {model_name} not found in rename_map")
+            try_retrieve_name = model_name
+
+        model_names.append(try_retrieve_name)
         avg_precisions.append(avg_precision * 100)  # Convert to percentage
         avg_recalls.append(avg_recall * 100)  # Convert to percentage
 
@@ -876,7 +884,6 @@ def make_random_explanation(items: Slist[SAETrainTestWithExplanation], name: str
 
 async def main(
     explainer_models: Slist[ModelInfo],
-    use_gemma_steering: bool,
     add_random_explanations: bool,
     sae_file: str,
     config: SAEExperimentConfig,
@@ -936,7 +943,8 @@ async def main(
 
     # Generate explanations for each model
     async with caller:
-        _explanations: Slist[Slist[SAETrainTestWithExplanation]] = await explainer_models.par_map_async(
+        non_steering_models = explainer_models.filter(lambda x: not x.use_steering)
+        _explanations: Slist[Slist[SAETrainTestWithExplanation]] = await non_steering_models.par_map_async(
             lambda model_info: generate_explanations_for_model(
                 split_sae_activations, model_info, caller, max_par, config.best_of_n
             ),
@@ -947,41 +955,30 @@ async def main(
 
     caller_for_eval = load_multi_caller(cache_path="cache/sae_evaluations")
 
-    if use_gemma_steering:
+    steering_models = explainer_models.filter(lambda x: x.use_steering)
+
+    if len(steering_models) > 0:
         # Run gemma steering
         print("Running gemma steering")
-        lora_model = "thejaminator/sae-introspection-lora"
         gemma_client = AsyncOpenAI(api_key="dummy api key", base_url="https://94nlcy6stx75yz-8000.proxy.runpod.net/v1")
         width = 131  # not cached by api call yet, so manually add to cache path
         gemma_caller = OpenAICaller(openai_client=gemma_client, cache_path=f"cache/steering_cache_{width}")
         best_of_n = config.best_of_n
-        if best_of_n is not None:
-            max_par_bon = max_par // best_of_n
-            best_of_n_gemma_explanations: Slist[
-                Slist[SAETrainTestWithExplanation]
-            ] = await split_sae_activations.par_map_async(
-                lambda sae: run_gemma_steering_best_of_n(sae, gemma_caller, lora_model, best_of_n),
-                max_par=max_par_bon,
-                tqdm=True,
-            )
-            _gemma_explanations = best_of_n_gemma_explanations.flatten_list()
-        else:
-            _gemma_explanations: Slist[SAETrainTestWithExplanation] = await split_sae_activations.par_map_async(
-                lambda sae: run_gemma_steering(sae, gemma_caller, lora_model),
-                max_par=max_par,
-                tqdm=True,
-            )
+
+        best_of_n_int = best_of_n or 1
+        max_par_bon = max_par // best_of_n_int
+        best_of_n_gemma_explanations = await split_sae_activations.product(steering_models).par_map_async(
+            lambda sae_model: run_gemma_steering_best_of_n(
+                sae_model[0], gemma_caller, sae_model[1].model, best_of_n_int
+            ),
+            max_par=max_par_bon,
+            tqdm=True,
+        )
+        _gemma_explanations = best_of_n_gemma_explanations.flatten_list()
         all_explanations = all_explanations + _gemma_explanations
-        explainer_models = explainer_models + [
-            ModelInfo(
-                model=lora_model,
-                display_name="Light SFT Gemma<br>(Introspecting<br>feature vector)",
-                reasoning_effort="medium",
-            )
-        ]
 
     if add_random_explanations:
-        name = "Random explanation"
+        name = "Random<br>explanation"
         all_explanations = all_explanations + make_random_explanation(non_gemma_explanations, name)
         explainer_models = explainer_models + [ModelInfo(model=name, display_name=name, reasoning_effort="low")]
 
@@ -1069,10 +1066,11 @@ async def main(
 
     # Plot F1 scores by model
     rename_map = {m.model: m.display_name for m in explainer_models}
+    print(rename_map)
     plot_f1_scores_by_model(groupby_by_model, rename_map)
 
     # Plot precision vs recall by model
-    plot_precision_vs_recall_by_model(groupby_by_model)
+    plot_precision_vs_recall_by_model(groupby_by_model, rename_map)
 
 
 if __name__ == "__main__":
@@ -1081,10 +1079,33 @@ if __name__ == "__main__":
         [
             ModelInfo(
                 model="gpt-5-mini-2025-08-07",
-                display_name="GPT-5-mini<br>(extrospecting<br>activating sentences)",
+                display_name="GPT-5-mini<br>(extrospecting<br>sentences)",
                 reasoning_effort="medium",
             ),
-            # ModelInfo(model="meta-llama/llama-3-70b-instruct", display_name="Llama-3-70b<br>(extrospecting<br>activating sentences)"),
+            ModelInfo(
+                model="meta-llama/llama-3-70b-instruct",
+                display_name="Llama-3-70b<br>(extrospecting<br>sentences)",
+            ),
+            ModelInfo(
+                model="thejaminator/gemma-introspection-20250821-step-250",
+                display_name="SFT 1000<br>Gemma<br>(introspecting)",
+                use_steering=True,
+            ),
+            ModelInfo(
+                model="thejaminator/gemma-introspection-20250821-step-500",
+                display_name="SFT 2000",
+                use_steering=True,
+            ),
+            ModelInfo(
+                model="thejaminator/gemma-introspection-20250821-step-1000",
+                display_name="SFT 4000",
+                use_steering=True,
+            ),
+            ModelInfo(
+                model="thejaminator/gemma-introspection-20250821",
+                display_name="SFT 8000<br>Gemma<br>(introspecting)",
+                use_steering=True,
+            ),
             # ModelInfo(model="gpt-5-mini-2025-08-07", display_name="GPT-5-mini", reasoning_effort="low"),
             # meta-llama/llama-3-70b-instruct
             # ModelInfo(model="gpt-4.1-2025-04-14", display_name="GPT-4.1"),
@@ -1100,12 +1121,13 @@ if __name__ == "__main__":
     )
 
     # created with create_hard_negative_and_feature_vector.py
-    sae_file = "data/10k_hard_negatives_results.jsonl"
+    # sae_file = "data/10k_hard_negatives_results.jsonl"
+    sae_file = "data/hard_negatives_100_000_to_100_800.jsonl"
     # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
     # Which to use for constructing explanations vs testing detection?
-    saes_to_test = 14_000
-    # sae_start_index = 2_000  # not in train set for the trained model
+    saes_to_test = 200
     sae_start_index = 0
+    # sae_start_index = 20_000  # not in train set for the trained model
 
     hard_negatives_config = SAEExperimentConfig(
         test_target_activating_sentences=Slist([4, 5, 6, 7, 8]),
@@ -1134,12 +1156,10 @@ if __name__ == "__main__":
     asyncio.run(
         main(
             sae_file=sae_file,
-            # use_gemma_steering=True,
-            use_gemma_steering=False,
             explainer_models=explainer_models,
-            add_random_explanations=False,
-            # config=hard_negatives_config,
-            config=best_of_8_config,
+            add_random_explanations=True,
+            config=hard_negatives_config,
+            # config=best_of_8_config,
             # config=no_train_hard_negatives_config,
             # config=eight_positive_examples_config,
             # config=two_positive_examples,

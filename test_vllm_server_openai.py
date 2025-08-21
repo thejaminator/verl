@@ -27,7 +27,8 @@ async def test_chat_completion(
         extra_body["sae_index"] = sae_index
 
     response = await client.chat.completions.create(
-        model="thejaminator/sae-introspection-lora",
+        # model="thejaminator/sae-introspection-lora",
+        model="thejaminator/gemma-introspection-20250821",
         messages=[
             {
                 "role": "user",

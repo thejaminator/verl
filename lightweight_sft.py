@@ -18,6 +18,7 @@ Before running:
 3. Ensure you have the required explanations JSONL file
 """
 
+import math
 import os
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -1414,6 +1415,7 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
     owner = user_info.get("name") if isinstance(user_info, dict) else None
     hf_repo_id_computed = f"{owner}/{hf_repo_name}" if owner else hf_repo_name
 
+    explanations: list[SAEExplained] = load_explanations_from_jsonl(explanations_file)
     cfg = SelfInterpTrainingConfig(
         # Model settings
         model_name="google/gemma-2-9b-it",
@@ -1439,10 +1441,13 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
         lora_dropout=0.05,
         lora_target_modules="all-linear",
         # Training settings
-        num_epochs=1,
         lr=2e-5,
         eval_steps=1000,
-        save_steps=int(1000 / 4),  # save every 1000 samples
+        # num_epochs=1,
+        # save_steps=int(1000 / 4),  # save every 1000 samples
+        num_epochs=4,
+        # save every epoch
+        save_steps=math.ceil(len(explanations) / 4),
         save_dir="checkpoints",
         # Hugging Face settings - set these based on your needs
         hf_push_to_hub=True,  # Only enable if login successful
@@ -1469,7 +1474,6 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
     explanations_artifact.add_file(explanations_file)
     wandb.run.log_artifact(explanations_artifact)
 
-    explanations: list[SAEExplained] = load_explanations_from_jsonl(explanations_file)
     training_examples = [
         TrainingExample.with_positive_and_negative_examples(exp)
         if cfg.positive_negative_examples
@@ -1547,4 +1551,4 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
 
 if __name__ == "__main__":
     explanations_file = "20aug_sae_sfted_gpt-5-mini-2025-08-07.jsonl"
-    main(explanations_file)
+    main(explanations_file, hf_repo_name="gemma-multiepoch")
