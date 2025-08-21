@@ -556,16 +556,20 @@ if __name__ == "__main__":
         model_name="google/gemma-2-2b-it",
         use_feature_vector=False, # debugging logprobs
         train_path="hard_negatives_100_000_to_100_800.jsonl",
-        num_generations=16,  # Bigger group size since noisy explanations
+        max_seq_length=1_000,  # debug
+        max_prompt_length=500,  # debug
+        max_response_length=500,  # debug
+        num_generations=4,  # Bigger group size since noisy explanations
+        # num_generations=16,  # Bigger group size since noisy explanations
+        # max_seq_length=8_000,  # More reasonable for math problems
+        # max_prompt_length=2_000,  # Reduced from 6000, matching reference
+        # max_response_length=6_000,  # Reduced from 6000, matching reference
         # micro_batch=8,
         # micro_batch_size_per_gpu=8,
         micro_batch=2,  # for test purposes, usually 4
         micro_batch_size_per_gpu=2,  # for test purposes, usually 4
         warmup_steps=5,
         gradient_accumulation_steps=1,  # for test purposes, usually 4
-        max_seq_length=8_000,  # More reasonable for math problems
-        max_prompt_length=2_000,  # Reduced from 6000, matching reference
-        max_response_length=6_000,  # Reduced from 6000, matching reference
         learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
         beta=0.01,  # KL penalty
         # LoRA configuration for 4B model (following best practices)
