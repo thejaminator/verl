@@ -1082,30 +1082,35 @@ if __name__ == "__main__":
                 display_name="GPT-5-mini<br>(extrospecting<br>sentences)",
                 reasoning_effort="medium",
             ),
-            # ModelInfo(
-            #     model="meta-llama/llama-3-70b-instruct",
-            #     display_name="Llama-3-70b<br>(extrospecting<br>sentences)",
-            # ),
-            # ModelInfo(
-            #     model="thejaminator/gemma-introspection-20250821-step-250",
-            #     display_name="SFT 1000<br>Gemma<br>(introspecting)",
-            #     use_steering=True,
-            # ),
-            # ModelInfo(
-            #     model="thejaminator/gemma-introspection-20250821-step-500",
-            #     display_name="SFT 2000",
-            #     use_steering=True,
-            # ),
-            # ModelInfo(
-            #     model="thejaminator/gemma-introspection-20250821-step-1000",
-            #     display_name="SFT 4000",
-            #     use_steering=True,
-            # ),
-            # ModelInfo(
-            #     model="thejaminator/gemma-introspection-20250821",
-            #     display_name="SFT 8000<br>Gemma<br>(introspecting)",
-            #     use_steering=True,
-            # ),
+            ModelInfo(
+                model="meta-llama/llama-3-70b-instruct",
+                display_name="Llama-3-70b<br>(extrospecting<br>sentences)",
+            ),
+            ModelInfo(
+                model="thejaminator/gemma-introspection-20250821-step-250",
+                display_name="SFT 1000<br>Gemma<br>(introspecting)",
+                use_steering=True,
+            ),
+            ModelInfo(
+                model="thejaminator/gemma-introspection-20250821-step-500",
+                display_name="SFT 2000",
+                use_steering=True,
+            ),
+            ModelInfo(
+                model="thejaminator/gemma-introspection-20250821-step-1000",
+                display_name="SFT 4000",
+                use_steering=True,
+            ),
+            ModelInfo(
+                model="thejaminator/gemma-introspection-20250821",
+                display_name="SFT 8000",
+                use_steering=True,
+            ),
+            ModelInfo(
+                model="thejaminator/gemma-multiepoch",
+                display_name="SFT 8000 * 4 epochs",
+                use_steering=True,
+            ),
             # ModelInfo(model="gpt-5-mini-2025-08-07", display_name="GPT-5-mini", reasoning_effort="low"),
             # meta-llama/llama-3-70b-instruct
             # ModelInfo(model="gpt-4.1-2025-04-14", display_name="GPT-4.1"),
