@@ -35,7 +35,8 @@ DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
 CTX_LEN = 2000
 LAYER = 9  # Target layer for activation steering (matching lightweight_sft.py)
-MAX_PARALLEL_REQUESTS = 60
+# Max batch size that we call .generate with. See vllm logs for the max it can take.
+MAX_PARALLEL_REQUESTS = 50
 GENERATE_WAIT_SECONDS = 2
 
 # SAE Configuration
@@ -54,7 +55,7 @@ load_loras = [
 SAE_WIDTH = 131  # Can be 16 or 131. Check what we trained with?
 SAE_FILENAME = f"layer_{LAYER}/width_131k/average_l0_121/params.npz"
 STEERING_COEFFICIENT = 2.0
-gpu_memory_utilization = 0.8  # A100 can do ~ 67 in parallel with len 2000
+gpu_memory_utilization = 0.7  # A100 can do ~ 67 in parallel with len 2000 at util of 80%
 
 
 class Message(BaseModel):
@@ -132,7 +133,6 @@ class VLLMServer:
             gpu_memory_utilization=gpu_memory_utilization,
             enable_lora=True,
             max_lora_rank=64,
-            max_parallel_requests=MAX_PARALLEL_REQUESTS,
         )
         self.model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
 
