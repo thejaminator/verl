@@ -632,116 +632,114 @@ def main(
     print(f"🔍 Number of features in SAE: {len(sae.W_dec)}")
 
     # Process each feature index
-    all_results = []
+    
+    # open file to append
+    with open(output, "a") as f:
+        for feature_idx in target_features:
+            print(f"\n🎯 Processing feature {feature_idx}...")
 
-    for feature_idx in target_features:
-        print(f"\n🎯 Processing feature {feature_idx}...")
+            # Find most similar features
+            print(f"🔍 Finding {top_k_similar_features} most similar features to feature {feature_idx}...")
+            similar_features = find_most_similar_features(sae, feature_idx, top_k=top_k_similar_features)
 
-        # Find most similar features
-        print(f"🔍 Finding {top_k_similar_features} most similar features to feature {feature_idx}...")
-        similar_features = find_most_similar_features(sae, feature_idx, top_k=top_k_similar_features)
-
-        # Get sentences for target feature
-        print(f"📝 Getting sentences for target feature {feature_idx}...")
-        target_max_acts: FeatureMaxActivations = get_feature_max_activating_sentences(
-            acts_data, tokenizer, feature_idx, target_sentences
-        )
-        target_sentence_list = target_max_acts.sentences
-
-        # Compute actual SAE activations for target feature sentences
-        print("🧮 Computing SAE activations for target feature sentences...")
-        target_sentence_infos = compute_sae_activations_for_sentences(
-            model, tokenizer, sae, submodule, target_sentence_list, feature_idx, batch_size
-        )
-
-        # Analyze similar features and collect hard negatives - OPTIMIZED WITH BATCHING
-        hard_negatives_list = []
-
-        # Collect all sentences from similar features first
-        print(f"📝 Collecting sentences from {len(similar_features)} similar features...")
-        all_similar_sentences = []
-        similar_feature_mapping = []  # Track which sentences belong to which similar feature
-
-        for similar_feature in similar_features:
-            # Get sentences for this similar feature
-            similar_max_acts = get_feature_max_activating_sentences(
-                acts_data, tokenizer, similar_feature.feature_idx, num_sentences=negative_sentences
+            # Get sentences for target feature
+            print(f"📝 Getting sentences for target feature {feature_idx}...")
+            target_max_acts: FeatureMaxActivations = get_feature_max_activating_sentences(
+                acts_data, tokenizer, feature_idx, target_sentences
             )
-            # sometimes empty???
-            candidate_similar_sentences = [s for s in similar_max_acts.sentences if s != ""]
+            target_sentence_list = target_max_acts.sentences
 
-            # Track the range of sentences for this feature
-            start_idx = len(all_similar_sentences)
-            all_similar_sentences.extend(candidate_similar_sentences)
-            end_idx = len(all_similar_sentences)
-
-            similar_feature_mapping.append(
-                {
-                    "feature": similar_feature,
-                    "start_idx": start_idx,
-                    "end_idx": end_idx,
-                    "num_sentences": len(candidate_similar_sentences),
-                }
+            # Compute actual SAE activations for target feature sentences
+            print("🧮 Computing SAE activations for target feature sentences...")
+            target_sentence_infos = compute_sae_activations_for_sentences(
+                model, tokenizer, sae, submodule, target_sentence_list, feature_idx, batch_size
             )
 
-        # Compute target feature activations on ALL similar feature sentences in batches
-        print(f"🧮 Computing SAE activations for {len(all_similar_sentences)} sentences from similar features...")
-        all_similar_sentence_infos = compute_sae_activations_for_sentences(
-            model, tokenizer, sae, submodule, all_similar_sentences, feature_idx, batch_size
-        )
+            # Analyze similar features and collect hard negatives - OPTIMIZED WITH BATCHING
+            hard_negatives_list = []
 
-        # Process results by similar feature and rebuild SAEActivations
-        for feature_info in similar_feature_mapping:
-            similar_feature = feature_info["feature"]
-            start_idx = feature_info["start_idx"]
-            end_idx = feature_info["end_idx"]
+            # Collect all sentences from similar features first
+            print(f"📝 Collecting sentences from {len(similar_features)} similar features...")
+            all_similar_sentences = []
+            similar_feature_mapping = []  # Track which sentences belong to which similar feature
 
-            print(
-                f"📝 Analyzing similar feature {similar_feature.feature_idx} (similarity: {similar_feature.similarity_score:.4f})..."
+            for similar_feature in similar_features:
+                # Get sentences for this similar feature
+                similar_max_acts = get_feature_max_activating_sentences(
+                    acts_data, tokenizer, similar_feature.feature_idx, num_sentences=negative_sentences
+                )
+                # sometimes empty???
+                candidate_similar_sentences = [s for s in similar_max_acts.sentences if s != ""]
+
+                # Track the range of sentences for this feature
+                start_idx = len(all_similar_sentences)
+                all_similar_sentences.extend(candidate_similar_sentences)
+                end_idx = len(all_similar_sentences)
+
+                similar_feature_mapping.append(
+                    {
+                        "feature": similar_feature,
+                        "start_idx": start_idx,
+                        "end_idx": end_idx,
+                        "num_sentences": len(candidate_similar_sentences),
+                    }
+                )
+
+            # Compute target feature activations on ALL similar feature sentences in batches
+            print(f"🧮 Computing SAE activations for {len(all_similar_sentences)} sentences from similar features...")
+            all_similar_sentence_infos = compute_sae_activations_for_sentences(
+                model, tokenizer, sae, submodule, all_similar_sentences, feature_idx, batch_size
             )
 
-            # Extract sentence infos for this specific similar feature
-            similar_sentence_infos = all_similar_sentence_infos[start_idx:end_idx]
+            # Process results by similar feature and rebuild SAEActivations
+            for feature_info in similar_feature_mapping:
+                similar_feature = feature_info["feature"]
+                start_idx = feature_info["start_idx"]
+                end_idx = feature_info["end_idx"]
 
-            # Identify hard negatives
-            hard_negatives = identify_hard_negatives(similar_sentence_infos, hard_negative_threshold, batch_size)
+                print(
+                    f"📝 Analyzing similar feature {similar_feature.feature_idx} (similarity: {similar_feature.similarity_score:.4f})..."
+                )
 
-            if hard_negatives:
-                hard_negatives_sae = SAEActivations(sae_id=similar_feature.feature_idx, sentences=hard_negatives)
-                hard_negatives_list.append(hard_negatives_sae)
-                print(f"   Found {len(hard_negatives)} hard negatives from feature {similar_feature.feature_idx}")
-            else:
-                print(f"   No hard negatives found from feature {similar_feature.feature_idx}")
+                # Extract sentence infos for this specific similar feature
+                similar_sentence_infos = all_similar_sentence_infos[start_idx:end_idx]
 
-        # Create final SAE object for this feature
-        target_activations = SAEActivations(sae_id=feature_idx, sentences=target_sentence_infos)
+                # Identify hard negatives
+                hard_negatives = identify_hard_negatives(similar_sentence_infos, hard_negative_threshold, batch_size)
 
-        # # Extract feature vector from SAE decoder weights
-        # feature_vector = sae.W_dec[feature_idx].cpu().tolist()
+                if hard_negatives:
+                    hard_negatives_sae = SAEActivations(sae_id=similar_feature.feature_idx, sentences=hard_negatives)
+                    hard_negatives_list.append(hard_negatives_sae)
+                    print(f"   Found {len(hard_negatives)} hard negatives from feature {similar_feature.feature_idx}")
+                else:
+                    print(f"   No hard negatives found from feature {similar_feature.feature_idx}")
 
-        sae_result = SAE(
-            sae_id=feature_idx,
-            # feature_vector=feature_vector,
-            activations=target_activations,
-            hard_negatives=hard_negatives_list,
-        )
+            # Create final SAE object for this feature
+            target_activations = SAEActivations(sae_id=feature_idx, sentences=target_sentence_infos)
 
-        all_results.append(sae_result)
+            # # Extract feature vector from SAE decoder weights
+            # feature_vector = sae.W_dec[feature_idx].cpu().tolist()
 
-        print(f"✅ Feature {feature_idx} complete!")
-        print(f"   Target sentences analyzed: {len(target_sentence_infos)}")
-        print(f"   Similar features analyzed: {len(similar_features)}")
-        print(f"   Hard negative groups found: {len(hard_negatives_list)}")
+            sae_result = SAE(
+                sae_id=feature_idx,
+                # feature_vector=feature_vector,
+                activations=target_activations,
+                hard_negatives=hard_negatives_list,
+            )
+
+
+            print(f"✅ Feature {feature_idx} complete!")
+            print(f"   Target sentences analyzed: {len(target_sentence_infos)}")
+            print(f"   Similar features analyzed: {len(similar_features)}")
+            print(f"   Hard negative groups found: {len(hard_negatives_list)}")
+
+            f.write(sae_result.model_dump_json() + "\n")
 
     # Write all results to JSONL
     print(f"\n💾 Writing results to {output}...")
-    with open(output, "w") as f:
-        for result in all_results:
-            f.write(result.model_dump_json() + "\n")
 
     print("✅ Analysis complete!")
     print(f"   Features processed: {target_features}")
-    print(f"   Total results: {len(all_results)}")
     print(f"   Results saved to: {output}")
 
 
