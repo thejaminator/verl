@@ -721,7 +721,7 @@ def main(
 
         sae_result = SAE(
             sae_id=feature_idx,
-            feature_vector=feature_vector,
+            # feature_vector=feature_vector,
             activations=target_activations,
             hard_negatives=hard_negatives_list,
         )
@@ -747,12 +747,11 @@ def main(
 
 if __name__ == "__main__":
     # Example usage - customize the feature_idxs and other parameters as needed
-    target_features = list(range(100_000, 100_800))
-    # actually we want 32, but sometimes it fails, so need some buffer.
+    target_features = list(range(0, 100_000))
     main(
         target_features=target_features,
         top_k_similar_features=34,
         batch_size=1024,
         target_sentences=32,
-        output="hard_negatives_100_000_to_100_800.jsonl",
+        output="hard_negatives_0_to_100_000.jsonl",
     )

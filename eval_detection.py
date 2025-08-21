@@ -129,7 +129,7 @@ def sentence_to_prompt_text_only(sentence: SentenceInfo) -> str:
 
 class SAETrainTest(BaseModel):
     sae_id: int
-    feature_vector: Sequence[float]
+    # feature_vector: Sequence[float]
     train_activations: SAEActivations
     test_activations: SAEActivations
     # Sentences that do not activate for the given sae_id. But come from a similar SAE
@@ -235,7 +235,7 @@ class SAETrainTest(BaseModel):
 
         return SAETrainTest(
             sae_id=sae.sae_id,
-            feature_vector=sae.feature_vector,
+            # feature_vector=sae.feature_vector,
             train_activations=train_activations,
             test_activations=test_activations,
             train_hard_negatives=train_hard_negatives,
@@ -282,7 +282,7 @@ Please write your final answer of what this SAE feature explains in the followin
 
 class SAETrainTestWithExplanation(BaseModel):
     sae_id: int
-    feature_vector: Sequence[float]
+    # feature_vector: Sequence[float]
     train_activations: SAEActivations
     test_activations: SAEActivations
     train_hard_negatives: list[SAEActivations]
@@ -372,7 +372,7 @@ async def call_model_for_sae_explanation(
             [
                 SAETrainTestWithExplanation(
                     sae_id=activation.sae_id,
-                    feature_vector=activation.feature_vector,
+                    # feature_vector=activation.feature_vector,
                     train_activations=activation.train_activations,
                     test_activations=activation.test_activations,
                     train_hard_negatives=activation.train_hard_negatives,
@@ -386,7 +386,7 @@ async def call_model_for_sae_explanation(
         return Slist(response.responses).map(
             lambda x: SAETrainTestWithExplanation(
                 sae_id=activation.sae_id,
-                feature_vector=activation.feature_vector,
+                # feature_vector=activation.feature_vector,
                 train_activations=activation.train_activations,
                 test_activations=activation.test_activations,
                 train_hard_negatives=activation.train_hard_negatives,
@@ -849,7 +849,7 @@ async def run_gemma_steering(
         # note: technically we didn't use these "train" things but we'll just pass it on.
         train_hard_negatives=sae.train_hard_negatives,
         train_activations=sae.train_activations,
-        feature_vector=sae.feature_vector,
+        # feature_vector=sae.feature_vector,
         test_activations=sae.test_activations,
         test_hard_negatives=sae.test_hard_negatives,
     )

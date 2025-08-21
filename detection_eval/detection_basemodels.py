@@ -30,7 +30,7 @@ class SAEActivations(BaseModel):
 
 class SAE(BaseModel):
     sae_id: int
-    feature_vector: Sequence[float]
+    # feature_vector: Sequence[float]
     activations: SAEActivations
     # Sentences that do not activate for the given sae_id. But come from a similar SAE
     # Here the sae_id correspond to different similar SAEs.
