@@ -560,7 +560,7 @@ if __name__ == "__main__":
         max_prompt_length=500,  # debug
         max_response_length=2_000,  # debug
         num_generations=4,  # Bigger group size since noisy explanations
-        gpu_memory_utilization=0.3, # some other thing running
+        gpu_memory_utilization=0.2, # some other thing running
         # model_name="google/gemma-2-9b-it",
         # num_generations=16,  # Bigger group size since noisy explanations
         # max_seq_length=8_000,  # More reasonable for math problems
