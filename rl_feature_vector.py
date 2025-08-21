@@ -98,7 +98,6 @@ def load_and_convert_dataset(dataset_path: str, output_path: str, data_source: s
 
     class SAE(BaseModel):
         sae_id: int
-        feature_vector: Sequence[float]
         activations: SAEActivations
         # Sentences that do not activate for the given sae_id. But come from a similar SAE
         # Here the sae_id correspond to different similar SAEs.
@@ -552,9 +551,10 @@ if __name__ == "__main__":
 
     # Configuration (optimized based on reference GRPO setup)
     params = VerlParams(
-        model_name="google/gemma-2-9b-it",
+        # model_name="google/gemma-2-9b-it",
         # smaller model for testing
-        # model_name="google/gemma-2-2b-it",
+        model_name="google/gemma-2-2b-it",
+        use_feature_vector=False, # debugging logprobs
         num_generations=16,  # Bigger group size since noisy explanations
         # micro_batch=8,
         # micro_batch_size_per_gpu=8,
@@ -588,7 +588,6 @@ if __name__ == "__main__":
         reward_function_name="compute_score",
         reward_function_file="feature_vector_reward.py",
         wandb_api_key=wandb_key,
-        actor_rollout_ref_strategy="feature_vector",
     )
 
     verl_main(params)
