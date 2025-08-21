@@ -1026,8 +1026,6 @@ async def main(
         lambda x: x.explainer_model
     )
 
-    
-
     for model_name, evaluation_results in groupby_by_model:
         if len(evaluation_results) == 0:
             print(f"\n{model_name}: No evaluation results (insufficient data)")

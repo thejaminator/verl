@@ -40,7 +40,17 @@ GENERATE_WAIT_SECONDS = 2
 
 # SAE Configuration
 SAE_REPO_ID = "google/gemma-scope-9b-it-res"
-load_loras = ["thejaminator/sae-introspection-lora"]
+load_loras = [
+    "thejaminator/sae-introspection-lora",
+    # 1000 steps
+    "thejaminator/gemma-introspection-20250821-step-250",
+    # 2000 steps
+    "thejaminator/gemma-introspection-20250821-step-500",
+    # 4000 steps
+    "thejaminator/gemma-introspection-20250821-step-1000",
+    # 8000 steps
+    "thejaminator/gemma-introspection-20250821",
+]
 SAE_WIDTH = 131  # Can be 16 or 131. Check what we trained with?
 SAE_FILENAME = f"layer_{LAYER}/width_131k/average_l0_121/params.npz"
 STEERING_COEFFICIENT = 2.0
