@@ -98,12 +98,11 @@ def push_lora_to_hf(
 # ==============================================================================
 
 
-def get_sae_info(sae_repo_id: str) -> tuple[int, int, int, str]:
+def get_sae_info(sae_repo_id: str, sae_width: int) -> tuple[int, int, int, str]:
     sae_layer = 9
     sae_layer_percent = 25
 
     if sae_repo_id == "google/gemma-scope-9b-it-res":
-        sae_width = 131
 
         if sae_width == 16:
             sae_filename = f"layer_{sae_layer}/width_16k/average_l0_88/params.npz"
@@ -165,7 +164,7 @@ class SelfInterpTrainingConfig:
 
     def __post_init__(self):
         """Called after the dataclass is initialized."""
-        self.sae_width, self.sae_layer, self.sae_layer_percent, self.sae_filename = get_sae_info(self.sae_repo_id)
+        self.sae_width, self.sae_layer, self.sae_layer_percent, self.sae_filename = get_sae_info(self.sae_repo_id, self.sae_width)
 
 
 # ==============================================================================
@@ -1424,7 +1423,7 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
         # SAE settings
         sae_repo_id="google/gemma-scope-9b-it-res",
         sae_layer=9,
-        sae_width=16,
+        sae_width=131,
         # Experiment settings
         eval_set_size=100,
         use_decoder_vectors=True,
