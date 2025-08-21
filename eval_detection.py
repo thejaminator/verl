@@ -1082,30 +1082,30 @@ if __name__ == "__main__":
                 display_name="GPT-5-mini<br>(extrospecting<br>sentences)",
                 reasoning_effort="medium",
             ),
-            ModelInfo(
-                model="meta-llama/llama-3-70b-instruct",
-                display_name="Llama-3-70b<br>(extrospecting<br>sentences)",
-            ),
-            ModelInfo(
-                model="thejaminator/gemma-introspection-20250821-step-250",
-                display_name="SFT 1000<br>Gemma<br>(introspecting)",
-                use_steering=True,
-            ),
-            ModelInfo(
-                model="thejaminator/gemma-introspection-20250821-step-500",
-                display_name="SFT 2000",
-                use_steering=True,
-            ),
-            ModelInfo(
-                model="thejaminator/gemma-introspection-20250821-step-1000",
-                display_name="SFT 4000",
-                use_steering=True,
-            ),
-            ModelInfo(
-                model="thejaminator/gemma-introspection-20250821",
-                display_name="SFT 8000<br>Gemma<br>(introspecting)",
-                use_steering=True,
-            ),
+            # ModelInfo(
+            #     model="meta-llama/llama-3-70b-instruct",
+            #     display_name="Llama-3-70b<br>(extrospecting<br>sentences)",
+            # ),
+            # ModelInfo(
+            #     model="thejaminator/gemma-introspection-20250821-step-250",
+            #     display_name="SFT 1000<br>Gemma<br>(introspecting)",
+            #     use_steering=True,
+            # ),
+            # ModelInfo(
+            #     model="thejaminator/gemma-introspection-20250821-step-500",
+            #     display_name="SFT 2000",
+            #     use_steering=True,
+            # ),
+            # ModelInfo(
+            #     model="thejaminator/gemma-introspection-20250821-step-1000",
+            #     display_name="SFT 4000",
+            #     use_steering=True,
+            # ),
+            # ModelInfo(
+            #     model="thejaminator/gemma-introspection-20250821",
+            #     display_name="SFT 8000<br>Gemma<br>(introspecting)",
+            #     use_steering=True,
+            # ),
             # ModelInfo(model="gpt-5-mini-2025-08-07", display_name="GPT-5-mini", reasoning_effort="low"),
             # meta-llama/llama-3-70b-instruct
             # ModelInfo(model="gpt-4.1-2025-04-14", display_name="GPT-4.1"),
@@ -1121,11 +1121,11 @@ if __name__ == "__main__":
     )
 
     # created with create_hard_negative_and_feature_vector.py
-    # sae_file = "data/10k_hard_negatives_results.jsonl"
-    sae_file = "data/hard_negatives_100_000_to_100_800.jsonl"
+    sae_file = "data/10k_hard_negatives_results.jsonl"
+    # sae_file = "data/hard_negatives_100_000_to_100_800.jsonl"
     # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
     # Which to use for constructing explanations vs testing detection?
-    saes_to_test = 200
+    saes_to_test = 20
     sae_start_index = 0
     # sae_start_index = 20_000  # not in train set for the trained model
 
@@ -1158,8 +1158,8 @@ if __name__ == "__main__":
             sae_file=sae_file,
             explainer_models=explainer_models,
             add_random_explanations=True,
-            config=hard_negatives_config,
-            # config=best_of_8_config,
+            config=best_of_8_config,
+            # config=hard_negatives_config,
             # config=no_train_hard_negatives_config,
             # config=eight_positive_examples_config,
             # config=two_positive_examples,

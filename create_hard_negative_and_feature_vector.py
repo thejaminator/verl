@@ -716,8 +716,8 @@ def main(
         # Create final SAE object for this feature
         target_activations = SAEActivations(sae_id=feature_idx, sentences=target_sentence_infos)
 
-        # Extract feature vector from SAE decoder weights
-        feature_vector = sae.W_dec[feature_idx].cpu().tolist()
+        # # Extract feature vector from SAE decoder weights
+        # feature_vector = sae.W_dec[feature_idx].cpu().tolist()
 
         sae_result = SAE(
             sae_id=feature_idx,
