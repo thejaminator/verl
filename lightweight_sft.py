@@ -1442,7 +1442,7 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
         num_epochs=1,
         lr=2e-5,
         eval_steps=1000,
-        save_steps=50, # save every 200 steps.
+        save_steps=int(1000 / 4),  # save every 1000 samples
         save_dir="checkpoints",
         # Hugging Face settings - set these based on your needs
         hf_push_to_hub=True,  # Only enable if login successful
