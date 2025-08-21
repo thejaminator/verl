@@ -39,6 +39,7 @@ class VerlParams(BaseModel):
     max_seq_length: int = 2048
     max_prompt_length: int = 1024
     max_response_length: int = 1024
+    gpu_memory_utilization: float = 0.6
     micro_batch: int = 16
     gradient_accumulation_steps: int = 1
     micro_batch_size_per_gpu: int = 8  # New parameter for fine control
@@ -439,7 +440,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             f"actor_rollout_ref.rollout.response_length={params.max_response_length}",
             f"actor_rollout_ref.rollout.max_num_batched_tokens={max_num_batched_tokens}",
             "actor_rollout_ref.rollout.dtype=bfloat16",
-            "actor_rollout_ref.rollout.gpu_memory_utilization=0.6",
+            f"actor_rollout_ref.rollout.gpu_memory_utilization={params.gpu_memory_utilization}",
             "actor_rollout_ref.rollout.ignore_eos=false",
             "actor_rollout_ref.rollout.enforce_eager=true",
             "actor_rollout_ref.rollout.free_cache_engine=true",
@@ -551,15 +552,16 @@ if __name__ == "__main__":
 
     # Configuration (optimized based on reference GRPO setup)
     params = VerlParams(
-        # model_name="google/gemma-2-9b-it",
         # smaller model for testing
         model_name="google/gemma-2-2b-it",
         use_feature_vector=False, # debugging logprobs
         train_path="hard_negatives_100_000_to_100_800.jsonl",
         max_seq_length=1_000,  # debug
         max_prompt_length=500,  # debug
-        max_response_length=500,  # debug
+        max_response_length=2_000,  # debug
         num_generations=4,  # Bigger group size since noisy explanations
+        gpu_memory_utilization=0.3, # some other thing running
+        # model_name="google/gemma-2-9b-it",
         # num_generations=16,  # Bigger group size since noisy explanations
         # max_seq_length=8_000,  # More reasonable for math problems
         # max_prompt_length=2_000,  # Reduced from 6000, matching reference
