@@ -43,9 +43,9 @@ from huggingface_hub import hf_hub_download
 def get_sae_info(sae_repo_id: str) -> tuple[int, int, int, str]:
     sae_layer = 9
     sae_layer_percent = 25
+    sae_width = 131
 
     if sae_repo_id == "google/gemma-scope-9b-it-res":
-        sae_width = 131
 
         if sae_width == 16:
             sae_filename = f"layer_{sae_layer}/width_16k/average_l0_88/params.npz"
@@ -626,6 +626,8 @@ def main(
     # Load model, tokenizer, and SAE
     print("🚀 Loading model and SAE...")
     model, tokenizer, sae, submodule = load_model_and_sae(model_name, sae_repo_id, sae_filename, sae_layer)
+    # how many features in sae?
+    print(f"🔍 Number of features in SAE: {len(sae.W_dec)}")
 
     # Process each feature index
     all_results = []
