@@ -163,8 +163,11 @@ class vLLMRollout(BaseRollout):
         if config.get("limit_images", None):  # support for multi-image data
             engine_kwargs["limit_mm_per_prompt"] = {"image": config.get("limit_images")}
 
+        print("Hook: Using disable_async_output_proc=True to avoid prefilling while generating.")
+
         self.inference_engine = LLM(
             model=model_path,
+            disable_async_output_proc=True,
             enable_sleep_mode=config.free_cache_engine,
             tensor_parallel_size=tensor_parallel_size,
             distributed_executor_backend="external_launcher",
