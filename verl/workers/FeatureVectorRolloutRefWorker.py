@@ -11,7 +11,7 @@ from detection_eval.steering_hooks import (
 )
 from verl import DataProto
 from verl.single_controller.base.decorator import Dispatch, register
-from verl.utils.device import get_torch_device
+from verl.utils.device import get_device_id, get_torch_device
 from verl.utils.profiler import DistProfiler, log_gpu_memory_usage, simple_timer
 from verl.utils.profiler.performance import reduce_timing
 from verl.workers.fsdp_workers import ActorRolloutRefWorker, logger
@@ -57,8 +57,8 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
         # )
 
         # Support all hardwares
-        device: torch.device = get_torch_device()
-        prompts = prompts.to(device)
+        device: torch.device = torch.device(get_device_id())
+        prompts = prompts.to(get_device_id())
 
         assert self._is_rollout
 
