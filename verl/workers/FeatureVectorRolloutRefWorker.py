@@ -1,12 +1,17 @@
-import contextlib
-from typing import Callable, Sequence
+from typing import Sequence
 
 import torch
 
-from detection_eval.steering_hooks import get_vllm_steering_hook
+from detection_eval.steering_hooks import (
+    HookArgs,
+    SAEVerlDataTypedDict,
+    add_hook,
+    get_vllm_steering_hook,
+    verl_data_to_hook_args,
+)
 from verl import DataProto
 from verl.single_controller.base.decorator import Dispatch, register
-from verl.utils.device import get_device_id, get_torch_device
+from verl.utils.device import get_torch_device
 from verl.utils.profiler import DistProfiler, log_gpu_memory_usage, simple_timer
 from verl.utils.profiler.performance import reduce_timing
 from verl.workers.fsdp_workers import ActorRolloutRefWorker, logger
@@ -21,19 +26,6 @@ def get_feature_vector(prompts: DataProto) -> Sequence[Sequence[float]]:
     for item in prompts.non_tensor_batch["sae"]:
         output.append(item["feature_vector"])  # type: ignore
     return output
-
-
-@contextlib.contextmanager
-def add_hook(module: torch.nn.Module, hook: Callable):
-    """Temporarily adds a forward hook to a model module."""
-    handle = module.register_forward_hook(hook)
-    try:
-        yield
-    except Exception as e:
-        print(f"Error adding hook: {e}")
-        raise e
-    finally:
-        handle.remove()
 
 
 class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
@@ -65,7 +57,7 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
         # )
 
         # Support all hardwares
-        device: int = get_device_id()
+        device: torch.device = get_torch_device()
         prompts = prompts.to(device)
 
         assert self._is_rollout
@@ -99,38 +91,18 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
             module_to_target = inference_model.model.layers[layer]
 
             # DataProto should contain
-            try:
-                all_feature_vectors: Sequence[Sequence[float]] = get_feature_vector(prompts)
-                # print(f"First feature vector: {all_feature_vectors[0]}")
-                print(f"Got feature vector for {len(all_feature_vectors)} prompts")
-            except Exception as e:
-                print(f"Error getting feature vector: {e} in prompts: {prompts}")
-                raise ValueError("Feature vector not found in prompts")
-
-            # Found X token at position: 11/33
-            # Hardcoded for "Can you explain to me what 'X' means? Format your final answer with <explanation>" in chat format.
-            x_position: int = 11  # TODO: I forgot to add this to DataProto.
-            steering_coefficient = 2.0  # TODO: Let DataProto define this.
-
-            # Convert feature vectors to tensor format expected by the hook
-            batch_size = len(all_feature_vectors)
-            vectors = []
-            positions = []
-
-            for batch_idx in range(batch_size):
-                # Each feature vector becomes a single entry per batch
-                feature_vec = torch.tensor(all_feature_vectors[batch_idx], dtype=dtype, device=device)
-                vectors.append(feature_vec)
-                positions.append(x_position)
+            assert "sae" in prompts.non_tensor_batch, f"sae not in prompts: {prompts.non_tensor_batch.keys()}"
+            sae_info: list[SAEVerlDataTypedDict] = prompts.non_tensor_batch["sae"]
+            hook_args: HookArgs = verl_data_to_hook_args(sae_info, device=device)
 
             # input_ids
             input_ids = prompts.batch["input_ids"]
             prompt_lengths = [len(input_id) for input_id in input_ids]
             hook = get_vllm_steering_hook(
-                vectors=vectors,
-                positions=positions,
+                vectors=hook_args.vectors,
+                positions=hook_args.positions,
                 prompt_lengths=prompt_lengths,
-                steering_coefficient=steering_coefficient,
+                steering_coefficient=hook_args.steering_coefficient,
                 device=device,
                 dtype=dtype,
             )

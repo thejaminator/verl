@@ -1,6 +1,5 @@
 import asyncio
 import time
-from typing import Sequence
 
 import plotly.graph_objects as go
 from openai import AsyncOpenAI, BaseModel
@@ -1126,11 +1125,11 @@ if __name__ == "__main__":
     )
 
     # created with create_hard_negative_and_feature_vector.py
-    sae_file = "data/10k_hard_negatives_results.jsonl"
-    # sae_file = "data/hard_negatives_100_000_to_100_800.jsonl"
+    # sae_file = "data/10k_hard_negatives_results.jsonl"
+    sae_file = "data/hard_negatives_100_000_to_100_800.jsonl"
     # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
     # Which to use for constructing explanations vs testing detection?
-    saes_to_test = 20
+    saes_to_test = 50
     sae_start_index = 0
     # sae_start_index = 20_000  # not in train set for the trained model
 
@@ -1163,8 +1162,8 @@ if __name__ == "__main__":
             sae_file=sae_file,
             explainer_models=explainer_models,
             add_random_explanations=True,
-            config=best_of_8_config,
-            # config=hard_negatives_config,
+            config=hard_negatives_config,
+            # config=best_of_8_config,
             # config=no_train_hard_negatives_config,
             # config=eight_positive_examples_config,
             # config=two_positive_examples,

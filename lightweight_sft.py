@@ -21,6 +21,8 @@ Before running:
 import math
 import os
 
+from detection_eval.steering_hooks import get_hf_activation_steering_hook
+
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 import contextlib
@@ -31,7 +33,7 @@ import json
 # All necessary imports are now included above
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import numpy as np
 import safetensors.torch
@@ -100,7 +102,6 @@ def push_lora_to_hf(
 
 def get_sae_info(sae_repo_id: str, sae_width: int, sae_layer: int) -> str:
     if sae_repo_id == "google/gemma-scope-9b-it-res":
-
         if sae_width == 16:
             sae_filename = f"layer_{sae_layer}/width_16k/average_l0_88/params.npz"
         elif sae_width == 131:
@@ -166,6 +167,7 @@ class SelfInterpTrainingConfig:
         """Called after the dataclass is initialized."""
         sae_filename = get_sae_info(self.sae_repo_id, self.sae_width, self.sae_layer)
         self.sae_filename = sae_filename
+
 
 # ==============================================================================
 # 3. DATA MODELS
@@ -585,73 +587,6 @@ def load_explanations_from_jsonl(filepath: str) -> list[SAEExplained]:
 # ==============================================================================
 
 
-@contextlib.contextmanager
-def add_hook(module: torch.nn.Module, hook: Callable):
-    """Temporarily adds a forward hook to a model module."""
-    handle = module.register_forward_hook(hook)
-    try:
-        yield
-    finally:
-        handle.remove()
-
-
-def get_activation_steering_hook(
-    vectors: list[torch.Tensor],  # [B, d_model]
-    positions: list[int],  # [B]
-    steering_coefficient: float,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> Callable:
-    """
-    Returns a forward hook that *replaces* specified residual-stream activations
-    during the initial prompt pass of `model.generate`.
-
-    • vectors[b]  – feature vector to inject for batch b
-    • positions[b]– token index (0-based, within prompt only) for batch b
-    """
-
-    # ---- pack Python lists → torch tensors once, outside the hook ----
-    vec_BD = torch.stack(vectors)  # (B, d)
-    pos_B = torch.tensor(positions, dtype=torch.long)  # (B,)
-
-    B, d_model = vec_BD.shape
-    assert pos_B.shape == (B,)
-
-    vec_BD = vec_BD.to(device, dtype)
-    pos_B = pos_B.to(device)
-
-    def hook_fn(module, _input, output):
-        resid_BLD, *rest = output  # Gemma returns (resid, hidden_states, ...)
-        L = resid_BLD.shape[1]
-
-        # Only touch the *prompt* forward pass (sequence length > 1)
-        if L <= 1:
-            return (resid_BLD, *rest)
-
-        # Safety: make sure every position is inside current sequence
-        if (pos_B >= L).any():
-            bad = pos_B[pos_B >= L].min().item()
-            raise IndexError(f"position {bad} is out of bounds for length {L}")
-
-        # ---- compute norms of original activations at the target slots ----
-        batch_idx_B = torch.arange(B, device=device)  # (B,)
-        orig_BD = resid_BLD[batch_idx_B, pos_B]  # (B, d)
-        norms_B1 = orig_BD.norm(dim=-1, keepdim=True).detach()  # (B, 1)
-
-        # ---- build steered vectors ----
-        steered_BD = torch.nn.functional.normalize(vec_BD, dim=-1) * norms_B1 * steering_coefficient  # (B, d)
-
-        # ---- in-place replacement via advanced indexing ----
-        resid_BLD[batch_idx_B, pos_B] = steered_BD
-
-        return (resid_BLD, *rest)
-
-    return hook_fn
-
-
-# Note: collect_training_examples removed - we now read explanations from JSONL files
-
-
 @torch.no_grad()
 def construct_train_dataset(
     cfg: SelfInterpTrainingConfig,
@@ -872,7 +807,7 @@ def train_features_batch(
     batch_positions = training_batch.positions
 
     # 3. Create and apply the activation steering hook
-    hook_fn = get_activation_steering_hook(
+    hook_fn = get_hf_activation_steering_hook(
         vectors=batch_steering_vectors,
         positions=batch_positions,
         steering_coefficient=cfg.steering_coefficient,

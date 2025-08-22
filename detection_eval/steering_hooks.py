@@ -1,6 +1,11 @@
-from typing import Callable
+import contextlib
+from dataclasses import dataclass
+from typing import Any, Callable, TypedDict
 
 import torch
+from openai import BaseModel
+
+from detection_eval.detection_basemodels import SAE, SAEActivations
 
 
 def get_vllm_steering_hook(
@@ -91,6 +96,31 @@ def get_vllm_steering_hook(
     return hook_fn
 
 
+@contextlib.contextmanager
+def add_hook(
+    module: torch.nn.Module,
+    hook: Callable,
+):
+    """Temporarily adds a forward hook to a model module.
+
+    Args:
+        module: The PyTorch module to hook
+        hook: The hook function to apply
+
+    Yields:
+        None: Used as a context manager
+
+    Example:
+        with add_hook(model.layer, hook_fn):
+            output = model(input)
+    """
+    handle = module.register_forward_hook(hook)
+    try:
+        yield
+    finally:
+        handle.remove()
+
+
 def get_hf_activation_steering_hook(
     vectors: list[torch.Tensor],  # [B, d_model]
     positions: list[int],  # [B]
@@ -103,7 +133,7 @@ def get_hf_activation_steering_hook(
     """
     # ---- pack Python lists → torch tensors once, outside the hook ----
     vec_BD = torch.stack(vectors)  # (B, d)
-    pos_B = torch.tensor(positions, dtype=torch.long)  # (B,)
+    pos_B = torch.tensor(positions, dtype=torch.long, device=device)  # (B,)
     B, d_model = vec_BD.shape
 
     # Handle the case where positions might create a scalar tensor instead of a 1D tensor
@@ -125,30 +155,24 @@ def get_hf_activation_steering_hook(
         resid_BLD, *rest = output  # Gemma returns (resid, hidden_states, ...)
         B_actual, L, d_model_actual = resid_BLD.shape
 
+        # Only touch the *prompt* forward pass (sequence length > 1)
+        if L <= 1:
+            return (resid_BLD, *rest)
+
+        # Safety: make sure every position is inside current sequence
+        if (pos_B >= L).any():
+            bad = pos_B[pos_B >= L].min().item()
+            raise IndexError(f"position {bad} is out of bounds for length {L}")
+
         print("\n🎯 HF STEERING HOOK EXECUTING:")
         print(f"  Module: {type(module).__name__}")
         print(f"  Input shape: {resid_BLD.shape}")
         print(f"  Sequence length: {L}")
         print(f"  Expected batch size: {B}, actual: {B_actual}")
 
-        # Only touch the *prompt* forward pass (sequence length > 1)
-        if L <= 1:
-            print(f"  ❌ SKIPPING: Sequence too short ({L})")
-            return (resid_BLD, *rest)
-
-        # Safety: make sure every position is inside current sequence
-        if (pos_B >= L).any():
-            bad = pos_B[pos_B >= L].min().item()
-            print(f"  ❌ ERROR: position {bad} is out of bounds for length {L}")
-            raise IndexError(f"position {bad} is out of bounds for length {L}")
-
-        print("  ✅ PROCEEDING with HF steering...")
-
         # ---- compute norms of original activations at the target slots ----
         batch_idx_B = torch.arange(B, device=device)  # (B,)
         orig_BD = resid_BLD[batch_idx_B, pos_B]  # (B, d)
-
-        print(f"  Original activation norms: {orig_BD.norm(dim=-1).tolist()}")
 
         norms_B1 = orig_BD.norm(dim=-1, keepdim=True).detach()  # (B, 1)
 
@@ -156,27 +180,58 @@ def get_hf_activation_steering_hook(
         normalized_features = torch.nn.functional.normalize(vec_BD, dim=-1)
         steered_BD = normalized_features * norms_B1 * steering_coefficient  # (B, d)
 
-        print(f"  Normalized feature norms: {normalized_features.norm(dim=-1).tolist()}")
-        print(f"  Original norms: {norms_B1.squeeze().tolist()}")
-        print(f"  Steered activation norms: {steered_BD.norm(dim=-1).tolist()}")
-
         # Calculate the change magnitude BEFORE applying
         change_magnitude = (steered_BD - orig_BD).norm(dim=-1)
-        print(f"  Change magnitudes: {change_magnitude.tolist()}")
 
         if change_magnitude.max() < 1e-4:
-            print("  ⚠️  WARNING: Very small change magnitude!")
+            raise ValueError("Very small change magnitude!")
 
         # ---- in-place replacement via advanced indexing ----
-        print(f"  Applying HF steering at positions: {pos_B.tolist()}")
         resid_BLD[batch_idx_B, pos_B] = steered_BD
-
-        # Verify it was applied
-        new_BD = resid_BLD[batch_idx_B, pos_B]
-        actual_change = (new_BD - orig_BD).norm(dim=-1)
-        print(f"  Actual change applied: {actual_change.tolist()}")
-        print("  ✅ HF STEERING COMPLETE\n")
 
         return (resid_BLD, *rest)
 
     return hook_fn
+
+
+class SAEVerlData(BaseModel):
+    sae_id: int
+    feature_vector: list[float]  # This needs to be added in by the script
+    position_id: int  # This needs to be added in by the script
+    activations: SAEActivations  # For reward model.
+    hard_negatives: list[SAEActivations]  # For reward model.
+
+
+class SAEVerlDataTypedDict(TypedDict):
+    """Typed dict that gets passed around in verl"""
+
+    sae_id: int
+    feature_vector: list[float]  # This needs to be added in by the script
+    position_id: int  # This needs to be added in by the script
+    activations: dict[str, Any]
+    hard_negatives: list[dict[str, Any]]
+
+
+def make_sae_verl_typed_dict(sae_data: SAE, position_id: int, feature_vector: list[float]) -> SAEVerlDataTypedDict:
+    return {
+        "sae_id": sae_data.sae_id,
+        "position_id": position_id,
+        "feature_vector": feature_vector,
+        "activations": sae_data.activations.model_dump(),
+        "hard_negatives": [m.model_dump() for m in sae_data.hard_negatives],
+    }
+
+
+@dataclass(kw_only=True)
+class HookArgs:
+    vectors: list[torch.Tensor]
+    positions: list[int]
+    steering_coefficient: float
+
+
+def verl_data_to_hook_args(verl_data: list[SAEVerlDataTypedDict], device: torch.device) -> HookArgs:
+    feature_vectors = [m["feature_vector"] for m in verl_data]
+    positions = [m["position_id"] for m in verl_data]
+    vectors = [torch.tensor(fv, dtype=torch.bfloat16, device=device) for fv in feature_vectors]
+    steering_coefficient = 2
+    return HookArgs(vectors=vectors, positions=positions, steering_coefficient=steering_coefficient)

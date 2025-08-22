@@ -632,7 +632,7 @@ def main(
     print(f"🔍 Number of features in SAE: {len(sae.W_dec)}")
 
     # Process each feature index
-    
+
     # open file to append
     with open(output, "a") as f:
         for feature_idx in target_features:
@@ -726,7 +726,6 @@ def main(
                 activations=target_activations,
                 hard_negatives=hard_negatives_list,
             )
-
 
             print(f"✅ Feature {feature_idx} complete!")
             print(f"   Target sentences analyzed: {len(target_sentence_infos)}")

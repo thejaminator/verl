@@ -10,7 +10,10 @@ Based on the verl documentation and examples.
 import json
 import os
 
+from transformers import PreTrainedTokenizer
+
 from detection_eval.detection_basemodels import SAE
+from detection_eval.steering_hooks import make_sae_verl_typed_dict
 
 # set HF_HOME to /workspace
 os.environ["HF_HOME"] = "/workspace"
@@ -84,7 +87,9 @@ def extract_answer(text: str) -> str:
     return text.strip()
 
 
-def load_and_convert_dataset(dataset_path: str, output_path: str, data_source: str = "custom") -> int:
+def load_and_convert_dataset(
+    tokenizer: PreTrainedTokenizer, dataset_path: str, output_path: str, data_source: str = "custom"
+) -> int:
     """
     Load dataset from JSONL and convert to verl format (parquet).
 
@@ -115,13 +120,29 @@ def load_and_convert_dataset(dataset_path: str, output_path: str, data_source: s
         "role": "user",
         "content": X_PROMPT,
     }
+    # we need to caclulate what position 'X' is in the prompt
+    tokenized_prompt = tokenizer.apply_chat_template(
+        [prompt_as_chat_dict],
+        tokenize=True,
+        add_generation_prompt=True,
+        return_tensors=None,
+        padding=False,
+        enable_thinking=False,
+    )
+    x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
+    print(f"X token id: {x_token_id}")
 
     data = []
     with open(dataset_path) as f:
         for idx, line in enumerate(f):
             if line.strip():
                 sample_dict = json.loads(line)
+                # Load the SAE train info. Should conform to SAE basemodel.
                 sample = SAE.model_validate(sample_dict)
+                sae_verl_data = make_sae_verl_typed_dict(
+                    sample,
+                    x_token_id,
+                )
 
                 # Create structured data following the pattern
                 structured_data = {
@@ -554,13 +575,13 @@ if __name__ == "__main__":
     params = VerlParams(
         # smaller model for testing
         model_name="google/gemma-2-2b-it",
-        use_feature_vector=False, # debugging logprobs
+        use_feature_vector=False,  # debugging logprobs
         train_path="hard_negatives_100_000_to_100_800.jsonl",
         max_seq_length=1_000,  # debug
         max_prompt_length=500,  # debug
         max_response_length=2_000,  # debug
         num_generations=4,  # Bigger group size since noisy explanations
-        gpu_memory_utilization=0.2, # some other thing running
+        gpu_memory_utilization=0.2,  # some other thing running
         # model_name="google/gemma-2-9b-it",
         # num_generations=16,  # Bigger group size since noisy explanations
         # max_seq_length=8_000,  # More reasonable for math problems

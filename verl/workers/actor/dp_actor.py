@@ -24,8 +24,14 @@ import torch
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
-from detection_eval.steering_hooks import get_vllm_steering_hook
 import verl.utils.torch_functional as verl_F
+from detection_eval.steering_hooks import (
+    HookArgs,
+    SAEVerlDataTypedDict,
+    get_hf_activation_steering_hook,
+    verl_data_to_hook_args,
+)
+from host_vllm_server_hook import add_hook
 from verl import DataProto
 from verl.trainer.ppo.core_algos import agg_loss, get_policy_loss_fn, kl_penalty
 from verl.utils.device import get_device_name, is_cuda_available, is_npu_available
@@ -48,6 +54,7 @@ __all__ = ["DataParallelPPOActor"]
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
+
 
 def get_gemma_layer_module(actor_module: nn.Module, layer_number: int) -> nn.Module:
     # actor_module: <class 'torch.distributed.fsdp._fully_shard._fully_shard.FSDPPeftModelForCausalLM'>
@@ -75,33 +82,33 @@ def get_gemma_layer_module(actor_module: nn.Module, layer_number: int) -> nn.Mod
     # unwrap .module repeatedly if present
     max_unwrap = 3
     for _ in range(max_unwrap):
-        if hasattr(unwrapped_module, "module") and isinstance(getattr(unwrapped_module, "module"), nn.Module):
+        if hasattr(unwrapped_module, "module") and isinstance(unwrapped_module.module, nn.Module):
             unwrapped_module = unwrapped_module.module
         else:
             break
 
     # --- unwrap PEFT if present ---
     # Prefer using get_base_model if available
-    if hasattr(unwrapped_module, "get_base_model") and callable(getattr(unwrapped_module, "get_base_model")):
+    if hasattr(unwrapped_module, "get_base_model") and callable(unwrapped_module.get_base_model):
         try:
-            base = unwrapped_module.get_base_model() # type: ignore
+            base = unwrapped_module.get_base_model()  # type: ignore
             if isinstance(base, nn.Module):
                 unwrapped_module = base
         except Exception:
             pass
 
     # Some PEFT wrappers expose .base_model
-    if hasattr(unwrapped_module, "base_model") and isinstance(getattr(unwrapped_module, "base_model"), nn.Module):
+    if hasattr(unwrapped_module, "base_model") and isinstance(unwrapped_module.base_model, nn.Module):
         unwrapped_module = unwrapped_module.base_model
 
     assert unwrapped_module
 
     from transformers.models.gemma2.modeling_gemma2 import Gemma2Model
+
     if isinstance(unwrapped_module, Gemma2Model):
         return unwrapped_module.layers[layer_number]
     else:
         raise ValueError(f"Unwrapped module is not a Gemma2Model: {type(unwrapped_module)}")
-    
 
 
 class DataParallelPPOActor(BasePPOActor):
@@ -169,6 +176,22 @@ class DataParallelPPOActor(BasePPOActor):
             attention_mask = micro_batch["attention_mask"]
             position_ids = micro_batch["position_ids"]
             entropy = None
+
+            ### Prepare hook ####
+            # get the gemma layer module
+            gemma_layer_module = get_gemma_layer_module(self.actor_module, 9)
+            # get sae feature vectors
+            assert "sae" in micro_batch.keys(), f"sae not in micro_batch: {micro_batch.keys()}"
+            sae_info: list[SAEVerlDataTypedDict] = micro_batch["sae"]
+            hook_args: HookArgs = verl_data_to_hook_args(sae_info, device=torch.device(self.device_name))
+            hf_hook = get_hf_activation_steering_hook(
+                vectors=hook_args.vectors,
+                positions=hook_args.positions,
+                steering_coefficient=hook_args.steering_coefficient,
+                device=torch.device(self.device_name),
+                dtype=torch.bfloat16,
+            )
+
             if position_ids.dim() == 3:  # qwen2vl mrope
                 position_ids = position_ids.transpose(0, 1)  # (bsz, 3, seqlen) -> (3, bsz, seqlen)
 
@@ -230,30 +253,16 @@ class DataParallelPPOActor(BasePPOActor):
                     extra_args["temperature"] = temperature
                     extra_args["return_dict"] = True
 
-                output = self.actor_module(
-                    input_ids=input_ids_rmpad,
-                    attention_mask=None,
-                    position_ids=position_ids_rmpad,
-                    **multi_modal_inputs,
-                    use_cache=False,
-                    **extra_args,
-                )  # prevent model thinks we are generating
+                with add_hook(gemma_layer_module, hf_hook):
+                    output = self.actor_module(
+                        input_ids=input_ids_rmpad,
+                        attention_mask=None,
+                        position_ids=position_ids_rmpad,
+                        **multi_modal_inputs,
+                        use_cache=False,
+                        **extra_args,
+                    )  # prevent model thinks we are generating
 
-                # get the gemma layer module
-                gemma_layer_module = get_gemma_layer_module(self.actor_module, 9)
-                breakpoint()
-
-                # get sae feature vectors
-                assert "sae" in micro_batch.keys(), f"sae not in micro_batch: {micro_batch.keys()}"
-                sae_info = micro_batch["sae"]
-                _sae_feature_vectors: list[list[float]] = [m["feature_vector"] for m in sae_info] # (bs, ndim)
-                sae_feature_vectors = torch.tensor(_sae_feature_vectors, dtype=torch.bfloat16, device=self.device_name)
-                position_ids: list[int] = [m["position_id"] for m in sae_info] # (bs,)
-                steering_coefficient = 2
-                device = self.device_name
-                dtype = torch.bfloat16
-                hookhook = get_vllm_steering_hook(gemma_layer_module, sae_feature_vectors, position_ids, steering_coefficient, device, dtype)
-                
                 if self.use_fused_kernels:
                     log_probs = output.log_probs.squeeze(0)  # (total_nnz,)
                     entropy_rmpad = output.entropy.squeeze(0)  # (total_nnz,)
@@ -323,14 +332,15 @@ class DataParallelPPOActor(BasePPOActor):
                     extra_args["temperature"] = temperature
                     extra_args["return_dict"] = True
 
-                output = self.actor_module(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    **multi_modal_inputs,
-                    use_cache=False,
-                    **extra_args,
-                )  # prevent model thinks we are generating
+                with add_hook(gemma_layer_module, hf_hook):
+                    output = self.actor_module(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        position_ids=position_ids,
+                        **multi_modal_inputs,
+                        use_cache=False,
+                        **extra_args,
+                    )  # prevent model thinks we are generating
 
                 if self.use_fused_kernels:
                     log_probs = output.log_probs[:, -response_length - 1 : -1]
