@@ -2,13 +2,6 @@ from typing import Sequence
 
 import torch
 
-from detection_eval.steering_hooks import (
-    HookArgs,
-    SAEVerlDataTypedDict,
-    add_hook,
-    get_vllm_steering_hook,
-    verl_data_to_hook_args,
-)
 from verl import DataProto
 from verl.single_controller.base.decorator import Dispatch, register
 from verl.utils.device import get_device_id, get_torch_device
@@ -76,7 +69,7 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
             log_gpu_memory_usage("After entering rollout sharding manager", logger=logger)
             rollout: vLLMRollout = self.rollout  # type: ignore
             assert "sae" in prompts.non_tensor_batch, f"sae not in prompts: {prompts.non_tensor_batch.keys()}"
-        
+
             processed_prompts = self.rollout_sharding_manager.preprocess_data(prompts)
 
             # need to pass sae rollout.generate_sequences. then in vllm_rollout_spmd.py you have the true lengths.

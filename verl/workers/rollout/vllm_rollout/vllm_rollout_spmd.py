@@ -51,7 +51,13 @@ from vllm.lora.request import LoRARequest
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.worker.worker_base import WorkerWrapperBase
 
-from detection_eval.steering_hooks import HookArgs, SAEVerlDataTypedDict, add_hook, get_vllm_steering_hook, verl_data_to_hook_args
+from detection_eval.steering_hooks import (
+    HookArgs,
+    SAEVerlDataTypedDict,
+    add_hook,
+    get_vllm_steering_hook,
+    verl_data_to_hook_args,
+)
 from verl import DataProto
 from verl.utils.device import get_torch_device
 from verl.utils.profiler import GPUMemoryLogger
@@ -322,17 +328,20 @@ class vLLMRollout(BaseRollout):
         sae_info: list[SAEVerlDataTypedDict] = prompts.non_tensor_batch["sae"]
         device = get_torch_device()
         dtype = torch.bfloat16
-        prompt_lengths = [len(input_id_list) for input_id_list in vllm_inputs["prompt_token_ids"]]
+        # vllm_inputs is probably list[dict[str, list[int]]]
+        prompt_lengths = [len(le_dict["prompt_token_ids"]) for le_dict in vllm_inputs]
         hook_args: HookArgs = verl_data_to_hook_args(sae_info, device=device)
         hook = get_vllm_steering_hook(
-                vectors=hook_args.vectors,
-                positions=hook_args.positions,
-                prompt_lengths=prompt_lengths,
-                steering_coefficient=hook_args.steering_coefficient,
-                device=device,
-                dtype=dtype,
-            )
-        module_to_target = self.inference_engine.llm_engine.model_executor.driver_worker.model_runner.model.model.layers[9]
+            vectors=hook_args.vectors,
+            positions=hook_args.positions,
+            prompt_lengths=prompt_lengths,
+            steering_coefficient=hook_args.steering_coefficient,
+            device=device,
+            dtype=dtype,
+        )
+        module_to_target = (
+            self.inference_engine.llm_engine.model_executor.driver_worker.model_runner.model.model.layers[9]
+        )
 
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**kwargs):
