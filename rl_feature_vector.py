@@ -24,6 +24,8 @@ import sys
 import numpy as np
 import torch
 import wandb
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 # Step 2: Push to HuggingFace Hub
 from huggingface_hub import HfApi, hf_hub_download
@@ -176,7 +178,6 @@ def load_and_convert_dataset(
         hard_negatives: list[SAEActivations]
 
     """
-    import pandas as pd
     # Each line in jsonl should be SAE object
 
     print(f"Loading dataset from: {dataset_path}")
@@ -226,7 +227,7 @@ def load_and_convert_dataset(
                 )
                 sae_verl_data = make_sae_verl_typed_dict(
                     sample,
-                    x_token_id,
+                    position_idx,
                     feature_vector_list,
                 )
 
@@ -248,9 +249,9 @@ def load_and_convert_dataset(
                 }
                 data.append(structured_data)
 
-    # Save as parquet for verl
-    df = pd.DataFrame(data)
-    df.to_parquet(output_path, index=False)
+    # Save as parquet for verl using pyarrow (no pandas)
+    table = pa.Table.from_pylist(data)
+    pq.write_table(table, output_path)
 
     print(f"Converted {len(data)} samples to {output_path}")
     return len(data)
