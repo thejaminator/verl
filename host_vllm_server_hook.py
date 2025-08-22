@@ -50,7 +50,7 @@ load_loras = [
     # 8000 steps
     "thejaminator/gemma-introspection-20250821",
     "thejaminator/gemma-retry",
-    # "thejaminator/gemma-multiepoch",
+    "thejaminator/gemma-multiepoch",
     "thejaminator/gemma-posneg-cot"
 ]
 SAE_WIDTH = 131  # Can be 16 or 131. Check what we trained with?
@@ -305,7 +305,7 @@ class VLLMServer:
                     )
 
             # Process outputs and set results
-            for i, (queued_request, output) in enumerate(zip(batch_requests, outputs, strict=False)):
+            for i, (queued_request, output) in enumerate(zip(batch_requests, outputs, strict=True)):
                 generated_text = output.outputs[0].text
 
                 response = ChatCompletionResponse(
