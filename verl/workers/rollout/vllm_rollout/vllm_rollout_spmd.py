@@ -59,7 +59,7 @@ from detection_eval.steering_hooks import (
     verl_data_to_hook_args,
 )
 from verl import DataProto
-from verl.utils.device import get_device_id, get_torch_device
+from verl.utils.device import get_device_id
 from verl.utils.profiler import GPUMemoryLogger
 from verl.utils.torch_functional import get_response_mask, pad_2d_list_to_length
 from verl.workers.rollout.base import BaseRollout

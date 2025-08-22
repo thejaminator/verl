@@ -18,7 +18,6 @@ Before running:
 3. Ensure you have the required explanations JSONL file
 """
 
-import math
 import os
 
 from detection_eval.steering_hooks import X_PROMPT, add_hook, get_hf_activation_steering_hook
@@ -1353,7 +1352,7 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
     cfg = SelfInterpTrainingConfig(
         # Model settings
         model_name="google/gemma-2-9b-it",
-        train_batch_size=4,
+        train_batch_size=2,
         eval_batch_size=128,  # 8 * 16
         # SAE settings
         sae_repo_id="google/gemma-scope-9b-it-res",
@@ -1378,7 +1377,7 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
         lr=2e-5,
         eval_steps=1000,
         num_epochs=1,
-        save_steps=int(1000 / 4),  # save every 1000 samples
+        save_steps=int(1000 / 2),  # save every 1000 samples
         # num_epochs=4,
         # save every epoch
         # save_steps=math.ceil(len(explanations) / 4),

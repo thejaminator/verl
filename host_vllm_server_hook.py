@@ -105,22 +105,6 @@ class VLLMServer:
     """Encapsulates vLLM model, tokenizer, SAE state, and request queues."""
 
     def __init__(self):
-        self.llm: Optional[LLM] = None
-        self.model: Optional[Any] = None
-        self.tokenizer: Optional[Any] = None
-        self.sae: Optional[JumpReluSAE] = None
-        self.initialized = False
-
-        # Queue management - separate queue per LoRA model
-        self.queues: dict[str, deque[QueuedRequest]] = defaultdict(deque)
-        self.queue_timers: dict[str, float] = {}  # Track when each queue first got a request
-        self.processing_lock = asyncio.Lock()  # Ensure synchronous generation
-
-    def initialize(self):
-        """Initialize the vLLM model, tokenizer, and SAE."""
-        if self.initialized:
-            return
-
         print("Initializing tokenizer...")
         self.tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
@@ -158,9 +142,10 @@ class VLLMServer:
         self.initialized = True
         print("Server ready!")
 
-    def is_ready(self) -> bool:
-        """Check if server is ready."""
-        return self.initialized and self.llm is not None and self.tokenizer is not None and self.sae is not None
+        # Queue management - separate queue per LoRA model
+        self.queues: dict[str, deque[QueuedRequest]] = defaultdict(deque)
+        self.queue_timers: dict[str, float] = {}  # Track when each queue first got a request
+        self.processing_lock = asyncio.Lock()  # Ensure synchronous generation
 
     def get_model_key(self, model_name: str) -> str:
         """Get the key for queue management based on model name."""
@@ -421,7 +406,6 @@ def find_x_positions(formatted_prompt: str, tokenizer) -> list[int]:
 
 # Create and initialize server instance immediately
 server = VLLMServer()
-server.initialize()  # Initialize right away
 
 app = FastAPI(title="vLLM Server with Activation Steering", version="1.0.0")
 
@@ -436,9 +420,6 @@ async def create_chat_completion(request: ChatCompletionRequest, server: VLLMSer
     """Create a chat completion with optional activation steering using queue system."""
     print(f"Received request: {request}")
 
-    if not server.is_ready():
-        raise HTTPException(status_code=503, detail="Model not initialized")
-
     # Add request to queue and wait for response
     return await server.add_to_queue(request)
 
@@ -446,7 +427,7 @@ async def create_chat_completion(request: ChatCompletionRequest, server: VLLMSer
 @app.get("/health")
 async def health_check(server: VLLMServer = Depends(get_server)):
     """Health check endpoint."""
-    return {"status": "healthy", "model_loaded": server.is_ready()}
+    return {"status": "healthy", "model_loaded": True}
 
 
 @app.get("/v1/models")
