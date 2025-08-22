@@ -1386,7 +1386,7 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
         hf_push_to_hub=True,  # Only enable if login successful
         hf_repo_id=hf_repo_id_computed,
         hf_private_repo=False,  # Set to False if you want public repo
-        positive_negative_examples=True,
+        positive_negative_examples=False,
     )
 
     print(asdict(cfg))
@@ -1488,4 +1488,4 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
 
 if __name__ == "__main__":
     explanations_file = "20aug_sae_sfted_gpt-5-mini-2025-08-07.jsonl"
-    main(explanations_file, hf_repo_name="gemma-posneg-cot")
+    main(explanations_file, hf_repo_name="gemma-retry")
