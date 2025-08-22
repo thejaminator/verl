@@ -188,8 +188,9 @@ def get_hf_activation_steering_hook(
         # Calculate the change magnitude BEFORE applying
         change_magnitude = (steered_BD - orig_BD).norm(dim=-1)
 
-        if change_magnitude.max() < 1e-4:
-            print("WARNING: Very small change magnitude in get_hf_activation_steering_hook")
+        # sometiems this blows up. not sure why.
+        # if change_magnitude.max() < 1e-4:
+            # print("WARNING: Very small change magnitude in get_hf_activation_steering_hook")
             # raise ValueError("Very small change magnitude!")
 
         # ---- in-place replacement via advanced indexing ----
