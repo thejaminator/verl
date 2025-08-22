@@ -100,32 +100,27 @@ def get_sae_info(sae_repo_id: str, sae_width: int, sae_layer: int) -> str:
 
 
 def load_sae_params_for_model(
-    tokenizer: PreTrainedTokenizer,
     sae_layer: int,
     sae_width: int,
     sae_repo_id: str,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Download and load SAE params (W_enc, W_dec) for the tokenizer's model family."""
-    model_name = getattr(tokenizer, "name_or_path", "") or ""
-    if "gemma" in model_name:
-        filename = get_sae_info(sae_repo_id, sae_width, sae_layer)
-        path_to_params = hf_hub_download(
-            repo_id=sae_repo_id,
-            filename=filename,
-            force_download=False,
-            local_dir="downloaded_saes",
-        )
-        pytorch_path = path_to_params.replace(".npz", ".pt")
-        if not os.path.exists(pytorch_path):
-            params = np.load(path_to_params)
-            pt_params = {k: torch.from_numpy(v) for k, v in params.items()}
-            torch.save(pt_params, pytorch_path)
-        pt_params = torch.load(pytorch_path)
-        W_enc = pt_params["W_enc"]  # [d_in, d_sae]
-        W_dec = pt_params["W_dec"]  # [d_sae, d_in]
-        return W_enc, W_dec
-
-    raise ValueError(f"Unsupported model for SAE feature vectors: {model_name}")
+    filename = get_sae_info(sae_repo_id, sae_width, sae_layer)
+    path_to_params = hf_hub_download(
+        repo_id=sae_repo_id,
+        filename=filename,
+        force_download=False,
+        local_dir="downloaded_saes",
+    )
+    pytorch_path = path_to_params.replace(".npz", ".pt")
+    if not os.path.exists(pytorch_path):
+        params = np.load(path_to_params)
+        pt_params = {k: torch.from_numpy(v) for k, v in params.items()}
+        torch.save(pt_params, pytorch_path)
+    pt_params = torch.load(pytorch_path)
+    W_enc = pt_params["W_enc"]  # [d_in, d_sae]
+    W_dec = pt_params["W_dec"]  # [d_sae, d_in]
+    return W_enc, W_dec
 
 
 def get_feature_vector_from_params(
@@ -200,13 +195,16 @@ def load_and_convert_dataset(
         padding=False,
         enable_thinking=False,
     )
-    if not isinstance(tokenized_prompt, list):
-        raise TypeError("Expected list of token ids from tokenizer.apply_chat_template")
     x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
+    # find positional index of the 'X' token within the prompt token ids
+    try:
+        position_idx = next(i for i, tid in enumerate(tokenized_prompt) if tid == x_token_id)
+    except StopIteration:
+        raise ValueError("Could not find token 'X' in the tokenized prompt")
+    print(f"X token id: {x_token_id}; position index in prompt: {position_idx}")
 
     # ---------------- feature-vector params (loaded once) ----------------
     W_enc, W_dec = load_sae_params_for_model(
-        tokenizer,
         sae_layer=sae_layer,
         sae_width=sae_width,
         sae_repo_id=sae_repo_id,
