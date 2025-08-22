@@ -13,6 +13,7 @@ import os
 
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
+from detection_eval.caller import read_jsonl_file_into_basemodel
 from detection_eval.detection_basemodels import SAE
 from detection_eval.steering_hooks import X_PROMPT, make_sae_verl_typed_dict
 
@@ -216,46 +217,47 @@ def load_and_convert_dataset(
         testing_hack = True
 
     data = []
-    with open(dataset_path) as f:
-        for idx, line in enumerate(f):
-            if line.strip():
-                sample_dict = json.loads(line)
-                # Load the SAE train info. Should conform to SAE basemodel.
-                sample = SAE.model_validate(sample_dict)
-                feature_vector_list = get_feature_vector_from_params(
-                    W_enc,
-                    W_dec,
-                    sample.sae_id,
-                    use_decoder_vectors=use_decoder_vectors,
-                )
-                
-                if testing_hack:
-                    # ndim 2304 for 2b
-                    feature_vector_list = feature_vector_list[:2304]
+    jsonl_items = read_jsonl_file_into_basemodel(dataset_path, SAE)
+    sae_ids: list[int] = jsonl_items.map(lambda x: x.sae_id)
+    if use_decoder_vectors:
+        feature_vector_list: list[list[float]] = W_dec[sae_ids].tolist()
+    else:
+        # uhhh not sure if this is correct? but using decoder vectors for now.
+        feature_vector_list: list[list[float]] = W_enc[:, sae_ids].T.tolist()
 
-                sae_verl_data = make_sae_verl_typed_dict(
-                    sample,
-                    position_idx,
-                    feature_vector_list,
-                )
+    for idx, sae in enumerate(jsonl_items):
+        sample_dict = sae.model_dump()
+        # Load the SAE train info. Should conform to SAE basemodel.
+        sample = SAE.model_validate(sample_dict)
+        feature = feature_vector_list[idx]
+        
+        if testing_hack:
+            # ndim 2304 for 2b
+            feature = feature[:2304]
 
-                # Create structured data following the pattern
-                structured_data = {
-                    "data_source": "custom",
-                    "prompt": [prompt_as_chat_dict],
-                    "ability": "explanations",
-                    "reward_model": {
-                        "style": "rule",
-                        "ground_truth": "no ground truth",
-                    },
-                    "extra_info": {
-                        "prompt": X_PROMPT,
-                        "index": idx,
-                    },
-                    # sae information which we modify the PPO trainer to pass during rollouts
-                    "sae": sae_verl_data,
-                }
-                data.append(structured_data)
+        sae_verl_data = make_sae_verl_typed_dict(
+            sample,
+            position_idx,
+            feature,
+        )
+
+        # Create structured data following the pattern
+        structured_data = {
+            "data_source": "custom",
+            "prompt": [prompt_as_chat_dict],
+            "ability": "explanations",
+            "reward_model": {
+                "style": "rule",
+                "ground_truth": "no ground truth",
+            },
+            "extra_info": {
+                "prompt": X_PROMPT,
+                "index": idx,
+            },
+            # sae information which we modify the PPO trainer to pass during rollouts
+            "sae": sae_verl_data,
+        }
+        data.append(structured_data)
 
     # Save as parquet for verl using pyarrow (no pandas)
     table = pa.Table.from_pylist(data)
