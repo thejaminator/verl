@@ -42,10 +42,13 @@ def get_vllm_steering_hook(
         count = 0
         for prompt_length in prompt_lengths:
             expected_position_indices_L = torch.arange(prompt_length, device=device)
-
-            assert tokens_L[count : count + prompt_length].equal(expected_position_indices_L), (
-                f"Position indices mismatch at index {count}, expected {expected_position_indices_L}, got {tokens_L[count : count + prompt_length]}"
-            )
+            try:
+                assert tokens_L[count : count + prompt_length].equal(expected_position_indices_L), (
+                    f"Position indices mismatch at index {count}, expected {expected_position_indices_L}, got {tokens_L[count : count + prompt_length]}"
+                )
+            except AssertionError as e:
+                breakpoint()
+                raise e
 
             count += prompt_length
 
