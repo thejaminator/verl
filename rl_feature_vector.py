@@ -515,7 +515,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
     # Set environment variables
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in range(params.n_gpus))
-    env["RAY_DEBUG_POST_MORTEM"] = "1"
+    # env["RAY_DEBUG_POST_MORTEM"] = "1" # I couldn't get post mortem to work properly
 
     if params.use_wandb:
         wandb_key = params.wandb_api_key

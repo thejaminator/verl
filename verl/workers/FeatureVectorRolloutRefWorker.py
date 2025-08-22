@@ -80,13 +80,6 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
             # Try the path from vllm_hook_demo.py
             inference_model = rollout.inference_engine.llm_engine.model_executor.driver_worker.model_runner.model
             dtype = torch.bfloat16
-
-            # Debug model structure
-            print(f"🔍 Inference model type: {type(inference_model)}")
-            print(f"🔍 Model layers type: {type(inference_model.model.layers)}")
-            print(f"🔍 Total layers: {len(inference_model.model.layers)}")
-            print(f"🔍 Target layer type: {type(inference_model.model.layers[layer])}")
-
             # This should get Gemma2DecoderLayer
             module_to_target = inference_model.model.layers[layer]
 
