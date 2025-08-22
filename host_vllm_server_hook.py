@@ -186,14 +186,15 @@ class VLLMServer:
         return await future
 
     async def process_queue(self, model_key: str):
-        """Process all requests in the queue for a specific model."""
+        """Process up to MAX_PARALLEL_REQUESTS from the queue for a specific model."""
         async with self.processing_lock:  # Ensure only one batch processes at a time
             if not self.queues[model_key]:
                 return
 
-            # Get all current requests from queue
+            # Get up to MAX_PARALLEL_REQUESTS current requests from queue
             batch_requests = []
-            while self.queues[model_key]:
+            num_to_process = min(MAX_PARALLEL_REQUESTS, len(self.queues[model_key]))
+            for _ in range(num_to_process):
                 batch_requests.append(self.queues[model_key].popleft())
 
             # Clear timer for this model
@@ -202,6 +203,10 @@ class VLLMServer:
 
             # Process batch synchronously
             await self._process_batch(batch_requests, model_key)
+
+            # If there are still items left in the queue, schedule the next batch
+            if self.queues[model_key]:
+                asyncio.create_task(self.process_queue(model_key))
 
     async def _schedule_timeout_processing(self, model_key: str):
         """Schedule processing after timeout if queue hasn't been processed yet."""
@@ -268,7 +273,6 @@ class VLLMServer:
                     steering_vectors.append(zero_vector)
                     steering_positions.append(0)  # Position 0 as fallback
 
-            #  TODO: this is dumb but whatever
             temperature = batch_requests[0].request.temperature
             max_tokens = batch_requests[0].request.max_tokens
             sampling_params = [
