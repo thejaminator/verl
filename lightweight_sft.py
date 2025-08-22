@@ -21,7 +21,7 @@ Before running:
 import math
 import os
 
-from detection_eval.steering_hooks import X_PROMPT, get_hf_activation_steering_hook
+from detection_eval.steering_hooks import X_PROMPT, add_hook, get_hf_activation_steering_hook
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
@@ -1378,10 +1378,10 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
         lr=2e-5,
         eval_steps=1000,
         num_epochs=1,
-        # save_steps=int(1000 / 4),  # save every 1000 samples
+        save_steps=int(1000 / 4),  # save every 1000 samples
         # num_epochs=4,
         # save every epoch
-        save_steps=math.ceil(len(explanations) / 4),
+        # save_steps=math.ceil(len(explanations) / 4),
         save_dir="checkpoints",
         # Hugging Face settings - set these based on your needs
         hf_push_to_hub=True,  # Only enable if login successful
@@ -1489,4 +1489,4 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
 
 if __name__ == "__main__":
     explanations_file = "20aug_sae_sfted_gpt-5-mini-2025-08-07.jsonl"
-    main(explanations_file, hf_repo_name="gemma-multiepoch")
+    main(explanations_file, hf_repo_name="gemma-posneg-cot")
