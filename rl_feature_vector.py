@@ -147,11 +147,10 @@ def extract_answer(text: str) -> str:
 
 
 def load_and_convert_dataset(
+    model: str,
     tokenizer: PreTrainedTokenizer,
     dataset_path: str,
     output_path: str,
-    data_source: str = "custom",
-    *,
     sae_layer: int,
     sae_width: int,
     use_decoder_vectors: bool,
@@ -224,6 +223,11 @@ def load_and_convert_dataset(
                     sample.sae_id,
                     use_decoder_vectors=use_decoder_vectors,
                 )
+                if model == "google/gemma-2-2b-it":
+                    print("WARNING: WE DON'T HAVE SAES FOR 2B, WILL USE 9B SAES")
+                    # ndim 2304
+                    feature_vector_list = feature_vector_list[:2304]
+
                 sae_verl_data = make_sae_verl_typed_dict(
                     sample,
                     position_idx,
@@ -232,7 +236,7 @@ def load_and_convert_dataset(
 
                 # Create structured data following the pattern
                 structured_data = {
-                    "data_source": data_source,
+                    "data_source": "custom",
                     "prompt": [prompt_as_chat_dict],
                     "ability": "explanations",
                     "reward_model": {
@@ -637,6 +641,7 @@ def verl_main(params: VerlParams):
     # Convert datasets to parquet format
     train_parquet = os.path.join(params.output_dir, "train.parquet")
     load_and_convert_dataset(
+        params.model_name,
         tokenizer,
         params.train_path,
         train_parquet,
@@ -650,6 +655,7 @@ def verl_main(params: VerlParams):
     if params.eval_path:
         eval_parquet = os.path.join(params.output_dir, "eval.parquet")
         load_and_convert_dataset(
+            params.model_name,
             tokenizer,
             params.eval_path,
             eval_parquet,
@@ -682,7 +688,7 @@ if __name__ == "__main__":
         # smaller model for testing
         model_name="google/gemma-2-2b-it",
         sae_repo_id="google/gemma-scope-9b-it-res",
-        use_feature_vector=False,  # debugging logprobs
+        use_feature_vector=True,  # debugging logprobs
         train_path="hard_negatives_100_000_to_100_800.jsonl",
         max_seq_length=1_000,  # debug
         max_prompt_length=500,  # debug
