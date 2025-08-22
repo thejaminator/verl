@@ -8,7 +8,6 @@ This script creates the configuration files and launches verl training.
 Based on the verl documentation and examples.
 """
 
-import json
 import os
 
 from transformers import AutoTokenizer, PreTrainedTokenizer
@@ -230,7 +229,7 @@ def load_and_convert_dataset(
         # Load the SAE train info. Should conform to SAE basemodel.
         sample = SAE.model_validate(sample_dict)
         feature = feature_vector_list[idx]
-        
+
         if testing_hack:
             # ndim 2304 for 2b
             feature = feature[:2304]
@@ -349,7 +348,7 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
     # Create repo and upload the converted model
     api = HfApi()
     api.create_repo(repo_name, token=params.hf_api_key, exist_ok=True, private=False)
-    
+
     # Upload the entire model directory
     api.upload_folder(
         folder_path=hf_output_dir,

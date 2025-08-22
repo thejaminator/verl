@@ -11,7 +11,6 @@ import os
 from abc import ABC, abstractmethod
 from typing import Callable
 
-from detection_eval.steering_hooks import X_PROMPT
 import einops
 import numpy as np
 import torch
@@ -20,6 +19,8 @@ from huggingface_hub import hf_hub_download
 from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.tokenization_utils import PreTrainedTokenizer
+
+from detection_eval.steering_hooks import X_PROMPT
 
 
 class BaseSAE(nn.Module, ABC):

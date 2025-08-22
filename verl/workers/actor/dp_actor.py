@@ -28,10 +28,10 @@ import verl.utils.torch_functional as verl_F
 from detection_eval.steering_hooks import (
     HookArgs,
     SAEVerlDataTypedDict,
+    add_hook,
     get_hf_activation_steering_hook,
     verl_data_to_hook_args,
 )
-from host_vllm_server_hook import add_hook
 from verl import DataProto
 from verl.trainer.ppo.core_algos import agg_loss, get_policy_loss_fn, kl_penalty
 from verl.utils.device import get_device_name, is_cuda_available, is_npu_available

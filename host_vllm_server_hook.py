@@ -5,12 +5,11 @@ Mimics OpenAI chat completions API with additional sae_index parameter.
 """
 
 import asyncio
-import contextlib
 import os
 import time
 import uuid
 from collections import defaultdict, deque
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -23,7 +22,7 @@ from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 from vllm.lora.request import LoRARequest
 
-from detection_eval.steering_hooks import get_vllm_steering_hook
+from detection_eval.steering_hooks import add_hook, get_vllm_steering_hook
 
 # Environment setup
 os.environ["VLLM_USE_V1"] = "0"
@@ -337,16 +336,6 @@ class VLLMServer:
             # If batch processing fails, set exception for all requests
             for queued_request in batch_requests:
                 queued_request.future.set_exception(e)
-
-
-@contextlib.contextmanager
-def add_hook(module: torch.nn.Module, hook: Callable):
-    """Temporarily adds a forward hook to a model module."""
-    handle = module.register_forward_hook(hook)
-    try:
-        yield
-    finally:
-        handle.remove()
 
 
 # SAE Classes
