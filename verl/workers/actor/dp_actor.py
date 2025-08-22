@@ -24,6 +24,7 @@ import torch
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
+from detection_eval.steering_hooks import get_vllm_steering_hook
 import verl.utils.torch_functional as verl_F
 from verl import DataProto
 from verl.trainer.ppo.core_algos import agg_loss, get_policy_loss_fn, kl_penalty
@@ -240,13 +241,19 @@ class DataParallelPPOActor(BasePPOActor):
 
                 # get the gemma layer module
                 gemma_layer_module = get_gemma_layer_module(self.actor_module, 9)
+                breakpoint()
+
+                # get sae feature vectors
+                assert "sae" in micro_batch.keys(), f"sae not in micro_batch: {micro_batch.keys()}"
+                sae_info = micro_batch["sae"]
+                _sae_feature_vectors: list[list[float]] = [m["feature_vector"] for m in sae_info] # (bs, ndim)
+                sae_feature_vectors = torch.tensor(_sae_feature_vectors, dtype=torch.bfloat16, device=self.device_name)
+                position_ids: list[int] = [m["position_id"] for m in sae_info] # (bs,)
+                steering_coefficient = 2
+                device = self.device_name
+                dtype = torch.bfloat16
+                hookhook = get_vllm_steering_hook(gemma_layer_module, sae_feature_vectors, position_ids, steering_coefficient, device, dtype)
                 
-                print(f"gemma_layer_module: {gemma_layer_module}")
-
-                # What is the type of actor_module?
-                # Need to get the specific gemma layer module
-                print(f"actor_module: {type(self.actor_module)}")
-
                 if self.use_fused_kernels:
                     log_probs = output.log_probs.squeeze(0)  # (total_nnz,)
                     entropy_rmpad = output.entropy.squeeze(0)  # (total_nnz,)
@@ -388,7 +395,8 @@ class DataParallelPPOActor(BasePPOActor):
         use_dynamic_bsz = data.meta_info["use_dynamic_bsz"]
         has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
         select_keys = ["responses", "input_ids", "attention_mask", "position_ids"]
-        non_tensor_select_keys = ["multi_modal_inputs"] if has_multi_modal_inputs else []
+        # MAKE SURE SAE INFO DOESN'T GET REMOVED!!!
+        non_tensor_select_keys = ["multi_modal_inputs", "sae"] if has_multi_modal_inputs else ["sae"]
 
         data = data.select(batch_keys=select_keys, non_tensor_batch_keys=non_tensor_select_keys)
 
@@ -403,6 +411,8 @@ class DataParallelPPOActor(BasePPOActor):
         for micro_batch in micro_batches:
             model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch}
             with torch.no_grad():
+                # model_inputs should have "sae"
+                assert "sae" in model_inputs
                 entropy, log_probs = self._forward_micro_batch(
                     model_inputs, temperature=temperature, calculate_entropy=calculate_entropy
                 )

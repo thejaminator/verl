@@ -769,6 +769,8 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
     def compute_log_prob(self, data: DataProto):
         # when is_lora is True, we use the actor without lora applied to calculate the log_prob
         # which is mostly used for ref log_prob calculation
+        # sae should be in non_tensor_batch
+        assert "sae" in data.non_tensor_batch
         assert self._is_actor
         if self._is_offload_param:
             load_fsdp_model_to_gpu(self.actor_module_fsdp)
@@ -787,8 +789,10 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         # perform recompute log_prob
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data)
+            # "sae" should still be in non_tensor_batch
             with adapter_ctx:
                 output, entropys = self.actor.compute_log_prob(data=data, calculate_entropy=True)
+            assert "sae" in data.non_tensor_batch
             output = DataProto.from_dict(
                 tensors={"old_log_probs": output, "entropys": entropys},
                 meta_info={"temperature": self.config.rollout.temperature},
