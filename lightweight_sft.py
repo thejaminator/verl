@@ -1277,7 +1277,7 @@ def train_model(
                 )
                 model.train()
 
-            if global_step % cfg.save_steps == 0:
+            if global_step % cfg.save_steps == 0 and global_step > 0:
                 model.save_pretrained(f"{cfg.save_dir}/step_{global_step}")
                 # Push to hF
                 if cfg.hf_push_to_hub and cfg.hf_repo_id:
