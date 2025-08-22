@@ -210,6 +210,11 @@ def load_and_convert_dataset(
     )
 
     # ---------------- build rows ----------------
+    testing_hack = False
+    if model == "google/gemma-2-2b-it":
+        print("WARNING: WE DON'T HAVE SAES FOR 2B, WILL USE 9B SAES")
+        testing_hack = True
+
     data = []
     with open(dataset_path) as f:
         for idx, line in enumerate(f):
@@ -223,9 +228,9 @@ def load_and_convert_dataset(
                     sample.sae_id,
                     use_decoder_vectors=use_decoder_vectors,
                 )
-                if model == "google/gemma-2-2b-it":
-                    print("WARNING: WE DON'T HAVE SAES FOR 2B, WILL USE 9B SAES")
-                    # ndim 2304
+                
+                if testing_hack:
+                    # ndim 2304 for 2b
                     feature_vector_list = feature_vector_list[:2304]
 
                 sae_verl_data = make_sae_verl_typed_dict(
