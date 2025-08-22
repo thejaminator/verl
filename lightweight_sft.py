@@ -840,7 +840,7 @@ def eval_features_batch(
     batch_positions = eval_batch.positions
 
     # 3. Create and apply the activation steering hook
-    hook_fn = get_activation_steering_hook(
+    hook_fn = get_hf_activation_steering_hook(
         vectors=batch_steering_vectors,
         positions=batch_positions,
         steering_coefficient=cfg.steering_coefficient,
