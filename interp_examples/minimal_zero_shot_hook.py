@@ -11,6 +11,7 @@ import os
 from abc import ABC, abstractmethod
 from typing import Callable
 
+from detection_eval.steering_hooks import X_PROMPT
 import einops
 import numpy as np
 import torch
