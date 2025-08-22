@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pyright: reportMissingImports=false
 """
 verl GRPO Training Launcher Script
 Migrated from unsloth + trl to verl for GSM8K/MATH training
@@ -10,7 +11,7 @@ Based on the verl documentation and examples.
 import json
 import os
 
-from transformers import PreTrainedTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from detection_eval.detection_basemodels import SAE
 from detection_eval.steering_hooks import make_sae_verl_typed_dict
@@ -20,10 +21,12 @@ os.environ["HF_HOME"] = "/workspace"
 import subprocess
 import sys
 
+import numpy as np
+import torch
 import wandb
 
 # Step 2: Push to HuggingFace Hub
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, hf_hub_download
 from pydantic import BaseModel
 
 
@@ -54,6 +57,12 @@ class VerlParams(BaseModel):
     warmup_steps: int = 10
     beta: float = 0.005  # KL coefficient
 
+    # SAE feature-vector config
+    sae_repo_id: str = "google/gemma-scope-9b-it-res"
+    sae_layer: int = 9
+    sae_width: int = 131
+    use_decoder_vectors: bool
+
     # LoRA configuration
     lora_rank: int = 32  # LoRA rank, set to 0 to disable LoRA
     lora_alpha: float = 64.0  # LoRA alpha parameter (typically 2x lora_rank)
@@ -78,6 +87,59 @@ class VerlParams(BaseModel):
     wandb_api_key: str | None = None
 
 
+def get_sae_info(sae_repo_id: str, sae_width: int, sae_layer: int) -> str:
+    if sae_repo_id == "google/gemma-scope-9b-it-res":
+        if sae_width == 16:
+            return f"layer_{sae_layer}/width_16k/average_l0_88/params.npz"
+        elif sae_width == 131:
+            return f"layer_{sae_layer}/width_131k/average_l0_121/params.npz"
+        else:
+            raise ValueError(f"Unknown SAE width: {sae_width}")
+    else:
+        raise ValueError(f"Unknown SAE repo ID: {sae_repo_id}")
+
+
+def load_sae_params_for_model(
+    tokenizer: PreTrainedTokenizer,
+    sae_layer: int,
+    sae_width: int,
+    sae_repo_id: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Download and load SAE params (W_enc, W_dec) for the tokenizer's model family."""
+    model_name = getattr(tokenizer, "name_or_path", "") or ""
+    if "gemma" in model_name:
+        filename = get_sae_info(sae_repo_id, sae_width, sae_layer)
+        path_to_params = hf_hub_download(
+            repo_id=sae_repo_id,
+            filename=filename,
+            force_download=False,
+            local_dir="downloaded_saes",
+        )
+        pytorch_path = path_to_params.replace(".npz", ".pt")
+        if not os.path.exists(pytorch_path):
+            params = np.load(path_to_params)
+            pt_params = {k: torch.from_numpy(v) for k, v in params.items()}
+            torch.save(pt_params, pytorch_path)
+        pt_params = torch.load(pytorch_path)
+        W_enc = pt_params["W_enc"]  # [d_in, d_sae]
+        W_dec = pt_params["W_dec"]  # [d_sae, d_in]
+        return W_enc, W_dec
+
+    raise ValueError(f"Unsupported model for SAE feature vectors: {model_name}")
+
+
+def get_feature_vector_from_params(
+    W_enc: torch.Tensor,
+    W_dec: torch.Tensor,
+    sae_id: int,
+    use_decoder_vectors: bool,
+) -> list[float]:
+    if use_decoder_vectors:
+        return W_dec[sae_id].to(torch.float32).tolist()
+    else:
+        return W_enc[:, sae_id].to(torch.float32).tolist()
+
+
 def extract_answer(text: str) -> str:
     """Extract answer from <answer> tags"""
     if "<answer>" in text and "</answer>" in text:
@@ -88,7 +150,15 @@ def extract_answer(text: str) -> str:
 
 
 def load_and_convert_dataset(
-    tokenizer: PreTrainedTokenizer, dataset_path: str, output_path: str, data_source: str = "custom"
+    tokenizer: PreTrainedTokenizer,
+    dataset_path: str,
+    output_path: str,
+    data_source: str = "custom",
+    *,
+    sae_layer: int,
+    sae_width: int,
+    use_decoder_vectors: bool,
+    sae_repo_id: str,
 ) -> int:
     """
     Load dataset from JSONL and convert to verl format (parquet).
@@ -115,12 +185,13 @@ def load_and_convert_dataset(
     # Each line in jsonl should be SAE object
 
     print(f"Loading dataset from: {dataset_path}")
+
+    # ---------------- build prompt and locate X position ----------------
     X_PROMPT = "Can you explain to me what 'X' means? Format your final answer with <explanation>"
     prompt_as_chat_dict = {
         "role": "user",
         "content": X_PROMPT,
     }
-    # we need to caclulate what position 'X' is in the prompt
     tokenized_prompt = tokenizer.apply_chat_template(
         [prompt_as_chat_dict],
         tokenize=True,
@@ -129,9 +200,19 @@ def load_and_convert_dataset(
         padding=False,
         enable_thinking=False,
     )
+    if not isinstance(tokenized_prompt, list):
+        raise TypeError("Expected list of token ids from tokenizer.apply_chat_template")
     x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
-    print(f"X token id: {x_token_id}")
 
+    # ---------------- feature-vector params (loaded once) ----------------
+    W_enc, W_dec = load_sae_params_for_model(
+        tokenizer,
+        sae_layer=sae_layer,
+        sae_width=sae_width,
+        sae_repo_id=sae_repo_id,
+    )
+
+    # ---------------- build rows ----------------
     data = []
     with open(dataset_path) as f:
         for idx, line in enumerate(f):
@@ -139,26 +220,33 @@ def load_and_convert_dataset(
                 sample_dict = json.loads(line)
                 # Load the SAE train info. Should conform to SAE basemodel.
                 sample = SAE.model_validate(sample_dict)
+                feature_vector_list = get_feature_vector_from_params(
+                    W_enc,
+                    W_dec,
+                    sample.sae_id,
+                    use_decoder_vectors=use_decoder_vectors,
+                )
                 sae_verl_data = make_sae_verl_typed_dict(
                     sample,
                     x_token_id,
+                    feature_vector_list,
                 )
 
                 # Create structured data following the pattern
                 structured_data = {
                     "data_source": data_source,
                     "prompt": [prompt_as_chat_dict],
-                    "ability": "explanations",  # No idea what we need to edit this for, but verl requires it?
+                    "ability": "explanations",
                     "reward_model": {
                         "style": "rule",
                         "ground_truth": "no ground truth",
-                    },  # verl requires passing something for ground truth?
+                    },
                     "extra_info": {
                         "prompt": X_PROMPT,
                         "index": idx,
                     },
                     # sae information which we modify the PPO trainer to pass during rollouts
-                    "sae": sample.model_dump(),
+                    "sae": sae_verl_data,
                 }
                 data.append(structured_data)
 
@@ -544,14 +632,34 @@ def verl_main(params: VerlParams):
     # Create output directory
     os.makedirs(params.output_dir, exist_ok=True)
 
+    # Load tokenizer once and pass down
+    print("Loading tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(params.model_name)
+
     # Convert datasets to parquet format
     train_parquet = os.path.join(params.output_dir, "train.parquet")
-    load_and_convert_dataset(params.train_path, train_parquet)
+    load_and_convert_dataset(
+        tokenizer,
+        params.train_path,
+        train_parquet,
+        sae_layer=params.sae_layer,
+        sae_width=params.sae_width,
+        use_decoder_vectors=params.use_decoder_vectors,
+        sae_repo_id=params.sae_repo_id,
+    )
 
     eval_parquet = None
     if params.eval_path:
         eval_parquet = os.path.join(params.output_dir, "eval.parquet")
-        load_and_convert_dataset(params.eval_path, eval_parquet)
+        load_and_convert_dataset(
+            tokenizer,
+            params.eval_path,
+            eval_parquet,
+            sae_layer=params.sae_layer,
+            sae_width=params.sae_width,
+            use_decoder_vectors=params.use_decoder_vectors,
+            sae_repo_id=params.sae_repo_id,
+        )
 
     # Use math reward function directly
     reward_file = params.reward_function_file
@@ -575,6 +683,7 @@ if __name__ == "__main__":
     params = VerlParams(
         # smaller model for testing
         model_name="google/gemma-2-2b-it",
+        sae_repo_id="google/gemma-scope-9b-it-res",
         use_feature_vector=False,  # debugging logprobs
         train_path="hard_negatives_100_000_to_100_800.jsonl",
         max_seq_length=1_000,  # debug
@@ -615,6 +724,9 @@ if __name__ == "__main__":
         reward_function_name="compute_score",
         reward_function_file="feature_vector_reward.py",
         wandb_api_key=wandb_key,
+        use_decoder_vectors=True,
+        sae_layer=9,
+        sae_width=131,
     )
 
     verl_main(params)

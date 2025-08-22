@@ -1,0 +1,7 @@
+Prefer to add type hints.
+Prefer plotly.
+Prefer keyword args.
+Don't always add defaults to functions. It makes it harder to know when the params actually get passed in.
+Don't use arg parse. Prefer just changing the args in main.
+Avoid excessive try except catching. Don't try except imports.
+Avoid nested functions.
