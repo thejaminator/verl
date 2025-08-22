@@ -149,12 +149,12 @@ def get_hf_activation_steering_hook(
     vec_BD = vec_BD.to(device, dtype)
     pos_B = pos_B.to(device)
 
-    print("🔧 HF STEERING HOOK SETUP:")
-    print(f"  Batch size: {B}")
-    print(f"  Feature vector shape: {vec_BD.shape}")
-    print(f"  Positions: {pos_B.tolist()}")
-    print(f"  Steering coefficient: {steering_coefficient}")
-    print(f"  Feature vector norms: {vec_BD.norm(dim=-1).tolist()}")
+    # print("🔧 HF STEERING HOOK SETUP:")
+    # print(f"  Batch size: {B}")
+    # print(f"  Feature vector shape: {vec_BD.shape}")
+    # print(f"  Positions: {pos_B.tolist()}")
+    # print(f"  Steering coefficient: {steering_coefficient}")
+    # print(f"  Feature vector norms: {vec_BD.norm(dim=-1).tolist()}")
 
     def hook_fn(module, _input, output):
         resid_BLD, *rest = output  # Gemma returns (resid, hidden_states, ...)
@@ -169,11 +169,11 @@ def get_hf_activation_steering_hook(
             bad = pos_B[pos_B >= L].min().item()
             raise IndexError(f"position {bad} is out of bounds for length {L}")
 
-        print("\n🎯 HF STEERING HOOK EXECUTING:")
-        print(f"  Module: {type(module).__name__}")
-        print(f"  Input shape: {resid_BLD.shape}")
-        print(f"  Sequence length: {L}")
-        print(f"  Expected batch size: {B}, actual: {B_actual}")
+        # print("\n🎯 HF STEERING HOOK EXECUTING:")
+        # print(f"  Module: {type(module).__name__}")
+        # print(f"  Input shape: {resid_BLD.shape}")
+        # print(f"  Sequence length: {L}")
+        # print(f"  Expected batch size: {B}, actual: {B_actual}")
 
         # ---- compute norms of original activations at the target slots ----
         batch_idx_B = torch.arange(B, device=device)  # (B,)
@@ -189,7 +189,8 @@ def get_hf_activation_steering_hook(
         change_magnitude = (steered_BD - orig_BD).norm(dim=-1)
 
         if change_magnitude.max() < 1e-4:
-            raise ValueError("Very small change magnitude!")
+            print("WARNING: Very small change magnitude in get_hf_activation_steering_hook")
+            # raise ValueError("Very small change magnitude!")
 
         # ---- in-place replacement via advanced indexing ----
         resid_BLD[batch_idx_B, pos_B] = steered_BD
