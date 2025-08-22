@@ -5,6 +5,8 @@
 
 # %%
 import os
+
+from detection_eval.steering_hooks import X_PROMPT
 os.environ['VLLM_USE_V1'] = '0'
 os.environ["NVTE_ALLOW_NONDETERMINISTIC_ALGO"] = "1"
 
@@ -131,7 +133,7 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
 # Create test prompts with 'X' tokens
 test_inputs = [
-    [{"role": "user", "content": "Can you explain to me what 'X' means? Format your final answer with <explanation>"}],
+    [{"role": "user", "content": X_PROMPT}],
     # [{"role": "user", "content": "What does the 'X' mean?"}]
 ]
 

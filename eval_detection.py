@@ -17,6 +17,7 @@ from detection_eval.caller import (
     write_jsonl_file_from_basemodel,
 )
 from detection_eval.detection_basemodels import SAE, SAEActivations, SentenceInfo, TokenActivation
+from detection_eval.steering_hooks import X_PROMPT
 
 
 class ModelInfo(BaseModel):
@@ -827,7 +828,7 @@ async def run_gemma_steering(
     """
     Run gemma steering for a single SAE.
     """
-    history = ChatHistory.from_user("Can you explain to me what 'X' means? Format your final answer with <explanation>")
+    history = ChatHistory.from_user(X_PROMPT)
     response = await gemma_caller.call(
         messages=history,
         config=InferenceConfig(

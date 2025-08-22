@@ -21,7 +21,7 @@ Before running:
 import math
 import os
 
-from detection_eval.steering_hooks import get_hf_activation_steering_hook
+from detection_eval.steering_hooks import X_PROMPT, get_hf_activation_steering_hook
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
@@ -533,7 +533,7 @@ def build_training_prompt(positive_negative_examples: bool) -> str:
     if positive_negative_examples:
         question = """Can you explain to me the concept of what 'X' means? Give positive and negative examples of what the concept would activate on. Format your final answer with <explanation>."""
     else:
-        question = """Can you explain to me what 'X' means? Format your final answer with <explanation>"""
+        question = X_PROMPT
     return question
 
 

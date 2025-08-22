@@ -7,6 +7,8 @@ from openai import BaseModel
 
 from detection_eval.detection_basemodels import SAE, SAEActivations
 
+X_PROMPT = "Can you explain to me what 'X' means? Format your final answer with <explanation>"
+
 
 def get_vllm_steering_hook(
     vectors: list[torch.Tensor],

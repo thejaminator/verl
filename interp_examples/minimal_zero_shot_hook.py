@@ -204,7 +204,7 @@ def build_explanation_prompt(
     messages = [
         {
             "role": "user",
-            "content": "Can you explain to me what 'X' means? Format your final answer with <explanation>",
+            "content": X_PROMPT,
         },
         {
             "role": "assistant",

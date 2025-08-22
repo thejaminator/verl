@@ -9,6 +9,8 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 from slist import Slist
 
+from detection_eval.steering_hooks import X_PROMPT
+
 
 class TestChatCompletion(BaseModel):
     sae_index: int | None = None
@@ -29,12 +31,7 @@ async def test_chat_completion(
     response = await client.chat.completions.create(
         # model="thejaminator/sae-introspection-lora",
         model="thejaminator/gemma-introspection-20250821",
-        messages=[
-            {
-                "role": "user",
-                "content": "Can you explain to me what 'X' means? Format your final answer with <explanation>",
-            }
-        ],
+        messages=[{"role": "user", "content": X_PROMPT}],
         max_tokens=1000,
         temperature=1.0,  # stress test passing correct vectors.
         extra_body=extra_body if extra_body else None,

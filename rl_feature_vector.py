@@ -14,7 +14,7 @@ import os
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from detection_eval.detection_basemodels import SAE
-from detection_eval.steering_hooks import make_sae_verl_typed_dict
+from detection_eval.steering_hooks import X_PROMPT, make_sae_verl_typed_dict
 
 # set HF_HOME to /workspace
 os.environ["HF_HOME"] = "/workspace"
@@ -22,10 +22,10 @@ import subprocess
 import sys
 
 import numpy as np
-import torch
-import wandb
 import pyarrow as pa
 import pyarrow.parquet as pq
+import torch
+import wandb
 
 # Step 2: Push to HuggingFace Hub
 from huggingface_hub import HfApi, hf_hub_download
@@ -183,7 +183,6 @@ def load_and_convert_dataset(
     print(f"Loading dataset from: {dataset_path}")
 
     # ---------------- build prompt and locate X position ----------------
-    X_PROMPT = "Can you explain to me what 'X' means? Format your final answer with <explanation>"
     prompt_as_chat_dict = {
         "role": "user",
         "content": X_PROMPT,
