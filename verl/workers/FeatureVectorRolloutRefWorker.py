@@ -75,38 +75,16 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
         with self.rollout_sharding_manager:
             log_gpu_memory_usage("After entering rollout sharding manager", logger=logger)
             rollout: vLLMRollout = self.rollout  # type: ignore
-            """Hook logic begin"""
-            layer = 9  # todo: DataProto may define this
-            # Try the path from vllm_hook_demo.py
-            inference_model = rollout.inference_engine.llm_engine.model_executor.driver_worker.model_runner.model
-            dtype = torch.bfloat16
-            # This should get Gemma2DecoderLayer
-            module_to_target = inference_model.model.layers[layer]
-
-            # DataProto should contain
             assert "sae" in prompts.non_tensor_batch, f"sae not in prompts: {prompts.non_tensor_batch.keys()}"
-            sae_info: list[SAEVerlDataTypedDict] = prompts.non_tensor_batch["sae"]
-            hook_args: HookArgs = verl_data_to_hook_args(sae_info, device=device)
-
-            # input_ids
-            input_ids = prompts.batch["input_ids"]
-            prompt_lengths = [len(input_id) for input_id in input_ids]
-            hook = get_vllm_steering_hook(
-                vectors=hook_args.vectors,
-                positions=hook_args.positions,
-                prompt_lengths=prompt_lengths,
-                steering_coefficient=hook_args.steering_coefficient,
-                device=device,
-                dtype=dtype,
-            )
-
+        
             processed_prompts = self.rollout_sharding_manager.preprocess_data(prompts)
+
+            # need to pass sae rollout.generate_sequences. then in vllm_rollout_spmd.py you have the true lengths.
+            # Here verl for some reason pads all the input ids to max input length. But vllm removes it later.
             # NOTE: Need to enforce eager
+            processed_prompts.non_tensor_batch["sae"] = prompts.non_tensor_batch["sae"]
             with simple_timer("generate_sequences", timing_generate):
-                with add_hook(module_to_target, hook):
-                    print("Hook registered, starting generation...")
-                    output = rollout.generate_sequences(prompts=processed_prompts)
-                    print("Generation completed with hook")
+                output = rollout.generate_sequences(prompts=processed_prompts)
 
             log_gpu_memory_usage("After rollout generation", logger=logger)
 

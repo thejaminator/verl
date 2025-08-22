@@ -51,7 +51,9 @@ from vllm.lora.request import LoRARequest
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.worker.worker_base import WorkerWrapperBase
 
+from detection_eval.steering_hooks import HookArgs, SAEVerlDataTypedDict, add_hook, get_vllm_steering_hook, verl_data_to_hook_args
 from verl import DataProto
+from verl.utils.device import get_torch_device
 from verl.utils.profiler import GPUMemoryLogger
 from verl.utils.torch_functional import get_response_mask, pad_2d_list_to_length
 from verl.workers.rollout.base import BaseRollout
@@ -317,14 +319,30 @@ class vLLMRollout(BaseRollout):
                     LoRARequest(lora_name=f"{lora_int_id}", lora_int_id=lora_int_id, lora_path="/simon-stub-path")
                 ] * batch_size
 
+        sae_info: list[SAEVerlDataTypedDict] = prompts.non_tensor_batch["sae"]
+        device = get_torch_device()
+        dtype = torch.bfloat16
+        prompt_lengths = [len(input_id_list) for input_id_list in vllm_inputs["prompt_token_ids"]]
+        hook_args: HookArgs = verl_data_to_hook_args(sae_info, device=device)
+        hook = get_vllm_steering_hook(
+                vectors=hook_args.vectors,
+                positions=hook_args.positions,
+                prompt_lengths=prompt_lengths,
+                steering_coefficient=hook_args.steering_coefficient,
+                device=device,
+                dtype=dtype,
+            )
+        module_to_target = self.inference_engine.llm_engine.model_executor.driver_worker.model_runner.model.model.layers[9]
+
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**kwargs):
-            outputs = self.inference_engine.generate(
-                prompts=vllm_inputs,  # because we have already convert it to prompt token id
-                sampling_params=self.sampling_params,
-                lora_request=lora_requests,
-                use_tqdm=False,
-            )
+            with add_hook(module_to_target, hook):
+                outputs = self.inference_engine.generate(
+                    prompts=vllm_inputs,  # because we have already convert it to prompt token id
+                    sampling_params=self.sampling_params,
+                    lora_request=lora_requests,
+                    use_tqdm=False,
+                )
 
             # TODO(sgm): disable logprob when recompute_log_prob is enable
             # if n = 1: (bs, response_length) ; if n > 1: (bs * n, response_length)
