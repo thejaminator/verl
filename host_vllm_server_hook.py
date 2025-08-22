@@ -178,7 +178,7 @@ class VLLMServer:
         if should_process:
             # Process queue in background (non-blocking)
             asyncio.create_task(self.process_queue(model_key))
-        elif len(self.queues[model_key]) == 1:
+        else:
             # Schedule timeout processing for first request
             asyncio.create_task(self._schedule_timeout_processing(model_key))
 
@@ -204,9 +204,11 @@ class VLLMServer:
             # Process batch synchronously
             await self._process_batch(batch_requests, model_key)
 
-            # If there are still items left in the queue, schedule the next batch
-            if self.queues[model_key]:
+            should_process = len(self.queues[model_key]) >= MAX_PARALLEL_REQUESTS
+            if should_process:
                 asyncio.create_task(self.process_queue(model_key))
+            else:
+                asyncio.create_task(self._schedule_timeout_processing(model_key))
 
     async def _schedule_timeout_processing(self, model_key: str):
         """Schedule processing after timeout if queue hasn't been processed yet."""
