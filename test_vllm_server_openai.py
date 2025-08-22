@@ -30,7 +30,8 @@ async def test_chat_completion(
 
     response = await client.chat.completions.create(
         # model="thejaminator/sae-introspection-lora",
-        model="thejaminator/gemma-introspection-20250821",
+        # model="thejaminator/gemma-introspection-20250821",
+        model="thejaminator/gemma-posneg-cot",
         messages=[{"role": "user", "content": X_PROMPT}],
         max_tokens=1000,
         temperature=1.0,  # stress test passing correct vectors.
