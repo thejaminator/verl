@@ -255,10 +255,10 @@ def get_rm_pad_log_probs_hook(
 
             # ---- in-place replacement via advanced indexing ----
             # residual: (1, total_tokens, d_model)
-            residual[0, global_indices, :] = steered_BD  # replace B locations
+            residual[0, global_indices, :] = steered_BD.to(dtype)  # replace B locations
             return (residual, *rest)
         except Exception as e:
-            # breakpoint()
+            breakpoint()
             raise e
 
     return hook_fn

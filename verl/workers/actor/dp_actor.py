@@ -182,7 +182,12 @@ class DataParallelPPOActor(BasePPOActor):
             # get the gemma layer module
             gemma_layer_module = get_gemma_layer_module(self.actor_module, 9)
             # get sae feature vectors
-            assert "sae" in micro_batch.keys(), f"sae not in micro_batch: {micro_batch.keys()}"
+            if "sae" not in micro_batch.keys():
+                breakpoint()
+                raise ValueError(f"sae not in micro_batch: {micro_batch.keys()}")
+            else:
+                print(f"sae in micro_batch: {micro_batch.keys()}")
+            # assert "sae" in micro_batch.keys(), f"sae not in micro_batch: {micro_batch.keys()}"
             sae_info: list[SAEVerlDataTypedDict] = micro_batch["sae"]
             hook_args: HookArgs = verl_data_to_hook_args(sae_info, device=torch.device(self.device_name))
 
