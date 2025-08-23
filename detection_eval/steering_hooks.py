@@ -47,7 +47,7 @@ def get_vllm_steering_hook(
                     f"Position indices mismatch at index {count}, expected {expected_position_indices_L}, got {tokens_L[count : count + prompt_length]}"
                 )
             except AssertionError as e:
-                breakpoint()
+                # breakpoint()
                 raise e
 
             count += prompt_length
@@ -141,20 +141,10 @@ def get_hf_activation_steering_hook(
     pos_B = torch.tensor(positions, dtype=torch.long, device=device)  # (B,)
     B, d_model = vec_BD.shape
 
-    # Handle the case where positions might create a scalar tensor instead of a 1D tensor
-    if pos_B.dim() == 0:  # scalar tensor case (when positions is a single integer instead of list)
-        pos_B = pos_B.unsqueeze(0)  # Convert scalar to (1,) shape
-
     assert pos_B.shape == (B,)
     vec_BD = vec_BD.to(device, dtype)
     pos_B = pos_B.to(device)
 
-    # print("🔧 HF STEERING HOOK SETUP:")
-    # print(f"  Batch size: {B}")
-    # print(f"  Feature vector shape: {vec_BD.shape}")
-    # print(f"  Positions: {pos_B.tolist()}")
-    # print(f"  Steering coefficient: {steering_coefficient}")
-    # print(f"  Feature vector norms: {vec_BD.norm(dim=-1).tolist()}")
 
     def hook_fn(module, _input, output):
         resid_BLD, *rest = output  # Gemma returns (resid, hidden_states, ...)
@@ -198,8 +188,85 @@ def get_hf_activation_steering_hook(
 
         # ---- in-place replacement via advanced indexing ----
         resid_BLD[batch_idx_B, pos_B] = steered_BD
-
         return (resid_BLD, *rest)
+
+
+
+    return hook_fn
+
+
+
+def get_rm_pad_log_probs_hook(
+    vectors: list[torch.Tensor],  # [B, d_model]
+    positions: list[int], # [B]
+    verl_positions: torch.Tensor, # (1, total tokens).
+    steering_coefficient: float,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> Callable:
+    """
+    When verl has rmpad set to True (default?), the position_ids are (1, total tokens)
+    example  of positions:
+    tensor([[0, 1, 2, ,3 .....133, 134, 0, 1, 2, 3, ....101]])
+
+    Use for calculating log probs in verl
+    Note: Do not use for generating / rollouts. Only just for the forward pass for log probs.
+    """
+    # ---- pack Python lists → torch tensors once, outside the hook ----
+    vec_BD = torch.stack(vectors).to(device, dtype)  # (B, d_model)
+    B, d_model = vec_BD.shape
+    pos_B = torch.tensor(positions, dtype=torch.long, device=device)  # (B,)
+
+
+    def hook_fn(module, _input, output):
+        try:
+            # residual: (1, total_tokens, d_model)
+            residual, *rest = output
+            _, total_tokens, d_model_actual = residual.shape  # (1, L, d_model)
+            expected_length = verl_positions.shape[1]
+            assert total_tokens == expected_length, f"Expected length {expected_length}, got {total_tokens}"
+
+            # Identify the start index of each sequence in the flattened positions.
+            # verl_positions: (1, total_tokens)
+            seq_start_indices = (verl_positions[0] == 0).nonzero(as_tuple=True)[0]  # (B,)
+            assert seq_start_indices.numel() == B, (
+                f"Expected {B} sequence starts (zeros) in verl_positions, got {seq_start_indices.numel()}"
+            )
+
+            # Validate that each requested local position fits inside its sequence span.
+            # Sequence ends are next start, or total_tokens for the last sequence
+            seq_end_indices = torch.cat(
+                [seq_start_indices[1:], torch.tensor([total_tokens], device=device, dtype=torch.long)],
+                dim=0,
+            )  # (B,)
+            max_local_lengths = (seq_end_indices - seq_start_indices)  # (B,)
+            assert torch.all(pos_B < max_local_lengths), (
+                f"Some positions exceed their sequence lengths: positions={pos_B.tolist()}, lengths={max_local_lengths.tolist()}"
+            )
+
+            # Map each local position to its global token index within the flattened residual
+            # global_indices: (B,)
+            global_indices = seq_start_indices + pos_B
+
+            # ---- compute norms of original activations at the target slots ----
+            # orig_BD: (B, d_model)
+            orig_BD = residual[0, global_indices, :]
+            norms_B1 = orig_BD.norm(dim=-1, keepdim=True).detach()  # (B, 1)
+
+            # ---- build steered vectors ----
+            # normalized_features: (B, d_model)
+            normalized_features = torch.nn.functional.normalize(vec_BD, dim=-1)
+            steered_BD = normalized_features * norms_B1 * steering_coefficient  # (B, d_model)
+
+
+            # ---- in-place replacement via advanced indexing ----
+            # residual: (1, total_tokens, d_model)
+            residual[0, global_indices, :] = steered_BD  # replace B locations
+            return (residual, *rest)
+        except Exception as e:
+            # breakpoint()
+            raise e
+                    
 
     return hook_fn
 

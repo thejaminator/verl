@@ -30,6 +30,7 @@ from detection_eval.steering_hooks import (
     SAEVerlDataTypedDict,
     add_hook,
     get_hf_activation_steering_hook,
+    get_rm_pad_log_probs_hook,
     verl_data_to_hook_args,
 )
 from verl import DataProto
@@ -184,13 +185,6 @@ class DataParallelPPOActor(BasePPOActor):
             assert "sae" in micro_batch.keys(), f"sae not in micro_batch: {micro_batch.keys()}"
             sae_info: list[SAEVerlDataTypedDict] = micro_batch["sae"]
             hook_args: HookArgs = verl_data_to_hook_args(sae_info, device=torch.device(self.device_name))
-            hf_hook = get_hf_activation_steering_hook(
-                vectors=hook_args.vectors,
-                positions=hook_args.positions,
-                steering_coefficient=hook_args.steering_coefficient,
-                device=torch.device(get_device_id()),
-                dtype=torch.bfloat16,
-            )
 
             if position_ids.dim() == 3:  # qwen2vl mrope
                 position_ids = position_ids.transpose(0, 1)  # (bsz, 3, seqlen) -> (3, bsz, seqlen)
@@ -252,16 +246,31 @@ class DataParallelPPOActor(BasePPOActor):
                 if self.use_fused_kernels:
                     extra_args["temperature"] = temperature
                     extra_args["return_dict"] = True
+                
+                hf_hook = get_rm_pad_log_probs_hook(
+                vectors=hook_args.vectors,
+                positions=hook_args.positions,
+                verl_positions=position_ids_rmpad,
+                steering_coefficient=hook_args.steering_coefficient,
+                device=torch.device(get_device_id()),
+                dtype=torch.bfloat16,
+            )
 
                 with add_hook(gemma_layer_module, hf_hook):
-                    output = self.actor_module(
-                        input_ids=input_ids_rmpad,
-                        attention_mask=None,
-                        position_ids=position_ids_rmpad,
-                        **multi_modal_inputs,
-                        use_cache=False,
-                        **extra_args,
-                    )  # prevent model thinks we are generating
+                    # input_ids_rmpad (1, total_tokens)
+                    # position_ids_rmpad (1, total_tokens)
+                    try:
+                        output = self.actor_module(
+                            input_ids=input_ids_rmpad,
+                            attention_mask=None,
+                            position_ids=position_ids_rmpad,
+                            **multi_modal_inputs,
+                            use_cache=False,
+                            **extra_args,
+                        )  # prevent model thinks we are generating
+                    except Exception as e:
+                        breakpoint()
+                        raise e
 
                 if self.use_fused_kernels:
                     log_probs = output.log_probs.squeeze(0)  # (total_nnz,)
@@ -331,6 +340,16 @@ class DataParallelPPOActor(BasePPOActor):
                 if self.use_fused_kernels:
                     extra_args["temperature"] = temperature
                     extra_args["return_dict"] = True
+
+                # I think you can just use this hook?
+                # input_ids (bs, seqlen)
+                hf_hook = get_hf_activation_steering_hook(
+                    vectors=hook_args.vectors,
+                    positions=hook_args.positions,
+                    steering_coefficient=hook_args.steering_coefficient,
+                    device=torch.device(get_device_id()),
+                    dtype=torch.bfloat16,
+                )
 
                 with add_hook(gemma_layer_module, hf_hook):
                     output = self.actor_module(
