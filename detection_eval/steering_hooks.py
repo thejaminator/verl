@@ -185,8 +185,11 @@ def get_hf_activation_steering_hook(
         normalized_features = torch.nn.functional.normalize(vec_BD, dim=-1)
         steered_BD = normalized_features * norms_B1 * steering_coefficient  # (B, d)
 
+        # somehow verl explodes here and complains about dtype?
+        steered_BD = steered_BD.to(dtype)
+
         # Calculate the change magnitude BEFORE applying
-        change_magnitude = (steered_BD - orig_BD).norm(dim=-1)
+        # change_magnitude = (steered_BD - orig_BD).norm(dim=-1)
 
         # sometiems this blows up. not sure why.
         # if change_magnitude.max() < 1e-4:
