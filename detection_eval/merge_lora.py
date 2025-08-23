@@ -48,16 +48,17 @@ def load_model_from_hf(model_name: str, token: Optional[str] = None):
     logger.info(f"Loading model: {model_name}")
     
     # Try to interpret model_name as a PEFT adapter repo; if so, wrap base model directly
-    base_model_name = None
     try:
         peft_cfg = PeftConfig.from_pretrained(model_name, token=token)
         base_model_name = peft_cfg.base_model_name_or_path
         logger.info(f"Detected PEFT adapter repository. Base model: {base_model_name}")
-    except Exception:
-        logger.info("No PEFT adapter config detected; treating as a standard base model repository.")
+    except Exception as e:
+        raise ValueError(
+            f"Expected a PEFT adapter repository at '{model_name}', but no PEFT config was found."
+        ) from e
 
-    # Pick the repo to read config/tokenizer from (base if adapter repo, else the given repo)
-    cfg_source = base_model_name or model_name
+    # Pick the repo to read config/tokenizer from (the base model specified by the adapter)
+    cfg_source = base_model_name
 
     # Load model configuration first
     config = AutoConfig.from_pretrained(
@@ -85,16 +86,13 @@ def load_model_from_hf(model_name: str, token: Optional[str] = None):
         trust_remote_code=True
     )
 
-    # If adapter repo was detected, wrap with PEFT so we can merge later
-    if base_model_name is not None:
-        logger.info("Wrapping base model with PEFT adapter...")
-        model = PeftModel.from_pretrained(
-            base_model,
-            model_name,
-            token=token
-        )
-    else:
-        model = base_model
+    # Wrap with PEFT so we can merge later
+    logger.info("Wrapping base model with PEFT adapter...")
+    model = PeftModel.from_pretrained(
+        base_model,
+        model_name,
+        token=token
+    )
 
     logger.info(f"Successfully loaded model: {model_name}")
     return model, tokenizer, config
