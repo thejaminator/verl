@@ -1,7 +1,5 @@
 from typing import Sequence
 
-import torch
-
 from verl import DataProto
 from verl.single_controller.base.decorator import Dispatch, register
 from verl.utils.device import get_device_id, get_torch_device
@@ -50,7 +48,6 @@ class FeatureVectorRolloutRefWorker(ActorRolloutRefWorker):
         # )
 
         # Support all hardwares
-        device: torch.device = torch.device(get_device_id())
         prompts = prompts.to(get_device_id())
 
         assert self._is_rollout

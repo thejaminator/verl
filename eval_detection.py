@@ -2,7 +2,7 @@ import asyncio
 import time
 
 import plotly.graph_objects as go
-from openai import AsyncOpenAI, BaseModel
+from openai import AsyncOpenAI
 from pydantic import BaseModel
 from slist import Group, Slist
 

@@ -145,7 +145,6 @@ def get_hf_activation_steering_hook(
     vec_BD = vec_BD.to(device, dtype)
     pos_B = pos_B.to(device)
 
-
     def hook_fn(module, _input, output):
         resid_BLD, *rest = output  # Gemma returns (resid, hidden_states, ...)
         B_actual, L, d_model_actual = resid_BLD.shape
@@ -190,16 +189,13 @@ def get_hf_activation_steering_hook(
         resid_BLD[batch_idx_B, pos_B] = steered_BD
         return (resid_BLD, *rest)
 
-
-
     return hook_fn
-
 
 
 def get_rm_pad_log_probs_hook(
     vectors: list[torch.Tensor],  # [B, d_model]
-    positions: list[int], # [B]
-    verl_positions: torch.Tensor, # (1, total tokens).
+    positions: list[int],  # [B]
+    verl_positions: torch.Tensor,  # (1, total tokens).
     steering_coefficient: float,
     device: torch.device,
     dtype: torch.dtype,
@@ -216,7 +212,6 @@ def get_rm_pad_log_probs_hook(
     vec_BD = torch.stack(vectors).to(device, dtype)  # (B, d_model)
     B, d_model = vec_BD.shape
     pos_B = torch.tensor(positions, dtype=torch.long, device=device)  # (B,)
-
 
     def hook_fn(module, _input, output):
         try:
@@ -239,7 +234,7 @@ def get_rm_pad_log_probs_hook(
                 [seq_start_indices[1:], torch.tensor([total_tokens], device=device, dtype=torch.long)],
                 dim=0,
             )  # (B,)
-            max_local_lengths = (seq_end_indices - seq_start_indices)  # (B,)
+            max_local_lengths = seq_end_indices - seq_start_indices  # (B,)
             assert torch.all(pos_B < max_local_lengths), (
                 f"Some positions exceed their sequence lengths: positions={pos_B.tolist()}, lengths={max_local_lengths.tolist()}"
             )
@@ -258,7 +253,6 @@ def get_rm_pad_log_probs_hook(
             normalized_features = torch.nn.functional.normalize(vec_BD, dim=-1)
             steered_BD = normalized_features * norms_B1 * steering_coefficient  # (B, d_model)
 
-
             # ---- in-place replacement via advanced indexing ----
             # residual: (1, total_tokens, d_model)
             residual[0, global_indices, :] = steered_BD  # replace B locations
@@ -266,7 +260,6 @@ def get_rm_pad_log_probs_hook(
         except Exception as e:
             # breakpoint()
             raise e
-                    
 
     return hook_fn
 

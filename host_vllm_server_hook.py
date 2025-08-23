@@ -51,7 +51,7 @@ load_loras = [
     "thejaminator/gemma-introspection-20250821",
     "thejaminator/gemma-retry",
     "thejaminator/gemma-multiepoch",
-    "thejaminator/gemma-posneg-cot"
+    "thejaminator/gemma-posneg-cot",
 ]
 SAE_WIDTH = 131  # Can be 16 or 131. Check what we trained with?
 SAE_FILENAME = f"layer_{LAYER}/width_131k/average_l0_121/params.npz"

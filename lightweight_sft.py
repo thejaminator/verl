@@ -1211,7 +1211,6 @@ def train_model(
     verbose: bool = False,
 ):
     max_grad_norm = 1.0
-    wandb_project = "sae_introspection"
     run_name = f"{cfg.model_name}-layer{cfg.sae_layer}-decoder-shorter-prompt"
 
     model.train()

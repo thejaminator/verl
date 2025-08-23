@@ -246,15 +246,15 @@ class DataParallelPPOActor(BasePPOActor):
                 if self.use_fused_kernels:
                     extra_args["temperature"] = temperature
                     extra_args["return_dict"] = True
-                
+
                 hf_hook = get_rm_pad_log_probs_hook(
-                vectors=hook_args.vectors,
-                positions=hook_args.positions,
-                verl_positions=position_ids_rmpad,
-                steering_coefficient=hook_args.steering_coefficient,
-                device=torch.device(get_device_id()),
-                dtype=torch.bfloat16,
-            )
+                    vectors=hook_args.vectors,
+                    positions=hook_args.positions,
+                    verl_positions=position_ids_rmpad,
+                    steering_coefficient=hook_args.steering_coefficient,
+                    device=torch.device(get_device_id()),
+                    dtype=torch.bfloat16,
+                )
 
                 with add_hook(gemma_layer_module, hf_hook):
                     # input_ids_rmpad (1, total_tokens)
