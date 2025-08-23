@@ -22,6 +22,9 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from peft import PeftModel, PeftConfig
 
+# set HF_HOME as /workspace
+os.environ["HF_HOME"] = "/workspace"
+
 
 def setup_logging():
     """Setup basic logging configuration."""

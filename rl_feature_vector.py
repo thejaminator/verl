@@ -620,7 +620,8 @@ if __name__ == "__main__":
     params = VerlParams(
         # smaller model for testing
         # model_name="google/gemma-2-2b-it",
-        model_name="thejaminator/gemma-introspection-20250821",
+        # model_name="thejaminator/gemma-introspection-20250821", # loras don't get merged automatically
+        
         sae_repo_id="google/gemma-scope-9b-it-res",
         use_feature_vector=True,  # debugging logprobs
         train_path="hard_negatives_100_000_to_100_800.jsonl",
