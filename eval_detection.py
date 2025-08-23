@@ -1060,7 +1060,7 @@ async def main(
 
         sft_data = evaluation_results.map(lambda x: x.to_sae_explained()).filter(lambda x: x.f1 > 0.8)
         # Save the SAE explanations
-        sae_explanations_output_file = f"20aug_sae_sfted_{safe_model_name}.jsonl"
+        sae_explanations_output_file = f"34k_20aug_sae_sfted_{safe_model_name}.jsonl"
         write_jsonl_file_from_basemodel(path=sae_explanations_output_file, basemodels=sft_data)
         print(f"  SAE explanations saved to {sae_explanations_output_file}")
 
@@ -1130,7 +1130,7 @@ if __name__ == "__main__":
     sae_file = "hard_negatives_0_to_82000.jsonl"
     # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
     # Which to use for constructing explanations vs testing detection?
-    saes_to_test = 22_000 # target: 16_000
+    saes_to_test = 34_000 # target: 32000
     sae_start_index = 0
     # sae_start_index = 20_000  # not in train set for the trained model
 

@@ -20,7 +20,7 @@ from huggingface_hub import HfApi, login
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 
-from peft import PeftModel
+from peft import PeftModel, PeftConfig
 
 
 def setup_logging():
@@ -47,32 +47,55 @@ def load_model_from_hf(model_name: str, token: Optional[str] = None):
     logger = setup_logging()
     logger.info(f"Loading model: {model_name}")
     
+    # Try to interpret model_name as a PEFT adapter repo; if so, wrap base model directly
+    base_model_name = None
+    try:
+        peft_cfg = PeftConfig.from_pretrained(model_name, token=token)
+        base_model_name = peft_cfg.base_model_name_or_path
+        logger.info(f"Detected PEFT adapter repository. Base model: {base_model_name}")
+    except Exception:
+        logger.info("No PEFT adapter config detected; treating as a standard base model repository.")
+
+    # Pick the repo to read config/tokenizer from (base if adapter repo, else the given repo)
+    cfg_source = base_model_name or model_name
+
     # Load model configuration first
     config = AutoConfig.from_pretrained(
-        model_name, 
+        cfg_source,
         token=token,
         trust_remote_code=True
     )
-    
+
     # Load tokenizer
     logger.info("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(
-        model_name,
+        cfg_source,
         token=token,
         trust_remote_code=True
     )
-    
+
     # Load model with appropriate dtype
     logger.info("Loading model weights...")
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
+    base_model = AutoModelForCausalLM.from_pretrained(
+        cfg_source,
         config=config,
         token=token,
         torch_dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True
     )
-    
+
+    # If adapter repo was detected, wrap with PEFT so we can merge later
+    if base_model_name is not None:
+        logger.info("Wrapping base model with PEFT adapter...")
+        model = PeftModel.from_pretrained(
+            base_model,
+            model_name,
+            token=token
+        )
+    else:
+        model = base_model
+
     logger.info(f"Successfully loaded model: {model_name}")
     return model, tokenizer, config
 
