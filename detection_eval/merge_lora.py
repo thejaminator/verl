@@ -221,47 +221,42 @@ def main(
     
     # Get token from args or environment
     hf_token = token or os.getenv("HF_TOKEN")
+    # Step 1: Load model from HuggingFace
+    logger.info(f"Step 1: Loading model from {source_model}")
+    model, tokenizer, config = load_model_from_hf(
+        source_model, 
+        token=hf_token
+    )
     
-    try:
-        # Step 1: Load model from HuggingFace
-        logger.info(f"Step 1: Loading model from {source_model}")
-        model, tokenizer, config = load_model_from_hf(
-            source_model, 
-            token=hf_token
-        )
-        
-        # Step 2: Check for and merge LoRA weights if present
-        logger.info("Step 2: Checking for LoRA adapter...")
-        has_lora = check_for_lora_adapter(
-            source_model, 
-            token=hf_token
-        )
-        
-        if has_lora:
-            logger.info("LoRA adapter detected. Merging weights...")
-            model = merge_lora_weights(
-                model, 
-                source_model,
-                token=hf_token
-            )
-        else:
-            raise ValueError("No LoRA adapter found. Please check the model name and try again.")
-        
-        # Step 3: Upload merged model
-        logger.info(f"Step 3: Uploading model to {target_model}")
-        upload_to_hf(
+    # Step 2: Check for and merge LoRA weights if present
+    logger.info("Step 2: Checking for LoRA adapter...")
+    has_lora = check_for_lora_adapter(
+        source_model, 
+        token=hf_token
+    )
+    
+    if has_lora:
+        logger.info("LoRA adapter detected. Merging weights...")
+        model = merge_lora_weights(
             model, 
-            tokenizer, 
-            target_model,
-            token=hf_token,
-            private=private
+            source_model,
+            token=hf_token
         )
-        
-        logger.info("✅ Model merge and upload completed successfully!")
-        
-    except Exception as e:
-        logger.error(f"❌ Error: {e}")
-        raise typer.Exit(1)
+    else:
+        raise ValueError("No LoRA adapter found. Please check the model name and try again.")
+    
+    # Step 3: Upload merged model
+    logger.info(f"Step 3: Uploading model to {target_model}")
+    upload_to_hf(
+        model, 
+        tokenizer, 
+        target_model,
+        token=hf_token,
+        private=private
+    )
+    
+    logger.info("✅ Model merge and upload completed successfully!")
+    
 
 
 if __name__ == "__main__":
