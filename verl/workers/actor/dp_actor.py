@@ -486,7 +486,8 @@ class DataParallelPPOActor(BasePPOActor):
             select_keys.append("ref_log_prob")
 
         has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
-        non_tensor_select_keys = ["multi_modal_inputs"] if has_multi_modal_inputs else []
+        # MAKE SURE SAE INFO DOESN'T GET REMOVED!!!
+        non_tensor_select_keys = ["multi_modal_inputs", "sae"] if has_multi_modal_inputs else ["sae"]
 
         data = data.select(batch_keys=select_keys, non_tensor_batch_keys=non_tensor_select_keys)
 
