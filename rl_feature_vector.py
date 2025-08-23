@@ -240,6 +240,8 @@ def load_and_convert_dataset(
             position_idx,
             feature,
         )
+        del sae_verl_data["activations"] # TODO: add back in
+        del sae_verl_data["hard_negatives"] # TODO: add back in
 
         # Create structured data following the pattern
         structured_data = {
