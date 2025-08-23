@@ -19,12 +19,8 @@ import typer
 from huggingface_hub import HfApi, login
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-try:
-    from peft import PeftModel
-    PEFT_AVAILABLE = True
-except ImportError:
-    PEFT_AVAILABLE = False
-    print("Warning: PEFT not available. LoRA merging will not be supported.")
+
+from peft import PeftModel
 
 
 def setup_logging():
@@ -37,13 +33,12 @@ def setup_logging():
     return logging.getLogger(__name__)
 
 
-def load_model_from_hf(model_name: str, cache_dir: Optional[str] = None, token: Optional[str] = None):
+def load_model_from_hf(model_name: str, token: Optional[str] = None):
     """
     Load model and tokenizer from Hugging Face.
     
     Args:
         model_name: HuggingFace model identifier
-        cache_dir: Optional cache directory for model storage
         token: Optional HuggingFace token for private models
         
     Returns:
@@ -55,7 +50,6 @@ def load_model_from_hf(model_name: str, cache_dir: Optional[str] = None, token: 
     # Load model configuration first
     config = AutoConfig.from_pretrained(
         model_name, 
-        cache_dir=cache_dir,
         token=token,
         trust_remote_code=True
     )
@@ -64,7 +58,6 @@ def load_model_from_hf(model_name: str, cache_dir: Optional[str] = None, token: 
     logger.info("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(
         model_name,
-        cache_dir=cache_dir,
         token=token,
         trust_remote_code=True
     )
@@ -74,7 +67,6 @@ def load_model_from_hf(model_name: str, cache_dir: Optional[str] = None, token: 
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         config=config,
-        cache_dir=cache_dir,
         token=token,
         torch_dtype=torch.bfloat16,
         device_map="auto",
@@ -85,13 +77,12 @@ def load_model_from_hf(model_name: str, cache_dir: Optional[str] = None, token: 
     return model, tokenizer, config
 
 
-def check_for_lora_adapter(model_name: str, cache_dir: Optional[str] = None, token: Optional[str] = None):
+def check_for_lora_adapter(model_name: str, token: Optional[str] = None):
     """
     Check if the model contains LoRA adapter files.
     
     Args:
         model_name: HuggingFace model identifier
-        cache_dir: Optional cache directory
         token: Optional HuggingFace token
         
     Returns:
@@ -110,7 +101,6 @@ def check_for_lora_adapter(model_name: str, cache_dir: Optional[str] = None, tok
                 hf_hub_download(
                     repo_id=model_name,
                     filename=file,
-                    cache_dir=cache_dir,
                     token=token
                 )
                 logger.info(f"Found LoRA adapter file: {file}")
@@ -126,14 +116,13 @@ def check_for_lora_adapter(model_name: str, cache_dir: Optional[str] = None, tok
         return False
 
 
-def merge_lora_weights(model, model_name: str, cache_dir: Optional[str] = None, token: Optional[str] = None):
+def merge_lora_weights(model, model_name: str, token: Optional[str] = None):
     """
     Merge LoRA adapter weights with the base model.
     
     Args:
         model: The base model
         model_name: HuggingFace model identifier 
-        cache_dir: Optional cache directory
         token: Optional HuggingFace token
         
     Returns:
@@ -152,7 +141,6 @@ def merge_lora_weights(model, model_name: str, cache_dir: Optional[str] = None, 
         peft_model = PeftModel.from_pretrained(
             model,
             model_name,
-            cache_dir=cache_dir,
             token=token
         )
         
@@ -217,11 +205,6 @@ def main(
         "--target-model", 
         help="Target model identifier for upload"
     ),
-    cache_dir: Optional[str] = typer.Option(
-        None,
-        "--cache-dir",
-        help="Cache directory for model storage"
-    ),
     token: Optional[str] = typer.Option(
         None,
         "--token",
@@ -231,11 +214,6 @@ def main(
         False,
         "--private",
         help="Make the uploaded repository private"
-    ),
-    skip_merge: bool = typer.Option(
-        False,
-        "--skip-merge",
-        help="Skip LoRA merging even if adapter is present"
     )
 ) -> None:
     """Load, merge, and upload HuggingFace model with LoRA adapters."""
@@ -249,31 +227,25 @@ def main(
         logger.info(f"Step 1: Loading model from {source_model}")
         model, tokenizer, config = load_model_from_hf(
             source_model, 
-            cache_dir=cache_dir,
             token=hf_token
         )
         
         # Step 2: Check for and merge LoRA weights if present
-        if not skip_merge:
-            logger.info("Step 2: Checking for LoRA adapter...")
-            has_lora = check_for_lora_adapter(
+        logger.info("Step 2: Checking for LoRA adapter...")
+        has_lora = check_for_lora_adapter(
+            source_model, 
+            token=hf_token
+        )
+        
+        if has_lora:
+            logger.info("LoRA adapter detected. Merging weights...")
+            model = merge_lora_weights(
+                model, 
                 source_model,
-                cache_dir=cache_dir, 
                 token=hf_token
             )
-            
-            if has_lora:
-                logger.info("LoRA adapter detected. Merging weights...")
-                model = merge_lora_weights(
-                    model, 
-                    source_model,
-                    cache_dir=cache_dir,
-                    token=hf_token
-                )
-            else:
-                logger.info("No LoRA adapter found. Using model as-is.")
         else:
-            logger.info("Step 2: Skipping LoRA merge (--skip-merge flag set)")
+            raise ValueError("No LoRA adapter found. Please check the model name and try again.")
         
         # Step 3: Upload merged model
         logger.info(f"Step 3: Uploading model to {target_model}")
