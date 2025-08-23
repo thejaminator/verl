@@ -129,19 +129,16 @@ def merge_lora_weights(model, model_name: str, token: Optional[str] = None):
         The merged model
     """
     logger = setup_logging()
-    
-    logger.info("Loading LoRA adapter...")
-    
-    # Load the PEFT model with the LoRA adapter
-    peft_model = PeftModel.from_pretrained(
-        model,
-        model_name,
-        token=token
+
+    # Assert: model already has a PEFT adapter attached
+    assert isinstance(model, PeftModel) or getattr(model, "peft_config", None) is not None, (
+        "Expected model with existing PEFT adapter, but none found. "
+        "Load a PEFT-wrapped model before calling merge_lora_weights."
     )
-    
-    logger.info("Merging LoRA weights with base model...")
-    merged_model = peft_model.merge_and_unload()
-    
+
+    logger.info("Merging existing PEFT adapter into base model...")
+    merged_model = model.merge_and_unload()
+
     logger.info("Successfully merged LoRA weights")
     return merged_model
 
