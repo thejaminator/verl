@@ -135,6 +135,63 @@ def push_lora_to_hf(
         print(f"Warning: Failed to copy config.json from original model: {e}")
         print("LoRA adapter uploaded successfully, but without original model config")
 
+    # Create and upload README with base model metadata
+    try:
+        print("Creating README with base model metadata...")
+        
+        readme_content = f"""---
+base_model: {original_model_name}
+library_name: peft
+---
+
+# LoRA Adapter for SAE Introspection
+
+This is a LoRA (Low-Rank Adaptation) adapter trained for SAE (Sparse Autoencoder) introspection tasks.
+
+## Base Model
+- **Base Model**: `{original_model_name}`
+- **Adapter Type**: LoRA
+- **Task**: SAE Feature Introspection
+
+## Usage
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
+
+# Load base model and tokenizer
+base_model = AutoModelForCausalLM.from_pretrained("{original_model_name}")
+tokenizer = AutoTokenizer.from_pretrained("{original_model_name}")
+
+# Load LoRA adapter
+model = PeftModel.from_pretrained(base_model, "{repo_id}")
+```
+
+## Training Details
+This adapter was trained using the lightweight SAE introspection training script to help the model understand and explain SAE features through activation steering.
+"""
+        
+        # Create temporary README file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as tmp_readme:
+            tmp_readme.write(readme_content)
+            tmp_readme.flush()
+            
+            # Upload README to the LoRA repo
+            upload_file(
+                path_or_fileobj=tmp_readme.name,
+                path_in_repo="README.md",
+                repo_id=repo_id,
+                commit_message="Add README with base model metadata",
+            )
+            
+        # Clean up temp file
+        os.unlink(tmp_readme.name)
+        print("Successfully uploaded README with base model metadata")
+        
+    except Exception as e:
+        print(f"Warning: Failed to upload README: {e}")
+        print("LoRA adapter uploaded successfully, but without README")
+
     print(f"Successfully pushed LoRA adapter to: https://huggingface.co/{repo_id}")
 
 
