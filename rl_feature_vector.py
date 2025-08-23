@@ -35,7 +35,7 @@ from pydantic import BaseModel
 class VerlParams(BaseModel):
     # Dataset paths
     train_path: str
-    enable_gradient_checkpointing: bool = False # todo: investigate if this causes hook errors
+    enable_gradient_checkpointing: bool = True
     eval_path: str | None = None
     reward_function_name: str = "compute_score"
     reward_function_file: str = "math_reward_function.py"

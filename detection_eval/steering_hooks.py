@@ -199,6 +199,7 @@ def get_rm_pad_log_probs_hook(
     steering_coefficient: float,
     device: torch.device,
     dtype: torch.dtype,
+    in_place: bool = False, # Avoid doing inplace to allow compat with grad checkpointing
 ) -> Callable:
     """
     When verl has rmpad set to True (default?), the position_ids are (1, total tokens)
@@ -252,9 +253,9 @@ def get_rm_pad_log_probs_hook(
             # normalized_features: (B, d_model)
             normalized_features = torch.nn.functional.normalize(vec_BD, dim=-1)
             steered_BD = normalized_features * norms_B1 * steering_coefficient  # (B, d_model)
-
-            # ---- in-place replacement via advanced indexing ----
             # residual: (1, total_tokens, d_model)
+            if not in_place:
+                residual = residual.clone()
             residual[0, global_indices, :] = steered_BD.to(dtype)  # replace B locations
             return (residual, *rest)
         except Exception as e:

@@ -509,7 +509,7 @@ class DataParallelPPOActor(BasePPOActor):
                 for micro_batch in micro_batches:
                     micro_batch_metrics = {}
                     model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch}
-                    print(f"model_inputs: {model_inputs}")
+                    # print(f"model_inputs: {model_inputs}")
                     response_mask = model_inputs["response_mask"]
                     old_log_prob = model_inputs["old_log_probs"]
                     advantages = model_inputs["advantages"]
