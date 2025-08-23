@@ -35,6 +35,7 @@ from pydantic import BaseModel
 class VerlParams(BaseModel):
     # Dataset paths
     train_path: str
+    enable_gradient_checkpointing: bool = False # todo: investigate if this causes hook errors
     eval_path: str | None = None
     reward_function_name: str = "compute_score"
     reward_function_file: str = "math_reward_function.py"
@@ -420,7 +421,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         # Model configuration
         "actor_rollout_ref.hybrid_engine=true",
         f"actor_rollout_ref.model.path={params.model_name}",
-        "actor_rollout_ref.model.enable_gradient_checkpointing=true",
+        f"actor_rollout_ref.model.enable_gradient_checkpointing={params.enable_gradient_checkpointing}",
         "actor_rollout_ref.model.trust_remote_code=false",
         "actor_rollout_ref.model.use_remove_padding=true",
     ]
@@ -661,6 +662,7 @@ if __name__ == "__main__":
         use_decoder_vectors=True,
         sae_layer=9,
         sae_width=131,
+        enable_gradient_checkpointing=False,
     )
 
     verl_main(params)

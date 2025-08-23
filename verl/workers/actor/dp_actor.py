@@ -158,7 +158,6 @@ class DataParallelPPOActor(BasePPOActor):
             entropy: # (bs, response_len)
             log_probs: # (bs, response_len)
         """
-        print(f"micro_batch keys: {micro_batch.keys()}")
         response_length = micro_batch["responses"].size(-1)
         multi_modal_inputs = {}
         if "multi_modal_inputs" in micro_batch.keys():
@@ -185,8 +184,6 @@ class DataParallelPPOActor(BasePPOActor):
             if "sae" not in micro_batch.keys():
                 breakpoint()
                 raise ValueError(f"sae not in micro_batch: {micro_batch.keys()}")
-            else:
-                print(f"sae in micro_batch: {micro_batch.keys()}")
             # assert "sae" in micro_batch.keys(), f"sae not in micro_batch: {micro_batch.keys()}"
             sae_info: list[SAEVerlDataTypedDict] = micro_batch["sae"]
             hook_args: HookArgs = verl_data_to_hook_args(sae_info, device=torch.device(self.device_name))
