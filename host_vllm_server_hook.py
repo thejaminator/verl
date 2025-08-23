@@ -59,7 +59,9 @@ STEERING_COEFFICIENT = 2.0
 # INFO 08-21 04:36:17 [executor_base.py:118] Maximum concurrency for 2000 tokens per request: 55.05x
 gpu_memory_utilization = 0.7
 # Max batch size that we call .generate with. See vllm logs for the max it can take.
-MAX_PARALLEL_REQUESTS = 50
+# IMPORTANT SHOULD BE >20%? THAN THE MAX PARALLELISM THAT VLLM WILL RUN.
+# OTHERWISE VLLM WILL DO WEIRD THINGS THAT MESSS UP THE HOOK?
+MAX_PARALLEL_REQUESTS = 36
 
 
 class Message(BaseModel):
