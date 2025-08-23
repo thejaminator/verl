@@ -28,6 +28,7 @@ import contextlib
 import datetime
 import gc
 import json
+import tempfile
 
 # All necessary imports are now included above
 from abc import ABC, abstractmethod
@@ -39,7 +40,7 @@ import safetensors.torch
 import torch
 import torch.nn as nn
 import wandb
-from huggingface_hub import hf_hub_download, login, whoami
+from huggingface_hub import hf_hub_download, login, upload_file, whoami
 from peft import LoraConfig, get_peft_model
 from pydantic import BaseModel
 from torch.nn.utils import clip_grad_norm_
@@ -77,6 +78,12 @@ def push_lora_to_hf(
 
     print(f"Pushing LoRA adapter to Hugging Face Hub: {repo_id}")
 
+    # Get the original model name to copy config from
+    original_model_name = model.config._name_or_path
+    if hasattr(model, 'base_model'):
+        # For LoRA models, get the base model name
+        original_model_name = model.base_model.config._name_or_path
+    
     # Push the model (LoRA adapters)
     model.push_to_hub(
         repo_id=repo_id,
@@ -90,6 +97,43 @@ def push_lora_to_hf(
         commit_message=f"Upload tokenizer - {commit_message}",
         private=private,
     )
+
+    # Copy config.json from the original model
+    try:
+        from huggingface_hub import hf_hub_download, upload_file
+        import tempfile
+        
+        print(f"Copying config.json from original model: {original_model_name}")
+        
+        # Download config.json from the original model
+        with tempfile.NamedTemporaryFile(mode='w+b', suffix='.json', delete=False) as tmp_file:
+            config_path = hf_hub_download(
+                repo_id=original_model_name,
+                filename="config.json",
+                cache_dir=None,
+                force_download=False
+            )
+            
+            # Copy the file content
+            with open(config_path, 'rb') as src:
+                tmp_file.write(src.read())
+            tmp_file.flush()
+            
+            # Upload to the LoRA repo
+            upload_file(
+                path_or_fileobj=tmp_file.name,
+                path_in_repo="config.json",
+                repo_id=repo_id,
+                commit_message=f"Copy config.json from {original_model_name}",
+            )
+            
+        # Clean up temp file
+        os.unlink(tmp_file.name)
+        print(f"Successfully copied config.json from {original_model_name}")
+        
+    except Exception as e:
+        print(f"Warning: Failed to copy config.json from original model: {e}")
+        print("LoRA adapter uploaded successfully, but without original model config")
 
     print(f"Successfully pushed LoRA adapter to: https://huggingface.co/{repo_id}")
 

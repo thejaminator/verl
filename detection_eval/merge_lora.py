@@ -130,30 +130,21 @@ def merge_lora_weights(model, model_name: str, token: Optional[str] = None):
     """
     logger = setup_logging()
     
-    if not PEFT_AVAILABLE:
-        logger.error("PEFT library not available. Cannot merge LoRA weights.")
-        return model
-        
-    try:
-        logger.info("Loading LoRA adapter...")
-        
-        # Load the PEFT model with the LoRA adapter
-        peft_model = PeftModel.from_pretrained(
-            model,
-            model_name,
-            token=token
-        )
-        
-        logger.info("Merging LoRA weights with base model...")
-        merged_model = peft_model.merge_and_unload()
-        
-        logger.info("Successfully merged LoRA weights")
-        return merged_model
-        
-    except Exception as e:
-        logger.error(f"Error merging LoRA weights: {e}")
-        logger.info("Proceeding with original model without LoRA merging")
-        return model
+    logger.info("Loading LoRA adapter...")
+    
+    # Load the PEFT model with the LoRA adapter
+    peft_model = PeftModel.from_pretrained(
+        model,
+        model_name,
+        token=token
+    )
+    
+    logger.info("Merging LoRA weights with base model...")
+    merged_model = peft_model.merge_and_unload()
+    
+    logger.info("Successfully merged LoRA weights")
+    return merged_model
+
 
 
 def upload_to_hf(model, tokenizer, target_repo: str, token: Optional[str] = None, private: bool = False):
