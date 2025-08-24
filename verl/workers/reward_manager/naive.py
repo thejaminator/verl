@@ -101,6 +101,9 @@ class NaiveRewardManager:
             ground_truth = data_item.non_tensor_batch["reward_model"]["ground_truth"]
 
             if i == 0:
+                sae_info = data_item.non_tensor_batch["sae"]
+                sae_id = sae_info["sae_id"]
+                print("[sae_id]", sae_id)
                 print("[prompt]" + prompt_str + "\n")
                 print("[response]" + response_str + "\n")
                 # lengths for this prompt
