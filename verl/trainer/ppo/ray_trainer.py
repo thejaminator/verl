@@ -672,6 +672,10 @@ class RayPPOTrainer:
                 non_tensor_batch_keys=non_tensor_batch_keys_to_pop,
             )
 
+            if "sae" in test_batch.non_tensor_batch:
+                # print(f"Passing sae information to non_tensor_batch: {batch.non_tensor_batch['sae']}")
+                test_gen_batch.non_tensor_batch["sae"] = test_batch.non_tensor_batch["sae"]
+
             test_gen_batch.meta_info = {
                 "eos_token_id": self.tokenizer.eos_token_id,
                 "pad_token_id": self.tokenizer.pad_token_id,
