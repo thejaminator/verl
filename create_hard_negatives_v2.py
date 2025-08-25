@@ -738,7 +738,7 @@ def main(
             print(f"   Similar features analyzed: {len(similar_features)}")
             print(f"   Hard negative groups found: {len(hard_negatives_list)}")
 
-            f.write(sae_result.model_dump_json() + "\n")
+            f.write(sae_result.model_dump_json(exclude_none=True) + "\n")
 
     # Write all results to JSONL
     print(f"\n💾 Writing results to {output}...")
