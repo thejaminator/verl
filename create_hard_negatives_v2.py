@@ -534,8 +534,8 @@ def compute_sae_activations_for_sentences(
                     feature_acts = encoded_acts_BLF[batch_idx, :, target_feature_idx]  # [seq_len]
 
                     # Convert to token activations
-                    tokens_str = []
-                    token_activations = []
+                    tokens_str: list[str] = []
+                    token_activations: list[TokenActivationV2] = []
                     token_ids = tokenized["input_ids"][batch_idx]  # [seq_len]
                     attention_mask = tokenized["attention_mask"][batch_idx]  # [seq_len]
 

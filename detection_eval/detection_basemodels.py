@@ -39,7 +39,8 @@ class SAE(BaseModel):
 #### Try out smaller V2 models that are smaller"""
 class TokenActivationV2(BaseModel):
     s: str
-    act: float | None = None # saved without the key to save space
+    act: float
+    pos: int # position in tokens
     
     def to_prompt_str(self) -> str:
         activation = f"{self.act:.2f}" if self.act is not None else "0.00"
@@ -48,14 +49,15 @@ class TokenActivationV2(BaseModel):
 
 class SentenceInfoV2(BaseModel):
     max_act: float
-    tokens: list[TokenActivationV2]
+    tokens: list[str]
+    act_tokens: list[TokenActivationV2]
 
-    def as_activation_vector(self) -> str:
-        activation_vector = Slist(self.tokens).map(lambda x: x.to_prompt_str())
-        return f"{activation_vector}"
+    # def as_activation_vector(self) -> str:
+    #     activation_vector = Slist(self.tokens).map(lambda x: x.to_prompt_str())
+    #     return f"{activation_vector}"
     
-    def as_str(self) -> str:
-        return Slist(self.tokens).map(lambda x: x.s).mk_string("")
+    # def as_str(self) -> str:
+    #     return Slist(self.tokens).map(lambda x: x.s).mk_string("")
 
 
 class SAEActivationsV2(BaseModel):
