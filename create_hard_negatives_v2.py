@@ -534,6 +534,7 @@ def compute_sae_activations_for_sentences(
                     feature_acts = encoded_acts_BLF[batch_idx, :, target_feature_idx]  # [seq_len]
 
                     # Convert to token activations
+                    tokens_str = []
                     token_activations = []
                     token_ids = tokenized["input_ids"][batch_idx]  # [seq_len]
                     attention_mask = tokenized["attention_mask"][batch_idx]  # [seq_len]
@@ -545,19 +546,22 @@ def compute_sae_activations_for_sentences(
                             continue
 
                         token_str = tokenizer.decode([token_id.item()], skip_special_tokens=True)
-                        token_activations.append(
-                            TokenActivationV2(
-                                s=token_str,
-                                act=activation.item() if activation.item() > 0 else None,
+                        tokens_str.append(token_str)
+                        if activation.item() > 0:
+                            token_activations.append(
+                                TokenActivationV2(
+                                    s=token_str,
+                                    act=activation.item(),
+                                    pos=token_idx,
+                                )
                             )
-                        )
 
                     # Create SentenceInfo
                     # Only consider non-padding tokens for max activation
                     valid_activations = feature_acts[attention_mask.bool()]
                     max_activation = valid_activations.max().item() if len(valid_activations) > 0 else 0.0
                     sentence_info = SentenceInfoV2(
-                        max_act=max_activation, tokens=token_activations,
+                        max_act=max_activation, tokens=tokens_str, act_tokens=token_activations,
                     )
 
                     sentence_infos.append(sentence_info)
