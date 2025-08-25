@@ -28,7 +28,6 @@ import contextlib
 import datetime
 import gc
 import json
-import tempfile
 
 # All necessary imports are now included above
 from abc import ABC, abstractmethod
@@ -40,7 +39,7 @@ import safetensors.torch
 import torch
 import torch.nn as nn
 import wandb
-from huggingface_hub import hf_hub_download, login, upload_file, whoami
+from huggingface_hub import hf_hub_download, login, whoami
 from peft import LoraConfig, get_peft_model
 from pydantic import BaseModel
 from torch.nn.utils import clip_grad_norm_
@@ -80,10 +79,10 @@ def push_lora_to_hf(
 
     # Get the original model name to copy config from
     original_model_name = model.config._name_or_path
-    if hasattr(model, 'base_model'):
+    if hasattr(model, "base_model"):
         # For LoRA models, get the base model name
         original_model_name = model.base_model.config._name_or_path
-    
+
     # Push the model (LoRA adapters)
     model.push_to_hub(
         repo_id=repo_id,
@@ -100,25 +99,23 @@ def push_lora_to_hf(
 
     # Copy config.json from the original model
     try:
-        from huggingface_hub import hf_hub_download, upload_file
         import tempfile
-        
+
+        from huggingface_hub import hf_hub_download, upload_file
+
         print(f"Copying config.json from original model: {original_model_name}")
-        
+
         # Download config.json from the original model
-        with tempfile.NamedTemporaryFile(mode='w+b', suffix='.json', delete=False) as tmp_file:
+        with tempfile.NamedTemporaryFile(mode="w+b", suffix=".json", delete=False) as tmp_file:
             config_path = hf_hub_download(
-                repo_id=original_model_name,
-                filename="config.json",
-                cache_dir=None,
-                force_download=False
+                repo_id=original_model_name, filename="config.json", cache_dir=None, force_download=False
             )
-            
+
             # Copy the file content
-            with open(config_path, 'rb') as src:
+            with open(config_path, "rb") as src:
                 tmp_file.write(src.read())
             tmp_file.flush()
-            
+
             # Upload to the LoRA repo
             upload_file(
                 path_or_fileobj=tmp_file.name,
@@ -126,11 +123,11 @@ def push_lora_to_hf(
                 repo_id=repo_id,
                 commit_message=f"Copy config.json from {original_model_name}",
             )
-            
+
         # Clean up temp file
         os.unlink(tmp_file.name)
         print(f"Successfully copied config.json from {original_model_name}")
-        
+
     except Exception as e:
         print(f"Warning: Failed to copy config.json from original model: {e}")
         print("LoRA adapter uploaded successfully, but without original model config")
@@ -138,7 +135,7 @@ def push_lora_to_hf(
     # Create and upload README with base model metadata
     try:
         print("Creating README with base model metadata...")
-        
+
         readme_content = f"""---
 base_model: {original_model_name}
 library_name: peft
@@ -170,12 +167,12 @@ model = PeftModel.from_pretrained(base_model, "{repo_id}")
 ## Training Details
 This adapter was trained using the lightweight SAE introspection training script to help the model understand and explain SAE features through activation steering.
 """
-        
+
         # Create temporary README file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as tmp_readme:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as tmp_readme:
             tmp_readme.write(readme_content)
             tmp_readme.flush()
-            
+
             # Upload README to the LoRA repo
             upload_file(
                 path_or_fileobj=tmp_readme.name,
@@ -183,11 +180,11 @@ This adapter was trained using the lightweight SAE introspection training script
                 repo_id=repo_id,
                 commit_message="Add README with base model metadata",
             )
-            
+
         # Clean up temp file
         os.unlink(tmp_readme.name)
         print("Successfully uploaded README with base model metadata")
-        
+
     except Exception as e:
         print(f"Warning: Failed to upload README: {e}")
         print("LoRA adapter uploaded successfully, but without README")

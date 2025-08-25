@@ -199,7 +199,7 @@ def get_rm_pad_log_probs_hook(
     steering_coefficient: float,
     device: torch.device,
     dtype: torch.dtype,
-    in_place: bool = False, # Avoid doing inplace to allow compat with grad checkpointing
+    in_place: bool = False,  # Avoid doing inplace to allow compat with grad checkpointing
 ) -> Callable:
     """
     When verl has rmpad set to True (default?), the position_ids are (1, total tokens)

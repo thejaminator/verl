@@ -14,6 +14,13 @@ Usage as a module:
 
 Or modify the call at the bottom of this file and run directly:
     python compare_and_verify_hard_negatives.py
+
+TODO:
+1. If activation is 0, don't write the key
+2. no need to dump the full sentence
+3. as_str -> str?
+4. no need token id
+5. round activaiton to 2 d.p
 """
 
 import os

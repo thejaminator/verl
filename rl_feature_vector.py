@@ -240,8 +240,8 @@ def load_and_convert_dataset(
             position_idx,
             feature,
         )
-        del sae_verl_data["activations"] # TODO: add back in
-        del sae_verl_data["hard_negatives"] # TODO: add back in
+        del sae_verl_data["activations"]  # TODO: add back in
+        del sae_verl_data["hard_negatives"]  # TODO: add back in
 
         # Create structured data following the pattern
         structured_data = {
@@ -398,6 +398,8 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
     else:
         load_format = "dummy_dtensor"
 
+    bs = params.micro_batch * params.gradient_accumulation_steps
+
     cmd = [
         sys.executable,
         "-m",
@@ -405,11 +407,10 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         "trainer.log_val_generations=10",
         # Data configuration
         f"data.train_files={train_parquet}",
-        f"data.val_files={eval_parquet if eval_parquet else train_parquet}",
         "data.prompt_key=prompt",
         f"data.max_prompt_length={params.max_prompt_length}",
         f"data.max_response_length={params.max_response_length}",
-        f"data.train_batch_size={params.micro_batch * params.gradient_accumulation_steps}",
+        f"data.train_batch_size={bs}",
         "data.shuffle=true",
         "data.truncation=error",
         "data.filter_overlong_prompts=true",
@@ -427,6 +428,11 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         "actor_rollout_ref.model.trust_remote_code=false",
         "actor_rollout_ref.model.use_remove_padding=true",
     ]
+
+    if eval_parquet:
+        cmd.append(f"data.val_files={eval_parquet}")
+        cmd.append(f"trainer.val_batch_size={bs}")
+
     if params.use_feature_vector:
         # use FeatureVectorRolloutRefWorker if we want to use feature vector steering.
         # Note: don't override actor_rollout_ref.rollout.mode because verl's code depends on it being set to sync in a few places.
@@ -620,8 +626,7 @@ if __name__ == "__main__":
     params = VerlParams(
         # smaller model for testing
         # model_name="google/gemma-2-2b-it",
-        model_name="thejaminator/gemma-introspection-20250821-merged", # loras don't get merged automatically
-
+        model_name="thejaminator/gemma-introspection-20250821-merged",  # loras don't get merged automatically
         # sae_repo_id="google/gemma-scope-9b-it-res",
         use_feature_vector=True,  # debugging logprobs
         train_path="hard_negatives_100_000_to_100_800.jsonl",
