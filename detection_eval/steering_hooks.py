@@ -47,7 +47,7 @@ def get_vllm_steering_hook(
                     f"Position indices mismatch at index {count}, expected {expected_position_indices_L}, got {tokens_L[count : count + prompt_length]}"
                 )
             except AssertionError as e:
-                # breakpoint()
+                breakpoint()
                 raise e
 
             count += prompt_length
