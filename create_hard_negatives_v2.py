@@ -755,12 +755,12 @@ def main(
 if __name__ == "__main__":
     # Example usage - customize the feature_idxs and other parameters as needed
     # target_features = list(range(0, 100_000))
-    target_features = list(range(0,1))
+    target_features = list(range(0,200 + 1))
     main(
         target_features=target_features,
         top_k_similar_features=34,
         batch_size=1024,
         target_sentences=32,
         # output="hard_negatives_0_to_100_000.jsonl",
-        output="hard_negatives_0_to_1.jsonl",
+        output="hard_negatives_0_to_200.jsonl",
     )
