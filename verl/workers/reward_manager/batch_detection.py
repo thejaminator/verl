@@ -91,6 +91,7 @@ class BatchDetectionRewardManager:
         scores = self.verify(data)
         rewards = []
         already_printed = {}
+        table_data = []
 
         for i in range(len(data)):
             length = valid_response_lengths[i].item()
@@ -116,6 +117,13 @@ class BatchDetectionRewardManager:
                 # print("[ground_truth]", ground_truth)
                 print("[score]", scores[i])
                 already_printed[data_source] = already_printed.get(data_source, 0) + 1
+                table_data.append(
+                    {
+                        "sae": data.non_tensor_batch["sae"][i]["sae_id"],
+                        "explanation": response_str,
+                        "score": scores[i],
+                    }
+                )
 
         data.batch["acc"] = torch.tensor(rewards, dtype=torch.float32, device=prompt_ids.device)
 

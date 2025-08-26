@@ -7,7 +7,7 @@ from detection_eval.caller import (
     Caller,
     ChatHistory,
     InferenceConfig,
-    load_pooled_openai_caller,
+    load_openai_caller,
     read_jsonl_file_into_basemodel,
 )
 from detection_eval.detection_basemodels import SAEV2, SAEVerlData, SAEVerlDataTypedDict
@@ -201,7 +201,7 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
     return detection_result
 
 
-caller = load_pooled_openai_caller(cache_path="cache/detection_eval")
+caller = load_openai_caller(cache_path="cache/detection_eval")
 
 
 def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData]) -> list[float]:
