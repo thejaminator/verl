@@ -380,7 +380,7 @@ print(mean_MSE)
 
 # %%
 median_norm = norms_BL.median()
-norm_mask_BL = norms_BL > median_norm * 10
+norm_mask_BL = norms_BL < median_norm * 10
 encoded_BLF_filtered = encoded_BLF * norm_mask_BL[:, :, None]
 decoded_BLD_filtered = sae.decode(encoded_BLF_filtered)
 

@@ -565,6 +565,7 @@ def get_max_activating_prompts(
     context_length: int,
     k: int = 30,
     zero_bos: bool = True,
+    max_act_norm_multiple: float | None = 10.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     For each feature in dim_indices, find the top-k (prompt, position) with the highest
@@ -604,6 +605,13 @@ def get_max_activating_prompts(
         if zero_bos:
             bos_mask_BL = get_bos_pad_eos_mask(inputs_BL["input_ids"], tokenizer)
             activations_BLF *= bos_mask_BL[:, :, None]
+
+        if max_act_norm_multiple is not None:
+            median_norm = activations_BLF.norm(dim=-1).median()
+            norm_mask_BL = (
+                activations_BLF.norm(dim=-1) < median_norm * max_act_norm_multiple
+            )
+            activations_BLF *= norm_mask_BL[:, :, None]
 
         activations_BLF = activations_BLF[:, :, dim_indices]  # shape: [B, L, Fselected]
 
