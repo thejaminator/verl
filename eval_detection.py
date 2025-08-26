@@ -1077,11 +1077,17 @@ if __name__ == "__main__":
     # Define explainer models to test
     explainer_models = Slist(
         [
+            # thejaminator/gemma-25aug-22k
             ModelInfo(
-                model="gpt-5-mini-2025-08-07",
-                display_name="GPT-5-mini<br>(extrospecting<br>sentences)",
-                reasoning_effort="medium",
+                model="thejaminator/gemma-25aug-22k",
+                display_name="Gemma-25aug-22k",
+                use_steering=True,
             ),
+            # ModelInfo(
+            #     model="gpt-5-mini-2025-08-07",
+            #     display_name="GPT-5-mini<br>(extrospecting<br>sentences)",
+            #     reasoning_effort="medium",
+            # ),
             # ModelInfo(
             #     model="meta-llama/llama-3-70b-instruct",
             #     display_name="Llama-3-70b<br>(extrospecting<br>sentences)",
@@ -1171,6 +1177,6 @@ if __name__ == "__main__":
             # config=eight_positive_examples_config,
             # config=two_positive_examples,
             # config=four_positive_examples_config,
-            max_par=100,
+            max_par=60,
         )
     )

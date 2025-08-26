@@ -40,18 +40,19 @@ GENERATE_WAIT_SECONDS = 2
 # SAE Configuration
 SAE_REPO_ID = "google/gemma-scope-9b-it-res"
 load_loras = [
-    "thejaminator/sae-introspection-lora",
-    # 1000 steps
-    "thejaminator/gemma-introspection-20250821-step-250",
-    # 2000 steps
-    "thejaminator/gemma-introspection-20250821-step-500",
-    # 4000 steps
-    "thejaminator/gemma-introspection-20250821-step-1000",
+    # "thejaminator/sae-introspection-lora",
+    # # 1000 steps
+    # "thejaminator/gemma-introspection-20250821-step-250",
+    # # 2000 steps
+    # "thejaminator/gemma-introspection-20250821-step-500",
+    # # 4000 steps
+    # "thejaminator/gemma-introspection-20250821-step-1000",
     # 8000 steps
     "thejaminator/gemma-introspection-20250821",
-    "thejaminator/gemma-retry",
-    "thejaminator/gemma-multiepoch",
-    "thejaminator/gemma-posneg-cot",
+    "thejaminator/gemma-25aug-22k",
+    # "thejaminator/gemma-retry",
+    # "thejaminator/gemma-multiepoch",
+    # "thejaminator/gemma-posneg-cot",
 ]
 SAE_WIDTH = 131  # Can be 16 or 131. Check what we trained with?
 SAE_FILENAME = f"layer_{LAYER}/width_131k/average_l0_121/params.npz"
@@ -102,7 +103,7 @@ class QueuedRequest(BaseModel):
     request: ChatCompletionRequest
     request_id: str
     timestamp: float
-    future: Optional[Any] = None  # asyncio.Future for response
+    future: asyncio.Future  # asyncio.Future for response
 
 
 class VLLMServer:
@@ -148,7 +149,6 @@ class VLLMServer:
 
         # Queue management - separate queue per LoRA model
         self.queues: dict[str, deque[QueuedRequest]] = defaultdict(deque)
-        self.queue_timers: dict[str, float] = {}  # Track when each queue first got a request
         self.processing_lock = asyncio.Lock()  # Ensure synchronous generation
 
     def get_model_key(self, model_name: str) -> str:
@@ -170,20 +170,6 @@ class VLLMServer:
         # Add to queue
         self.queues[model_key].append(queued_request)
 
-        # Set timer if this is the first request in queue
-        if len(self.queues[model_key]) == 1:
-            self.queue_timers[model_key] = time.time()
-
-        # Check if we should process the queue immediately
-        should_process = len(self.queues[model_key]) >= MAX_PARALLEL_REQUESTS
-
-        if should_process:
-            # Process queue in background (non-blocking)
-            asyncio.create_task(self.process_queue(model_key))
-        else:
-            # Schedule timeout processing for first request
-            asyncio.create_task(self._schedule_timeout_processing(model_key))
-
         # Wait for response
         return await future
 
@@ -199,26 +185,27 @@ class VLLMServer:
             for _ in range(num_to_process):
                 batch_requests.append(self.queues[model_key].popleft())
 
-            # Clear timer for this model
-            if model_key in self.queue_timers:
-                del self.queue_timers[model_key]
-
             # Process batch synchronously
             await self._process_batch(batch_requests, model_key)
 
-            should_process = len(self.queues[model_key]) >= MAX_PARALLEL_REQUESTS
-            if should_process:
-                asyncio.create_task(self.process_queue(model_key))
-            else:
-                asyncio.create_task(self._schedule_timeout_processing(model_key))
+    def _should_process_now(self, model_key: str) -> bool:
+        """Return True if this queue should be processed now based on size or wait time."""
+        queue = self.queues[model_key]
+        if not queue:
+            return False
+        if len(queue) >= MAX_PARALLEL_REQUESTS:
+            return True
+        oldest_timestamp = queue[0].timestamp
+        return (time.time() - oldest_timestamp) >= GENERATE_WAIT_SECONDS
 
-    async def _schedule_timeout_processing(self, model_key: str):
-        """Schedule processing after timeout if queue hasn't been processed yet."""
-        await asyncio.sleep(GENERATE_WAIT_SECONDS)
-
-        # Check if queue still has items and hasn't been processed
-        if self.queues[model_key] and model_key in self.queue_timers:
-            await self.process_queue(model_key)
+    async def scheduler_loop(self) -> None:
+        """Background loop that checks queues and processes them when ready."""
+        while True:
+            for model_key in list(self.queues.keys()):
+                if self._should_process_now(model_key):
+                    await self.process_queue(model_key)
+            
+            await asyncio.sleep(0.05)
 
     async def _process_batch(self, batch_requests: list[QueuedRequest], model_key: str):
         """Process a batch of requests as a true batch."""
@@ -461,6 +448,12 @@ async def queue_status(server: VLLMServer = Depends(get_server)):
         "max_parallel_requests": MAX_PARALLEL_REQUESTS,
         "generate_wait_seconds": GENERATE_WAIT_SECONDS,
     }
+
+
+@app.on_event("startup")
+async def start_scheduler():
+    # Launch background scheduler loop
+    asyncio.create_task(server.scheduler_loop())
 
 
 if __name__ == "__main__":
