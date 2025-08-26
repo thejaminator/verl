@@ -161,7 +161,7 @@ detection_config = InferenceConfig(
 )
 
 
-async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Caller) -> float:
+async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Caller) -> DetectionResult | None:
     """
     Custom reward function for math problems using proper verl interface.
 
@@ -177,7 +177,7 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
     explanation_parsed = parse_explanation(explanation)
     if explanation_parsed is None:
         print(f"WARNING: No parsed explanation for {sae.sae_id}. Explanation: {explanation}")
-        return 0.0
+        return None
 
     # turn into SAETrainTestWithExplanation
     sae_train_test = verl_sample_sentences(
@@ -192,18 +192,13 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
     )
     if sae_train_test is None:
         print(f"WARNING: Not enough sentences for SAE train test for {sae.sae_id}")
-        return 0.0
+        return None
 
     # run detection
-    detection_result = await run_detection_with_verl_format(
+    detection_result: DetectionResult | None = await run_detection_with_verl_format(
         sae_train_test, caller, InferenceConfig(model="gpt-4o-mini")
     )
-    if detection_result is None:
-        return 0.0
-
-    total_reward = detection_result.f1_score  ## 0 to 100
-
-    return total_reward
+    return detection_result
 
 
 caller = load_pooled_openai_caller(cache_path="cache/detection_eval")
@@ -219,7 +214,14 @@ def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData]) -> li
     result = loop.run_until_complete(
         explanation_sae.par_map_async(lambda pair: compute_score_single(pair[0], pair[1], caller=caller), tqdm=True)
     )
-    return result
+    first_result = result.filter(lambda x: x is not None).first_option
+    if first_result is not None:
+        # pritn the log
+        last_message = first_result.evaluation_history.messages[-1]
+        print(f"Eval log: {last_message.content}")
+
+    to_rewards = result.map(lambda x: x.f1_score if x is not None else 0.0)
+    return to_rewards
 
 
 def compute_score(
@@ -236,7 +238,7 @@ if __name__ == "__main__":
         .take(2)
     )
     solution_str = [
-        "<explanation>specifications and features of performance vehicles.</explanation>",
-        "<explanation>specifications and features of performance vehicles.</explanation>",
+        "<explanation>Sentences about NHRA-style drag racing events and related specialized drag-racing terminology — e.g., four-wide competitions, Funny Car/Top Fuel races or exhibitions, specific dragstrips/venues (zMAX Dragway, Texas Motorplex, MIR), event promotions/shoots (PINKS All Out), televised or exhibition race details, and fan/competition descriptions. These are event-focused mentions of drag-racing competitions and their jargon, distinguishing them from unrelated sports, entertainment, or general topics.</explanation>",
+        "<explanation>Short noun phrases that characterize a human with an evaluative or descriptive adjective (or adjective-like phrase) immediately before or after a head like 'man' or 'person' — e.g., 'a kind man,' 'a quiet man,' 'a humble man,' 'a smart person,' 'John Parish has been a busy man.' These are attributive character descriptions (including proverb-like patterns 'A smart man...') rather than neutral references to people or more complex syntactic uses (e.g., 'the man who is serving as...' or factual/organizational mentions), which do not activate the feature.</explanation>",
     ]
     print(_compute_score(solution_str, saes))

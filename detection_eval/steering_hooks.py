@@ -80,9 +80,9 @@ def get_vllm_steering_hook(
         normalized_features = torch.nn.functional.normalize(vec_BD, dim=-1)
         steered_BD = normalized_features * norms_B1 * steering_coefficient
 
-        print(f"  Normalized feature norms: {normalized_features.norm(dim=-1).tolist()}")
-        print(f"  Original norms: {norms_B1.squeeze().tolist()}")
-        print(f"  Steered activation norms: {steered_BD.norm(dim=-1).tolist()}")
+        # print(f"  Normalized feature norms: {normalized_features.norm(dim=-1).tolist()}")
+        # print(f"  Original norms: {norms_B1.squeeze().tolist()}")
+        # print(f"  Steered activation norms: {steered_BD.norm(dim=-1).tolist()}")
 
         # Calculate the change magnitude BEFORE applying
         change_magnitude = (steered_BD - orig_BD).norm(dim=-1)
@@ -92,7 +92,7 @@ def get_vllm_steering_hook(
             print("  ⚠️  WARNING: Very small change magnitude!")
 
         # Apply the steering
-        print(f"  Applying steering at positions: {pos_B.tolist()}")
+        # print(f"  Applying steering at positions: {pos_B.tolist()}")
         resid_flat[intervention_indices_L] = steered_BD
 
         return (before_resid_flat, resid_flat, *rest)

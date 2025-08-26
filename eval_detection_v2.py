@@ -557,6 +557,7 @@ async def evaluate_sentence_matching(
         + "\n\n"
         + correctness_msg
     )
+    # print(f"Eval log: {eval_log.messages[-1].content}")
 
     # Use the stored positive and negative examples from the batch
     positive_examples_text = (
@@ -1135,7 +1136,7 @@ if __name__ == "__main__":
     )
 
     # created with create_hard_negative_and_feature_vector.py
-    sae_file = "data/first.jsonl"
+    sae_file = "data/hard_negatives_0_to_200.jsonl"
     # sae_file = "hard_negatives_0_to_82000.jsonl"
     # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
     # Which to use for constructing explanations vs testing detection?
