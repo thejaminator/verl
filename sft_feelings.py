@@ -772,7 +772,7 @@ def construct_train_dataset(
     )
     if not isinstance(input_prompt_ids, list):
         raise TypeError("Expected list of token ids from tokenizer")
-    x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
+    x_token_id = tokenizer.encode(" feel", add_special_tokens=False)[0]
 
     training_data = []
 
@@ -817,7 +817,7 @@ def construct_train_dataset(
         for i in range(assistant_start_idx):
             if full_prompt_ids[i] == x_token_id:
                 positions.append(i)
-        assert len(positions) == 1, "Expected exactly one X token"
+        assert len(positions) == 1, f"Expected exactly one feel token, got {len(positions)}"
 
         training_data_point = TrainingDataPoint(
             input_ids=full_prompt_ids,
