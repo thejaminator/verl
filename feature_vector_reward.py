@@ -226,7 +226,10 @@ if __name__ == "__main__":
     saes = (
         read_jsonl_file_into_basemodel(path="data/hard_negatives_0_to_200.jsonl", basemodel=SAEV2)
         .map(lambda x: SAEVerlData.from_sae(x, feature_vector=[0.0] * 100, position_id=0))
-        .take(1)
+        .take(2)
     )
-    solution_str = ["<explanation>specifications and features of performance vehicles</explanation>"]
+    solution_str = [
+        "<explanation>specifications and features of performance vehicles</explanation>",
+        "<explanation>specifications and features of performance vehicles</explanation>",
+    ]
     print(_compute_score(solution_str, saes))

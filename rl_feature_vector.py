@@ -13,7 +13,7 @@ import os
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from detection_eval.caller import read_jsonl_file_into_basemodel
-from detection_eval.detection_basemodels import SAE, SAEVerlDataTypedDict, make_sae_verl_typed_dict
+from detection_eval.detection_basemodels import SAEV2, SAEVerlDataTypedDict, make_sae_verl_typed_dict
 from detection_eval.steering_hooks import X_PROMPT
 
 # set HF_HOME to /workspace
@@ -217,7 +217,7 @@ def load_and_convert_dataset(
         testing_hack = True
 
     data = []
-    jsonl_items = read_jsonl_file_into_basemodel(dataset_path, SAE)
+    jsonl_items = read_jsonl_file_into_basemodel(dataset_path, SAEV2)
     sae_ids: list[int] = jsonl_items.map(lambda x: x.sae_id)
     if use_decoder_vectors:
         feature_vector_list: list[list[float]] = W_dec[sae_ids].tolist()
@@ -228,7 +228,7 @@ def load_and_convert_dataset(
     for idx, sae in enumerate(jsonl_items):
         sample_dict = sae.model_dump()
         # Load the SAE train info. Should conform to SAE basemodel.
-        sample = SAE.model_validate(sample_dict)
+        sample = SAEV2.model_validate(sample_dict)
         feature = feature_vector_list[idx]
 
         if testing_hack:
@@ -240,9 +240,6 @@ def load_and_convert_dataset(
             position_idx,
             feature,
         )
-        del sae_verl_data["activations"]  # TODO: add back in
-        del sae_verl_data["hard_negatives"]  # TODO: add back in
-
         # Create structured data following the pattern
         structured_data = {
             "data_source": "custom",
@@ -634,12 +631,12 @@ if __name__ == "__main__":
         model_name="thejaminator/gemma-introspection-20250821-merged",  # loras don't get merged automatically
         # sae_repo_id="google/gemma-scope-9b-it-res",
         use_feature_vector=True,  # debugging logprobs
-        train_path="hard_negatives_100_000_to_100_800.jsonl",
-        max_seq_length=1_000,  # debug
-        max_prompt_length=500,  # debug
-        max_response_length=2_000,  # debug
-        num_generations=4,  # Bigger group size since noisy explanations
-        gpu_memory_utilization=0.4,  # some other thing running
+        train_path="data/hard_negatives_0_to_200.jsonl",
+        max_seq_length=1_000,
+        max_prompt_length=500,
+        max_response_length=2_000,
+        num_generations=8,  # Bigger group size since noisy explanations
+        gpu_memory_utilization=0.8,  # some other thing running
         # model_name="google/gemma-2-9b-it",
         # num_generations=16,  # Bigger group size since noisy explanations
         # max_seq_length=8_000,  # More reasonable for math problems
@@ -647,13 +644,12 @@ if __name__ == "__main__":
         # max_response_length=6_000,  # Reduced from 6000, matching reference
         # micro_batch=8,
         # micro_batch_size_per_gpu=8,
-        micro_batch=2,  # for test purposes, usually 4
-        micro_batch_size_per_gpu=2,  # for test purposes, usually 4
+        micro_batch=2,  # number of prompts. In reality, will be micro_batch * num_generations.
+        micro_batch_size_per_gpu=2,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
         warmup_steps=5,
-        gradient_accumulation_steps=1,  # for test purposes, usually 4
+        gradient_accumulation_steps=1,
         learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
-        beta=0.01,  # KL penalty
-        # LoRA configuration for 4B model (following best practices)
+        beta=0.01,
         lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
         lora_alpha=128.0,  # Typically 2x lora_rank
         target_modules="all-linear",  # Apply LoRA to all linear layers
