@@ -18,8 +18,14 @@ from detection_eval.caller import (
 )
 from detection_eval.detection_basemodels import (
     SAEV2 as SAE,
+)
+from detection_eval.detection_basemodels import (
     SAEActivationsV2 as SAEActivations,
+)
+from detection_eval.detection_basemodels import (
     SentenceInfoV2 as SentenceInfo,
+)
+from detection_eval.detection_basemodels import (
     TokenActivationV2 as TokenActivation,
 )
 from detection_eval.steering_hooks import X_PROMPT
@@ -165,9 +171,7 @@ class SAETrainTest(BaseModel):
         # )
         # TODO: Fix upstream code to filtered for non empty sentences.
         shuffled_sentences = (
-            Slist(sae.activations.sentences)
-            .shuffle(str(sae.sae_id))
-            .filter(lambda x: _sentence_text_v2(x) != "")
+            Slist(sae.activations.sentences).shuffle(str(sae.sae_id)).filter(lambda x: _sentence_text_v2(x) != "")
         )
 
         train_sentences = shuffled_sentences[:target_feature_train_sentences]
@@ -564,14 +568,10 @@ async def evaluate_sentence_matching(
 
     # Use the stored positive and negative examples from the batch
     positive_examples_text = (
-        Slist(batch.positive_examples)
-        .map(lambda x: _sentence_text_v2(x))
-        .shuffle(f"{batch.target_sae_id}")
+        Slist(batch.positive_examples).map(lambda x: _sentence_text_v2(x)).shuffle(f"{batch.target_sae_id}")
     )
     negative_examples_text = (
-        Slist(batch.negative_examples)
-        .map(lambda x: _sentence_text_v2(x))
-        .shuffle(f"{batch.target_sae_id}")
+        Slist(batch.negative_examples).map(lambda x: _sentence_text_v2(x)).shuffle(f"{batch.target_sae_id}")
     )
 
     return DetectionResult(

@@ -5,12 +5,12 @@ Mimics OpenAI chat completions API with additional sae_index parameter.
 """
 
 import asyncio
-from dataclasses import dataclass
 import os
 import time
 import uuid
 from collections import defaultdict, deque
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 import torch
@@ -206,7 +206,7 @@ class VLLMServer:
             for model_key in list(self.queues.keys()):
                 if self._should_process_now(model_key):
                     await self.process_queue(model_key)
-            
+
             await asyncio.sleep(0.05)
 
     async def _process_batch(self, batch_requests: list[QueuedRequest], model_key: str):
@@ -292,8 +292,10 @@ class VLLMServer:
                     )
 
             # Process outputs and set results - FIXED VERSION
-            assert len(outputs) == len(batch_requests), f"Output count {len(outputs)} doesn't match request count {len(batch_requests)}"
-            
+            assert len(outputs) == len(batch_requests), (
+                f"Output count {len(outputs)} doesn't match request count {len(batch_requests)}"
+            )
+
             for queued_request, output in zip(batch_requests, outputs, strict=True):
                 try:
                     generated_text = output.outputs[0].text
@@ -303,18 +305,28 @@ class VLLMServer:
                         created=int(time.time()),
                         model=queued_request.request.model or MODEL_NAME,
                         choices=[
-                            Choice(index=0, message=Message(role="assistant", content=generated_text), finish_reason="stop")
+                            Choice(
+                                index=0, message=Message(role="assistant", content=generated_text), finish_reason="stop"
+                            )
                         ],
                         usage=Usage(
-                            prompt_tokens=len(self.tokenizer.encode(prompts[batch_requests.index(queued_request)], add_special_tokens=False)),
+                            prompt_tokens=len(
+                                self.tokenizer.encode(
+                                    prompts[batch_requests.index(queued_request)], add_special_tokens=False
+                                )
+                            ),
                             completion_tokens=len(self.tokenizer.encode(generated_text, add_special_tokens=False)),
-                            total_tokens=len(self.tokenizer.encode(prompts[batch_requests.index(queued_request)], add_special_tokens=False))
+                            total_tokens=len(
+                                self.tokenizer.encode(
+                                    prompts[batch_requests.index(queued_request)], add_special_tokens=False
+                                )
+                            )
                             + len(self.tokenizer.encode(generated_text, add_special_tokens=False)),
                         ),
                     )
 
                     queued_request.future.set_result(response)
-                    
+
                 except Exception as e:
                     # Handle individual request failure
                     print(f"Error processing individual request {queued_request.request_id}: {e}")

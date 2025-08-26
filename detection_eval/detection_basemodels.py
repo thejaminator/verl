@@ -40,8 +40,8 @@ class SAE(BaseModel):
 class TokenActivationV2(BaseModel):
     s: str
     act: float
-    pos: int # position in tokens
-    
+    pos: int  # position in tokens
+
     def to_prompt_str(self) -> str:
         activation = f"{self.act:.2f}" if self.act is not None else "0.00"
         return f"{self.s} ({activation})"
@@ -55,7 +55,7 @@ class SentenceInfoV2(BaseModel):
     # def as_activation_vector(self) -> str:
     #     activation_vector = Slist(self.tokens).map(lambda x: x.to_prompt_str())
     #     return f"{activation_vector}"
-    
+
     # def as_str(self) -> str:
     #     return Slist(self.tokens).map(lambda x: x.s).mk_string("")
 

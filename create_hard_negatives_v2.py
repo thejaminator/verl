@@ -562,7 +562,9 @@ def compute_sae_activations_for_sentences(
                     valid_activations = feature_acts[attention_mask.bool()]
                     max_activation = valid_activations.max().item() if len(valid_activations) > 0 else 0.0
                     sentence_info = SentenceInfoV2(
-                        max_act=max_activation, tokens=tokens_str, act_tokens=token_activations,
+                        max_act=max_activation,
+                        tokens=tokens_str,
+                        act_tokens=token_activations,
                     )
 
                     sentence_infos.append(sentence_info)

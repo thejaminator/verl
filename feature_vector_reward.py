@@ -15,8 +15,8 @@ def parse_explanation(solution_str: str) -> str | None:
     return None
 
 
-def compute_score(
-    data_source, solution_str: str, ground_truth, extra_info: dict[str, Any]
+def compute_score_single(
+    data_source: str, solution_str: str, ground_truth: str | None, extra_info: dict[str, Any]
 ) -> dict[str, str | float | bool | None]:
     """
     Custom reward function for math problems using proper verl interface.
@@ -45,3 +45,14 @@ def compute_score(
         "score": total_reward,
         "parsed_answer": parsed_answer,
     }
+
+
+def compute_score(
+    data_source: list[str], solution_str: list[str], ground_truth: list[str | None], extra_info: list[dict[str, Any]]
+) -> list[dict[str, str | float | bool | None]]:
+    return [
+        compute_score_single(data_source, solution_str, ground_truth, extra_info)
+        for data_source, solution_str, ground_truth, extra_info in zip(
+            data_source, solution_str, ground_truth, extra_info, strict=True
+        )
+    ]
