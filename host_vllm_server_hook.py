@@ -5,6 +5,7 @@ Mimics OpenAI chat completions API with additional sae_index parameter.
 """
 
 import asyncio
+from dataclasses import dataclass
 import os
 import time
 import uuid
@@ -99,7 +100,8 @@ class ChatCompletionResponse(BaseModel):
     usage: Usage
 
 
-class QueuedRequest(BaseModel):
+@dataclass(kw_only=True)
+class QueuedRequest:
     request: ChatCompletionRequest
     request_id: str
     timestamp: float
