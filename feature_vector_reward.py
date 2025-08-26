@@ -215,9 +215,8 @@ def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData]) -> li
 
 
 def compute_score(
-    data_source: list[str], solution_str: list[str], ground_truth: list[str | None], extra_info: list[dict[str, Any]]
+    data_source: list[str], solution_str: list[str], sae: list[SAEVerlDataTypedDict], extra_info: list[dict[str, Any]]
 ) -> list[float]:
-    sae: list[SAEVerlDataTypedDict] = [i["sae"] for i in extra_info]
     parsed_sae: list[SAEVerlData] = [SAEVerlData.from_typed_dict(i) for i in sae]
     return _compute_score(solution_str, parsed_sae)
 

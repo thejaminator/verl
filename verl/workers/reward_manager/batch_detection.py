@@ -37,7 +37,6 @@ class BatchDetectionRewardManager:
     def __init__(self, tokenizer, num_examine, compute_score, reward_fn_key="data_source", **reward_kwargs):
         self.tokenizer = tokenizer
         self.num_examine = num_examine
-        self.compute_score = compute_score_feature_vector  # hardcode for ease
         self.reward_fn_key = reward_fn_key
         self.reward_kwargs = reward_kwargs
 
@@ -56,20 +55,20 @@ class BatchDetectionRewardManager:
             response_str = self.tokenizer.decode(valid_response_ids, skip_special_tokens=True)
             responses_str.append(response_str)
 
-        ground_truths = [item.non_tensor_batch["reward_model"].get("ground_truth", None) for item in data]
         data_sources = data.non_tensor_batch[self.reward_fn_key]
         extras = data.non_tensor_batch.get("extra_info", {})
-        # put "sae" key in extra_info for reward function to use
-        for item in data:
-            extras[item.non_tensor_batch["sae"]] = item.non_tensor_batch["sae"]
+        sae = data.non_tensor_batch["sae"]
 
-        scores = self.compute_score(
-            data_sources=data_sources,
-            solution_strs=responses_str,
-            ground_truths=ground_truths,
-            extra_infos=extras,
-            **self.reward_kwargs,
-        )
+        try:
+            scores = compute_score_feature_vector(
+                data_source=data_sources,
+                solution_str=responses_str,
+                sae=sae,
+                extra_info=extras,
+            )
+        except Exception as e:
+            breakpoint()
+            raise e
 
         return scores
 
