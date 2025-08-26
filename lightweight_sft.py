@@ -20,7 +20,7 @@ Before running:
 
 import os
 
-from detection_eval.steering_hooks import X_PROMPT, add_hook, get_hf_activation_steering_hook
+from detection_eval.steering_hooks import X_PROMPT, add_hook, add_vector_to_all_positions
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
@@ -904,7 +904,7 @@ def train_features_batch(
     batch_positions = training_batch.positions
 
     # 3. Create and apply the activation steering hook
-    hook_fn = get_hf_activation_steering_hook(
+    hook_fn = add_vector_to_all_positions(
         vectors=batch_steering_vectors,
         positions=batch_positions,
         steering_coefficient=cfg.steering_coefficient,
@@ -938,7 +938,7 @@ def eval_features_batch(
     batch_positions = eval_batch.positions
 
     # 3. Create and apply the activation steering hook
-    hook_fn = get_hf_activation_steering_hook(
+    hook_fn = add_vector_to_all_positions(
         vectors=batch_steering_vectors,
         positions=batch_positions,
         steering_coefficient=cfg.steering_coefficient,

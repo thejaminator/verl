@@ -29,7 +29,7 @@ from detection_eval.detection_basemodels import SAEVerlDataTypedDict
 from detection_eval.steering_hooks import (
     HookArgs,
     add_hook,
-    get_hf_activation_steering_hook,
+    add_vector_to_all_positions,
     get_rm_pad_log_probs_hook,
     verl_data_to_hook_args,
 )
@@ -345,7 +345,7 @@ class DataParallelPPOActor(BasePPOActor):
 
                 # I think you can just use this hook?
                 # input_ids (bs, seqlen)
-                hf_hook = get_hf_activation_steering_hook(
+                hf_hook = add_vector_to_all_positions(
                     vectors=hook_args.vectors,
                     positions=hook_args.positions,
                     steering_coefficient=hook_args.steering_coefficient,

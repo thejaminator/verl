@@ -20,7 +20,7 @@ Before running:
 
 import os
 
-from detection_eval.steering_hooks import X_PROMPT, add_hook, add_vector_to_all_positions
+from detection_eval.steering_hooks import X_PROMPT, add_hook
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 

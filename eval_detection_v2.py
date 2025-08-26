@@ -18,6 +18,7 @@ from detection_eval.caller import (
 )
 from detection_eval.detection_basemodels import (
     SAEV2,
+    SAEVerlData,
     SentenceInfoV2,
 )
 from detection_eval.detection_basemodels import (
@@ -642,6 +643,34 @@ async def run_evaluation_for_explanations(
     evaluation_results = _evaluation_results.flatten_option()
 
     return evaluation_results
+
+
+def run_detection(
+    explanation: str, sae: SAEVerlData, caller: Caller, detection_config: InferenceConfig
+) -> DetectionResult:
+    """
+    Run detection for SAEVerlData.
+    Note: since we use feature steering, I didn't implement train vs test sentences
+    IF we want to compare directly, should implement same split in future.
+    """
+    # turn into class MixedSentencesBatch(BaseModel):
+    shuffled_sentences = Slist(sae.positive_examples + sae.negative_examples).shuffle(f"{sae.sae_id}")
+    positive_ids = [id(s) for s in sae.positive_examples]
+    assert len(positive_ids) == len(sae.positive_examples)
+    target_indices = set()
+    for i, sentence in enumerate(shuffled_sentences):
+        if id(sentence) in positive_ids:
+            target_indices.add(i)
+    assert len(target_indices) == len(sae.positive_examples)
+
+    mixed_sentences_batch = MixedSentencesBatch(
+        target_sae_id=sae.sae_id,
+        target_explanation=explanation,
+        positive_examples=sae.positive_examples,
+        negative_examples=sae.negative_examples,
+        shuffled_sentences=shuffled_sentences,
+        target_indices=target_indices,
+    )
 
 
 async def run_best_of_n_evaluation_for_explanations(
