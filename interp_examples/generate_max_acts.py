@@ -666,8 +666,16 @@ if __name__ == "__main__":
     context_length = 32
     max_acts_batch_size = 128
 
-    model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
+    model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", torch_dtype=dtype)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    # Qwen doesn't have a bos token, so we'll use the eos token
+    if tokenizer.bos_token is None:
+        tokenizer.bos_token = tokenizer.eos_token
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
     sae = load_dictionary_learning_batch_topk_sae(
         repo_id=sae_repo_id,
         filename=sae_filename,
