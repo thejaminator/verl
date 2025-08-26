@@ -210,13 +210,10 @@ class VLLMServer:
             await asyncio.sleep(0.05)
 
     async def _process_batch(self, batch_requests: list[QueuedRequest], model_key: str):
-        """Process a batch of requests as a true batch."""
-
         try:
             # Prepare batch data
             prompts = []
             token_lists = []
-            request_ids = []
             steering_vectors = []
             steering_positions = []
 
@@ -245,7 +242,6 @@ class VLLMServer:
                 tokenized = self.tokenizer(formatted_prompt, return_tensors="pt", add_special_tokens=False)
                 token_list = tokenized["input_ids"].tolist()[0]
                 token_lists.append(token_list)
-                request_ids.append(queued_request.request_id)
 
                 # Handle steering
                 if request.sae_index is not None:
@@ -295,31 +291,41 @@ class VLLMServer:
                         use_tqdm=False,
                     )
 
-            # Process outputs and set results
-            for i, (queued_request, output) in enumerate(zip(batch_requests, outputs, strict=True)):
-                generated_text = output.outputs[0].text
+            # Process outputs and set results - FIXED VERSION
+            assert len(outputs) == len(batch_requests), f"Output count {len(outputs)} doesn't match request count {len(batch_requests)}"
+            
+            for queued_request, output in zip(batch_requests, outputs, strict=True):
+                try:
+                    generated_text = output.outputs[0].text
 
-                response = ChatCompletionResponse(
-                    id=request_ids[i],
-                    created=int(time.time()),
-                    model=queued_request.request.model or MODEL_NAME,
-                    choices=[
-                        Choice(index=0, message=Message(role="assistant", content=generated_text), finish_reason="stop")
-                    ],
-                    usage=Usage(
-                        prompt_tokens=len(token_lists[i]),
-                        completion_tokens=len(self.tokenizer.encode(generated_text, add_special_tokens=False)),
-                        total_tokens=len(token_lists[i])
-                        + len(self.tokenizer.encode(generated_text, add_special_tokens=False)),
-                    ),
-                )
+                    response = ChatCompletionResponse(
+                        id=queued_request.request_id,  # ← Fixed: use the actual request_id
+                        created=int(time.time()),
+                        model=queued_request.request.model or MODEL_NAME,
+                        choices=[
+                            Choice(index=0, message=Message(role="assistant", content=generated_text), finish_reason="stop")
+                        ],
+                        usage=Usage(
+                            prompt_tokens=len(self.tokenizer.encode(prompts[batch_requests.index(queued_request)], add_special_tokens=False)),
+                            completion_tokens=len(self.tokenizer.encode(generated_text, add_special_tokens=False)),
+                            total_tokens=len(self.tokenizer.encode(prompts[batch_requests.index(queued_request)], add_special_tokens=False))
+                            + len(self.tokenizer.encode(generated_text, add_special_tokens=False)),
+                        ),
+                    )
 
-                queued_request.future.set_result(response)
+                    queued_request.future.set_result(response)
+                    
+                except Exception as e:
+                    # Handle individual request failure
+                    print(f"Error processing individual request {queued_request.request_id}: {e}")
+                    queued_request.future.set_exception(e)
 
         except Exception as e:
-            # If batch processing fails, set exception for all requests
+            # If batch processing fails completely, set exception for all unprocessed requests
+            print(f"Batch processing failed: {e}")
             for queued_request in batch_requests:
-                queued_request.future.set_exception(e)
+                if not queued_request.future.done():
+                    queued_request.future.set_exception(e)
 
 
 # SAE Classes

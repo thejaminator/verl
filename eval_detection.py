@@ -1136,7 +1136,7 @@ if __name__ == "__main__":
     # sae_file = "hard_negatives_0_to_82000.jsonl"
     # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
     # Which to use for constructing explanations vs testing detection?
-    saes_to_test = 100  # target: 32000
+    saes_to_test = 200  # target: 32000
     sae_start_index = 0
     # sae_start_index = 20_000  # not in train set for the trained model
 
