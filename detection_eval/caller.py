@@ -1083,6 +1083,14 @@ def load_multi_caller(cache_path: str) -> MultiClientCaller:
     return MultiClientCaller(clients)
 
 
+def load_pooled_openai_caller(cache_path: str) -> PooledCaller:
+    load_dotenv()
+    openai_api_keys = os.getenv("OPENAI_API_KEYS", "").split(",")
+    print(f"Using {len(openai_api_keys)} OpenAI API Keys")
+    openai_clients = [OpenAICaller(api_key=key, cache_path=cache_path) for key in openai_api_keys]
+    return PooledCaller(openai_clients)
+
+
 async def example_main():
     # Caches to the folder "cache"
     caller = load_openai_caller("cache")

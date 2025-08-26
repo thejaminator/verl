@@ -7,7 +7,7 @@ from detection_eval.caller import (
     Caller,
     ChatHistory,
     InferenceConfig,
-    load_multi_caller,
+    load_pooled_openai_caller,
     read_jsonl_file_into_basemodel,
 )
 from detection_eval.detection_basemodels import SAEV2, SAEVerlData, SAEVerlDataTypedDict
@@ -153,6 +153,14 @@ async def run_detection_with_verl_format(
     )
 
 
+detection_config = InferenceConfig(
+    model="gpt-5-mini-2025-08-07",
+    max_completion_tokens=10_000,
+    reasoning_effort="medium",
+    temperature=1.0,
+)
+
+
 async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Caller) -> float:
     """
     Custom reward function for math problems using proper verl interface.
@@ -176,11 +184,11 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
         sae=sae,
         explanation=explanation_parsed,
         test_target_activating_sentences=Slist([4, 5, 6, 7, 8]),
-        train_activating_sentences=4,
-        train_hard_negative_sentences=4,
-        train_hard_negative_saes=4,
-        test_hard_negative_sentences=4,
-        test_hard_negative_saes=4,
+        train_activating_sentences=16,
+        train_hard_negative_sentences=2,
+        train_hard_negative_saes=16,
+        test_hard_negative_sentences=6,
+        test_hard_negative_saes=16,
     )
     if sae_train_test is None:
         print(f"WARNING: Not enough sentences for SAE train test for {sae.sae_id}")
@@ -198,7 +206,7 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
     return total_reward
 
 
-caller = load_multi_caller(cache_path="cache/detection_eval")
+caller = load_pooled_openai_caller(cache_path="cache/detection_eval")
 
 
 def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData]) -> list[float]:
@@ -228,7 +236,7 @@ if __name__ == "__main__":
         .take(2)
     )
     solution_str = [
-        "<explanation>specifications and features of performance vehicles</explanation>",
-        "<explanation>specifications and features of performance vehicles</explanation>",
+        "<explanation>specifications and features of performance vehicles.</explanation>",
+        "<explanation>specifications and features of performance vehicles.</explanation>",
     ]
     print(_compute_score(solution_str, saes))
