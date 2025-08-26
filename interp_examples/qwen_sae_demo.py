@@ -1,9 +1,11 @@
 # %%
+import json
 from abc import ABC, abstractmethod
 
 import einops
 import torch
 import torch.nn as nn
+from huggingface_hub import hf_hub_download
 
 
 class BaseSAE(nn.Module, ABC):
@@ -79,14 +81,6 @@ class BaseSAE(nn.Module, ABC):
             max_diff = torch.max(torch.abs(norms - torch.ones_like(norms)))
             print(f"Decoder weights are not normalized. Max diff: {max_diff.item()}")
             return False
-
-
-# %%
-import json
-
-import torch
-import torch.nn as nn
-from huggingface_hub import hf_hub_download
 
 
 class BatchTopKSAE(BaseSAE):
