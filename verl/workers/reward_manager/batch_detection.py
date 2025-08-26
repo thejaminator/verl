@@ -16,6 +16,7 @@ from collections import defaultdict
 
 import torch
 
+from feature_vector_reward import compute_score as compute_score_feature_vector
 from verl import DataProto
 from verl.workers.reward_manager import register
 
@@ -36,7 +37,7 @@ class BatchDetectionRewardManager:
     def __init__(self, tokenizer, num_examine, compute_score, reward_fn_key="data_source", **reward_kwargs):
         self.tokenizer = tokenizer
         self.num_examine = num_examine
-        self.compute_score = compute_score
+        self.compute_score = compute_score_feature_vector  # hardcode for ease
         self.reward_fn_key = reward_fn_key
         self.reward_kwargs = reward_kwargs
 

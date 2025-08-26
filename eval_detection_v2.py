@@ -18,7 +18,6 @@ from detection_eval.caller import (
 )
 from detection_eval.detection_basemodels import (
     SAEV2,
-    SAEVerlData,
     SentenceInfoV2,
 )
 from detection_eval.detection_basemodels import (
@@ -239,12 +238,6 @@ class SAETrainTest(BaseModel):
                     SAEActivationsV2(sae_id=hard_negative_sae.sae_id, sentences=test_hard_neg_sentences)
                 )
 
-        total_train_hard_negatives = len(train_hard_negatives) * train_hard_negative_sentences
-        total_test_hard_negatives = len(test_hard_negatives) * test_hard_negative_sentences
-        # print(
-        #     f"SAE {sae.sae_id} has {total_train_hard_negatives} train hard negatives and {total_test_hard_negatives} test hard negatives"
-        # )
-
         return SAETrainTest(
             sae_id=sae.sae_id,
             # feature_vector=sae.feature_vector,
@@ -318,7 +311,7 @@ class MixedSentencesBatch(BaseModel):
 
     target_sae_id: int
     explanation_history: ChatHistory
-    target_explanation: str
+    explanation: str
     positive_examples: list[SentenceInfoV2]  # Sentences that should activate the feature
     negative_examples: list[SentenceInfoV2]  # Sentences that should NOT activate the feature
     target_indices: set[int]  # Indices in shuffled_sentences that correspond to positive examples
@@ -466,7 +459,7 @@ def create_detection_batch(
     return MixedSentencesBatch(
         target_sae_id=target_sae.sae_id,
         explanation_history=target_sae.explanation,
-        target_explanation=explanation_text,
+        explanation=explanation_text,
         positive_examples=positive_examples,
         negative_examples=negative_examples,
         shuffled_sentences=shuffled_sentences,
@@ -481,7 +474,7 @@ def create_evaluation_prompt(batch: MixedSentencesBatch) -> str:
     prompt = f"""I will provide you with an SAE feature explanation and {num_sentences} sentences. Your task is to identify which sentence numbers correspond to the given explanation.
 
 <explanation>
-{batch.target_explanation}
+{batch.explanation}
 </explanation>
 
 <sentences>
@@ -552,7 +545,7 @@ async def evaluate_sentence_matching(
         retrieved_sentences_with_emojis.append(f"{emoji} {sentence_text}")
 
     retrieved_sentences_str = "\n".join(retrieved_sentences_with_emojis)
-    given_explanation_str = batch.target_explanation
+    given_explanation_str = batch.explanation
 
     eval_log = eval_log.add_assistant(content=correctness_msg).add_user(
         content="SAE ID: "
@@ -580,7 +573,7 @@ async def evaluate_sentence_matching(
         precision=precision,
         recall=recall,
         f1_score=f1_score,
-        explanation_used=batch.target_explanation,
+        explanation_used=batch.explanation,
         evaluation_response=str(answer),
         explanation_history=batch.explanation_history,
         evaluation_history=eval_log,
@@ -643,34 +636,6 @@ async def run_evaluation_for_explanations(
     evaluation_results = _evaluation_results.flatten_option()
 
     return evaluation_results
-
-
-def run_detection(
-    explanation: str, sae: SAEVerlData, caller: Caller, detection_config: InferenceConfig
-) -> DetectionResult:
-    """
-    Run detection for SAEVerlData.
-    Note: since we use feature steering, I didn't implement train vs test sentences
-    IF we want to compare directly, should implement same split in future.
-    """
-    # turn into class MixedSentencesBatch(BaseModel):
-    shuffled_sentences = Slist(sae.positive_examples + sae.negative_examples).shuffle(f"{sae.sae_id}")
-    positive_ids = [id(s) for s in sae.positive_examples]
-    assert len(positive_ids) == len(sae.positive_examples)
-    target_indices = set()
-    for i, sentence in enumerate(shuffled_sentences):
-        if id(sentence) in positive_ids:
-            target_indices.add(i)
-    assert len(target_indices) == len(sae.positive_examples)
-
-    mixed_sentences_batch = MixedSentencesBatch(
-        target_sae_id=sae.sae_id,
-        target_explanation=explanation,
-        positive_examples=sae.positive_examples,
-        negative_examples=sae.negative_examples,
-        shuffled_sentences=shuffled_sentences,
-        target_indices=target_indices,
-    )
 
 
 async def run_best_of_n_evaluation_for_explanations(

@@ -71,9 +71,7 @@ class BaseSAE(nn.Module, ABC):
         norms = torch.norm(self.W_dec, dim=1).to(dtype=self.dtype, device=self.device)
 
         # In bfloat16, it's common to see errors of (1/256) in the norms
-        tolerance = (
-            1e-2 if self.W_dec.dtype in [torch.bfloat16, torch.float16] else 1e-5
-        )
+        tolerance = 1e-2 if self.W_dec.dtype in [torch.bfloat16, torch.float16] else 1e-5
 
         if torch.allclose(norms, torch.ones_like(norms), atol=tolerance):
             return True
@@ -103,24 +101,16 @@ class BatchTopKSAE(BaseSAE):
 
         # BatchTopK requires a global threshold to use during inference. Must be positive.
         self.use_threshold = True
-        self.register_buffer(
-            "threshold", torch.tensor(-1.0, dtype=dtype, device=device)
-        )
+        self.register_buffer("threshold", torch.tensor(-1.0, dtype=dtype, device=device))
 
     def encode(self, x: torch.Tensor):
         """Note: x can be either shape (B, F) or (B, L, F)"""
-        post_relu_feat_acts_BF = nn.functional.relu(
-            (x - self.b_dec) @ self.W_enc + self.b_enc
-        )
+        post_relu_feat_acts_BF = nn.functional.relu((x - self.b_dec) @ self.W_enc + self.b_enc)
 
         if self.use_threshold:
             if self.threshold < 0:
-                raise ValueError(
-                    "Threshold is not set. The threshold must be set to use it during inference"
-                )
-            encoded_acts_BF = post_relu_feat_acts_BF * (
-                post_relu_feat_acts_BF > self.threshold
-            )
+                raise ValueError("Threshold is not set. The threshold must be set to use it during inference")
+            encoded_acts_BF = post_relu_feat_acts_BF * (post_relu_feat_acts_BF > self.threshold)
             return encoded_acts_BF
 
         post_topk = post_relu_feat_acts_BF.topk(self.k, sorted=False, dim=-1)
@@ -129,9 +119,7 @@ class BatchTopKSAE(BaseSAE):
         top_indices_BK = post_topk.indices
 
         buffer_BF = torch.zeros_like(post_relu_feat_acts_BF)
-        encoded_acts_BF = buffer_BF.scatter_(
-            dim=-1, index=top_indices_BK, src=tops_acts_BK
-        )
+        encoded_acts_BF = buffer_BF.scatter_(dim=-1, index=top_indices_BK, src=tops_acts_BK)
         return encoded_acts_BF
 
     def decode(self, feature_acts: torch.Tensor):
@@ -233,14 +221,8 @@ def load_dictionary_learning_batch_topk_sae(
 
 
 # %%
-from typing import Optional
 
-import datasets
-import einops
-import pandas as pd
 import torch
-from datasets import load_dataset
-from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # %%
@@ -279,9 +261,7 @@ sae = load_dictionary_learning_batch_topk_sae(
 )
 
 # %%
-model = AutoModelForCausalLM.from_pretrained(
-    model_name, torch_dtype=dtype, device_map="auto"
-)
+model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype, device_map="auto")
 
 submodules = [get_submodule(model, chosen_layers[0])]
 
@@ -339,9 +319,7 @@ test_input = tokenizer.apply_chat_template(
     tokenize=False,
 )
 
-tokens = tokenizer(test_input, return_tensors="pt", add_special_tokens=True).to(device)[
-    "input_ids"
-]
+tokens = tokenizer(test_input, return_tensors="pt", add_special_tokens=True).to(device)["input_ids"]
 # tokens = tokenizer(test_input, return_tensors="pt", add_special_tokens=False).to(device)
 
 print(tokens.shape)

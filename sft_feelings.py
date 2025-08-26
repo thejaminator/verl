@@ -20,7 +20,7 @@ Before running:
 
 import os
 
-from detection_eval.steering_hooks import X_PROMPT, add_hook
+from detection_eval.steering_hooks import add_hook
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
@@ -48,6 +48,7 @@ from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.tokenization_utils import PreTrainedTokenizer
+
 
 # ==============================================================================
 # 1. HUGGING FACE SETUP
@@ -116,8 +117,6 @@ def add_vector_to_all_positions(
         return (resid_BLD, *rest)
 
     return hook_fn
-
-
 
 
 def push_lora_to_hf(
@@ -697,7 +696,9 @@ def build_training_prompt(positive_negative_examples: bool) -> str:
     #     question = """Can you explain to me the concept of what 'X' means? Give positive and negative examples of what the concept would activate on. Format your final answer with <explanation>."""
     # else:
     #     question = X_PROMPT
-    question = """Tell me how you currently feel. Output your answer in the following format: <explanation>...</explanation>"""
+    question = (
+        """Tell me how you currently feel. Output your answer in the following format: <explanation>...</explanation>"""
+    )
     return question
 
 
@@ -874,7 +875,6 @@ def construct_eval_dataset(
             feature_vector = sae.W_dec[target_feature_idx].clone()
         else:
             feature_vector = sae.W_enc[:, target_feature_idx].clone()
-
 
         positions = []
         for i in range(orig_prompt_length):

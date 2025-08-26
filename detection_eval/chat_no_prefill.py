@@ -185,11 +185,18 @@ def main(model: str, url: str):
             shortcut="ArrowLeft",
         )
 
+    # Find the last user message index for retry
+    last_user_index = None
+    for idx in range(len(st.session_state.messages) - 1, -1, -1):
+        if st.session_state.messages[idx]["role"] == "user":
+            last_user_index = idx
+            break
+
     shortcut_button(
-        "Retry first message (shortcut: right arrow)",
+        "Retry last user message (shortcut: right arrow)",
         on_click=retry_from_message,
-        args=(0,),
-        help="Regenerate response from the first message",
+        args=((last_user_index if last_user_index is not None else 0),),
+        help="Regenerate response from the last user message",
         shortcut="ArrowRight",
     )
 
@@ -270,7 +277,7 @@ if __name__ == "__main__":
     # Get model ID input
     model_id = st.text_input(
         "Model ID",
-        value="thejaminator/gemma-introspection-20250821",
+        value="thejaminator/gemma-feelings-step-4000",
         help="The ID of the model to use for chat",
     )
 
