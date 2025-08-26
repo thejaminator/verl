@@ -16,7 +16,12 @@ from detection_eval.caller import (
     read_jsonl_file_into_basemodel,
     write_jsonl_file_from_basemodel,
 )
-from detection_eval.detection_basemodels import SAE, SAEActivations, SentenceInfo, TokenActivation
+from detection_eval.detection_basemodels import (
+    SAEV2 as SAE,
+    SAEActivationsV2 as SAEActivations,
+    SentenceInfoV2 as SentenceInfo,
+    TokenActivationV2 as TokenActivation,
+)
 from detection_eval.steering_hooks import X_PROMPT
 
 
@@ -86,26 +91,32 @@ def read_sae_file_to_str(sae_file: str, limit: int | None = None, start_index: i
         return output
 
 
+def _sentence_text_v2(sentence: SentenceInfo) -> str:
+    """Reconstruct full sentence text from V2 tokens."""
+    return "".join(sentence.tokens)
+
+
+def _activation_vector_str_v2(sentence: SentenceInfo) -> str:
+    """Format activation-bearing tokens for prompt display (V2)."""
+    activation_vector = Slist(sentence.act_tokens).map(lambda x: x.to_prompt_str())
+    return f"{activation_vector}"
+
+
 def sentence_to_prompt_with_vector(sentence: SentenceInfo) -> str:
     """
-    Convert a SentenceInfo object to a prompt.
+    Convert a SentenceInfoV2 object to a prompt.
     """
-    try:
-        max_activation_token: TokenActivation | None = Slist(sentence.tokens).max_by(lambda x: x.activation)
-    except Exception as e:
-        print(f"Error converting sentence to prompt: {e}")
-        print(sentence)
-        raise e
-    assert max_activation_token is not None, f"No max activation token for sentence: {sentence}"
-    activation_vector = sentence.as_activation_vector()
+    max_activation_token: TokenActivation | None = Slist(sentence.act_tokens).max_by(lambda x: x.act)
+    activation_vector = _activation_vector_str_v2(sentence)
+    max_act_token_str = max_activation_token.s if max_activation_token is not None else "None"
     return f"""<full_sentence>
-{sentence.as_str}
+{_sentence_text_v2(sentence)}
 </full_sentence>
 <max_activation>
-{sentence.max_activation}
+{sentence.max_act}
 </max_activation>
 <max_activation_token>
-{max_activation_token.as_str}
+{max_act_token_str}
 </max_activation_token>
 <activation_vector>
 {activation_vector}
@@ -114,16 +125,10 @@ def sentence_to_prompt_with_vector(sentence: SentenceInfo) -> str:
 
 def sentence_to_prompt_text_only(sentence: SentenceInfo) -> str:
     """
-    Convert a SentenceInfo object to a prompt.
+    Convert a SentenceInfoV2 object to a prompt containing only the full sentence text.
     """
-    try:
-        max_activation_token: TokenActivation | None = Slist(sentence.tokens).max_by(lambda x: x.activation)
-    except Exception as e:
-        print(f"Error converting sentence to prompt: {e}")
-        print(sentence)
-        raise e
     return f"""<full_sentence>
-{sentence.as_str}
+{_sentence_text_v2(sentence)}
 </full_sentence>"""
 
 
@@ -159,7 +164,11 @@ class SAETrainTest(BaseModel):
         #     f"Not enough sentences to split into train and test: {len(sae.activations.sentences)}, needed {needed_sentences}"
         # )
         # TODO: Fix upstream code to filtered for non empty sentences.
-        shuffled_sentences = Slist(sae.activations.sentences).shuffle(str(sae.sae_id)).filter(lambda x: x.as_str != "")
+        shuffled_sentences = (
+            Slist(sae.activations.sentences)
+            .shuffle(str(sae.sae_id))
+            .filter(lambda x: _sentence_text_v2(x) != "")
+        )
 
         train_sentences = shuffled_sentences[:target_feature_train_sentences]
         test_sentences = shuffled_sentences[
@@ -204,7 +213,7 @@ class SAETrainTest(BaseModel):
             shuffled_hard_neg_sentences = Slist(hard_negative_sae.sentences).shuffle(str(hard_negative_sae.sae_id))
             # For some reason, the hard negative sentences are sometimes empty.
             filtered_hard_neg_sentences: Slist[SentenceInfo] = shuffled_hard_neg_sentences.filter(
-                lambda x: x.as_str != ""
+                lambda x: _sentence_text_v2(x) != ""
             )
             train_hard_neg_sentences = filtered_hard_neg_sentences[:train_hard_negative_sentences]
 
@@ -554,8 +563,16 @@ async def evaluate_sentence_matching(
     )
 
     # Use the stored positive and negative examples from the batch
-    positive_examples_text = Slist(batch.positive_examples).map(lambda x: x.as_str).shuffle(f"{batch.target_sae_id}")
-    negative_examples_text = Slist(batch.negative_examples).map(lambda x: x.as_str).shuffle(f"{batch.target_sae_id}")
+    positive_examples_text = (
+        Slist(batch.positive_examples)
+        .map(lambda x: _sentence_text_v2(x))
+        .shuffle(f"{batch.target_sae_id}")
+    )
+    negative_examples_text = (
+        Slist(batch.negative_examples)
+        .map(lambda x: _sentence_text_v2(x))
+        .shuffle(f"{batch.target_sae_id}")
+    )
 
     return DetectionResult(
         target_sae_id=batch.target_sae_id,
@@ -1101,11 +1118,11 @@ if __name__ == "__main__":
             #     display_name="SFT 4000",
             #     use_steering=True,
             # ),
-            ModelInfo(
-                model="thejaminator/gemma-introspection-20250821",
-                display_name="SFT 8000",
-                use_steering=True,
-            ),
+            # ModelInfo(
+            #     model="thejaminator/gemma-introspection-20250821",
+            #     display_name="SFT 8000",
+            #     use_steering=True,
+            # ),
             # ModelInfo(
             #     model="thejaminator/gemma-multiepoch",
             #     display_name="SFT 8000 * 4 epochs",
@@ -1126,7 +1143,7 @@ if __name__ == "__main__":
     )
 
     # created with create_hard_negative_and_feature_vector.py
-    sae_file = "data/hard_negatives_100_000_to_100_200.jsonl"
+    sae_file = "data/first.jsonl"
     # sae_file = "hard_negatives_0_to_82000.jsonl"
     # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
     # Which to use for constructing explanations vs testing detection?

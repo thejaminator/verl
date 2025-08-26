@@ -548,10 +548,11 @@ def compute_sae_activations_for_sentences(
                         token_str = tokenizer.decode([token_id.item()], skip_special_tokens=True)
                         tokens_str.append(token_str)
                         if activation.item() > 0:
+                            rounded_to_1dp = round(activation.item(), 1)
                             token_activations.append(
                                 TokenActivationV2(
                                     s=token_str,
-                                    act=activation.item(),
+                                    act=rounded_to_1dp,
                                     pos=token_idx,
                                 )
                             )
@@ -755,12 +756,11 @@ def main(
 if __name__ == "__main__":
     # Example usage - customize the feature_idxs and other parameters as needed
     # target_features = list(range(0, 100_000))
-    target_features = list(range(0,200 + 1))
+    to_100k = list(range(0, 100_000))
     main(
-        target_features=target_features,
+        target_features=to_100k,
         top_k_similar_features=34,
         batch_size=1024,
         target_sentences=32,
-        # output="hard_negatives_0_to_100_000.jsonl",
-        output="hard_negatives_0_to_200.jsonl",
+        output="hard_negatives_0_to_100_000_v2.jsonl",
     )
