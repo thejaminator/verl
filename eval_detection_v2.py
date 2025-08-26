@@ -17,16 +17,14 @@ from detection_eval.caller import (
     write_jsonl_file_from_basemodel,
 )
 from detection_eval.detection_basemodels import (
-    SAEV2 as SAE,
+    SAEV2,
+    SentenceInfoV2,
 )
 from detection_eval.detection_basemodels import (
-    SAEActivationsV2 as SAEActivations,
+    SAEActivationsV2 as SAEActivationsV2,
 )
 from detection_eval.detection_basemodels import (
-    SentenceInfoV2 as SentenceInfo,
-)
-from detection_eval.detection_basemodels import (
-    TokenActivationV2 as TokenActivation,
+    TokenActivationV2 as TokenActivationV2,
 )
 from detection_eval.steering_hooks import X_PROMPT
 
@@ -46,7 +44,7 @@ class SAEExplained(BaseModel):
     f1: float
 
 
-def read_sae_file(sae_file: str, limit: int | None = None, start_index: int = 0) -> Slist[SAE]:
+def read_sae_file(sae_file: str, limit: int | None = None, start_index: int = 0) -> Slist[SAEV2]:
     """Read SAEs from a JSONL file with optional start index and limit.
 
     Args:
@@ -55,11 +53,11 @@ def read_sae_file(sae_file: str, limit: int | None = None, start_index: int = 0)
         start_index: Number of initial lines to skip before reading.
     """
     if limit is None and start_index == 0:
-        return read_jsonl_file_into_basemodel(sae_file, SAE)
+        return read_jsonl_file_into_basemodel(sae_file, SAEV2)
     else:
         start_time = time.time()
         with open(sae_file) as f:
-            output = Slist[SAE]()
+            output = Slist[SAEV2]()
             # Skip the first `start_index` lines
             for _ in range(start_index):
                 try:
@@ -68,7 +66,7 @@ def read_sae_file(sae_file: str, limit: int | None = None, start_index: int = 0)
                     return output
             # Read up to `limit` items (or rest of file if limit is None)
             for line in f:
-                sae = SAE.model_validate_json(line)
+                sae = SAEV2.model_validate_json(line)
                 output.append(sae)
                 if limit is not None and len(output) >= limit:
                     break
@@ -97,22 +95,22 @@ def read_sae_file_to_str(sae_file: str, limit: int | None = None, start_index: i
         return output
 
 
-def _sentence_text_v2(sentence: SentenceInfo) -> str:
+def _sentence_text_v2(sentence: SentenceInfoV2) -> str:
     """Reconstruct full sentence text from V2 tokens."""
     return "".join(sentence.tokens)
 
 
-def _activation_vector_str_v2(sentence: SentenceInfo) -> str:
+def _activation_vector_str_v2(sentence: SentenceInfoV2) -> str:
     """Format activation-bearing tokens for prompt display (V2)."""
     activation_vector = Slist(sentence.act_tokens).map(lambda x: x.to_prompt_str())
     return f"{activation_vector}"
 
 
-def sentence_to_prompt_with_vector(sentence: SentenceInfo) -> str:
+def sentence_to_prompt_with_vector(sentence: SentenceInfoV2) -> str:
     """
     Convert a SentenceInfoV2 object to a prompt.
     """
-    max_activation_token: TokenActivation | None = Slist(sentence.act_tokens).max_by(lambda x: x.act)
+    max_activation_token: TokenActivationV2 | None = Slist(sentence.act_tokens).max_by(lambda x: x.act)
     activation_vector = _activation_vector_str_v2(sentence)
     max_act_token_str = max_activation_token.s if max_activation_token is not None else "None"
     return f"""<full_sentence>
@@ -129,7 +127,7 @@ def sentence_to_prompt_with_vector(sentence: SentenceInfo) -> str:
 </activation_vector>"""
 
 
-def sentence_to_prompt_text_only(sentence: SentenceInfo) -> str:
+def sentence_to_prompt_text_only(sentence: SentenceInfoV2) -> str:
     """
     Convert a SentenceInfoV2 object to a prompt containing only the full sentence text.
     """
@@ -141,17 +139,17 @@ def sentence_to_prompt_text_only(sentence: SentenceInfo) -> str:
 class SAETrainTest(BaseModel):
     sae_id: int
     # feature_vector: Sequence[float]
-    train_activations: SAEActivations
-    test_activations: SAEActivations
+    train_activations: SAEActivationsV2
+    test_activations: SAEActivationsV2
     # Sentences that do not activate for the given sae_id. But come from a similar SAE
     # Here the sae_id correspond to different similar SAEs.
     # The activations are the activations w.r.t this SAE. And should be low.
-    train_hard_negatives: list[SAEActivations]
-    test_hard_negatives: list[SAEActivations]
+    train_hard_negatives: list[SAEActivationsV2]
+    test_hard_negatives: list[SAEActivationsV2]
 
     @staticmethod
     def from_sae(
-        sae: SAE,
+        sae: SAEV2,
         target_feature_test_sentences: int,
         target_feature_train_sentences: int,
         train_hard_negative_saes: int,
@@ -179,12 +177,12 @@ class SAETrainTest(BaseModel):
             target_feature_train_sentences : target_feature_train_sentences + target_feature_test_sentences
         ]
 
-        train_activations = SAEActivations(sae_id=sae.sae_id, sentences=train_sentences)
-        test_activations = SAEActivations(sae_id=sae.sae_id, sentences=test_sentences)
+        train_activations = SAEActivationsV2(sae_id=sae.sae_id, sentences=train_sentences)
+        test_activations = SAEActivationsV2(sae_id=sae.sae_id, sentences=test_sentences)
 
         # Split hard negatives into train/test
-        train_hard_negatives: list[SAEActivations] = []
-        test_hard_negatives: list[SAEActivations] = []
+        train_hard_negatives: list[SAEActivationsV2] = []
+        test_hard_negatives: list[SAEActivationsV2] = []
 
         # Filter hard negatives that have enough sentences for training
         valid_train_hard_negatives = [
@@ -216,14 +214,14 @@ class SAETrainTest(BaseModel):
         for hard_negative_sae in selected_train_hard_negatives:
             shuffled_hard_neg_sentences = Slist(hard_negative_sae.sentences).shuffle(str(hard_negative_sae.sae_id))
             # For some reason, the hard negative sentences are sometimes empty.
-            filtered_hard_neg_sentences: Slist[SentenceInfo] = shuffled_hard_neg_sentences.filter(
+            filtered_hard_neg_sentences: Slist[SentenceInfoV2] = shuffled_hard_neg_sentences.filter(
                 lambda x: _sentence_text_v2(x) != ""
             )
             train_hard_neg_sentences = filtered_hard_neg_sentences[:train_hard_negative_sentences]
 
             if train_hard_neg_sentences:
                 train_hard_negatives.append(
-                    SAEActivations(sae_id=hard_negative_sae.sae_id, sentences=train_hard_neg_sentences)
+                    SAEActivationsV2(sae_id=hard_negative_sae.sae_id, sentences=train_hard_neg_sentences)
                 )
 
         # Sample test hard negatives (can be different from training ones)
@@ -237,7 +235,7 @@ class SAETrainTest(BaseModel):
 
             if test_hard_neg_sentences:
                 test_hard_negatives.append(
-                    SAEActivations(sae_id=hard_negative_sae.sae_id, sentences=test_hard_neg_sentences)
+                    SAEActivationsV2(sae_id=hard_negative_sae.sae_id, sentences=test_hard_neg_sentences)
                 )
 
         total_train_hard_negatives = len(train_hard_negatives) * train_hard_negative_sentences
@@ -296,10 +294,10 @@ Please write your final answer of what this SAE feature explains in the followin
 class SAETrainTestWithExplanation(BaseModel):
     sae_id: int
     # feature_vector: Sequence[float]
-    train_activations: SAEActivations
-    test_activations: SAEActivations
-    train_hard_negatives: list[SAEActivations]
-    test_hard_negatives: list[SAEActivations]
+    train_activations: SAEActivationsV2
+    test_activations: SAEActivationsV2
+    train_hard_negatives: list[SAEActivationsV2]
+    test_hard_negatives: list[SAEActivationsV2]
     explanation: ChatHistory
     explainer_model: str
 
@@ -320,10 +318,10 @@ class MixedSentencesBatch(BaseModel):
     target_sae_id: int
     explanation_history: ChatHistory
     target_explanation: str
-    positive_examples: list[SentenceInfo]  # Sentences that should activate the feature
-    negative_examples: list[SentenceInfo]  # Sentences that should NOT activate the feature
-    shuffled_sentences: list[SentenceInfo]  # All sentences shuffled for evaluation
+    positive_examples: list[SentenceInfoV2]  # Sentences that should activate the feature
+    negative_examples: list[SentenceInfoV2]  # Sentences that should NOT activate the feature
     target_indices: set[int]  # Indices in shuffled_sentences that correspond to positive examples
+    shuffled_sentences: list[SentenceInfoV2]  # All sentences shuffled for evaluation
 
 
 class DetectionResult(BaseModel):
@@ -934,7 +932,7 @@ async def main(
     saes = read_sae_file(sae_file, limit=target_saes_to_test, start_index=config.sae_start_index)
     print(f"Loaded {len(saes)} SAE entries starting at index {config.sae_start_index}")
 
-    def create_sae_train_test(sae: SAE) -> SAETrainTest | None:
+    def create_sae_train_test(sae: SAEV2) -> SAETrainTest | None:
         # Sample deterministically from test_target_activating_sentences using SAE ID as seed
         sampled_test_sentences = target_feature_test_sentences.sample(n=1, seed=str(sae.sae_id))[0]
         return SAETrainTest.from_sae(

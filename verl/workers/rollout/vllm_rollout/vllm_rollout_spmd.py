@@ -51,9 +51,9 @@ from vllm.lora.request import LoRARequest
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.worker.worker_base import WorkerWrapperBase
 
+from detection_eval.detection_basemodels import SAEVerlDataTypedDict
 from detection_eval.steering_hooks import (
     HookArgs,
-    SAEVerlDataTypedDict,
     add_hook,
     get_vllm_steering_hook,
     verl_data_to_hook_args,

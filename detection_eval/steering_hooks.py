@@ -1,11 +1,10 @@
 import contextlib
 from dataclasses import dataclass
-from typing import Any, Callable, TypedDict
+from typing import Callable
 
 import torch
-from openai import BaseModel
 
-from detection_eval.detection_basemodels import SAE, SAEActivations
+from detection_eval.detection_basemodels import SAEVerlDataTypedDict
 
 X_PROMPT = "Can you explain to me what 'X' means? Format your final answer with <explanation>"
 
@@ -263,34 +262,6 @@ def get_rm_pad_log_probs_hook(
             raise e
 
     return hook_fn
-
-
-class SAEVerlData(BaseModel):
-    sae_id: int
-    feature_vector: list[float]  # This needs to be added in by the script
-    position_id: int  # This needs to be added in by the script
-    activations: SAEActivations  # For reward model.
-    hard_negatives: list[SAEActivations]  # For reward model.
-
-
-class SAEVerlDataTypedDict(TypedDict):
-    """Typed dict that gets passed around in verl"""
-
-    sae_id: int
-    feature_vector: list[float]  # This needs to be added in by the script
-    position_id: int  # This needs to be added in by the script
-    activations: dict[str, Any]
-    hard_negatives: list[dict[str, Any]]
-
-
-def make_sae_verl_typed_dict(sae_data: SAE, position_id: int, feature_vector: list[float]) -> SAEVerlDataTypedDict:
-    return {
-        "sae_id": sae_data.sae_id,
-        "position_id": position_id,
-        "feature_vector": feature_vector,
-        "activations": sae_data.activations.model_dump(),
-        "hard_negatives": [m.model_dump() for m in sae_data.hard_negatives],
-    }
 
 
 @dataclass(kw_only=True)

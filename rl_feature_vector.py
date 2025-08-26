@@ -13,8 +13,8 @@ import os
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from detection_eval.caller import read_jsonl_file_into_basemodel
-from detection_eval.detection_basemodels import SAE
-from detection_eval.steering_hooks import X_PROMPT, make_sae_verl_typed_dict
+from detection_eval.detection_basemodels import SAE, SAEVerlDataTypedDict, make_sae_verl_typed_dict
+from detection_eval.steering_hooks import X_PROMPT
 
 # set HF_HOME to /workspace
 os.environ["HF_HOME"] = "/workspace"
@@ -235,7 +235,7 @@ def load_and_convert_dataset(
             # ndim 2304 for 2b
             feature = feature[:2304]
 
-        sae_verl_data = make_sae_verl_typed_dict(
+        sae_verl_data: SAEVerlDataTypedDict = make_sae_verl_typed_dict(
             sample,
             position_idx,
             feature,
@@ -503,7 +503,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             "actor_rollout_ref.rollout.val_kwargs.temperature=1.0",
             "actor_rollout_ref.rollout.val_kwargs.n=1",
             "actor_rollout_ref.rollout.val_kwargs.do_sample=true",
-            "reward_model.reward_manager=batch",
+            "reward_model.reward_manager=batch_detection",
             # Reward model configuration
             "reward_model.enable=false",
             # Custom reward function

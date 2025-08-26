@@ -1,3 +1,6 @@
+from typing import Any, TypedDict
+
+from openai import BaseModel
 from pydantic import BaseModel
 from slist import Slist
 
@@ -72,3 +75,35 @@ class SAEV2(BaseModel):
     # Here the sae_id correspond to different similar SAEs.
     # The activations are the activations w.r.t this SAE. And should be low.
     hard_negatives: list[SAEActivationsV2]
+
+
+class SAEVerlDataTypedDict(TypedDict):
+    """Typed dict that gets passed around in verl"""
+
+    sae_id: int
+    feature_vector: list[float]  # This needs to be added in by the script
+    position_id: int  # This needs to be added in by the script
+    positive_examples: dict[str, Any]
+    negative_examples: list[dict[str, Any]]
+
+
+class SAEVerlData(BaseModel):
+    sae_id: int
+    feature_vector: list[float]  # This needs to be added in by the script
+    position_id: int  # This needs to be added in by the script
+    positive_examples: list[SentenceInfoV2]  # Sentences that should activate the feature
+    negative_examples: list[SentenceInfoV2]  # Sentences that should NOT activate the feature
+
+    @classmethod
+    def from_typed_dict(cls, sae_data: "SAEVerlDataTypedDict") -> "SAEVerlData":
+        return SAEVerlData.model_validate(sae_data)
+
+
+def make_sae_verl_typed_dict(sae_data: SAE, position_id: int, feature_vector: list[float]) -> SAEVerlDataTypedDict:
+    return {
+        "sae_id": sae_data.sae_id,
+        "position_id": position_id,
+        "feature_vector": feature_vector,
+        "positive_examples": sae_data.activations.model_dump(),
+        "negative_examples": [m.model_dump() for m in sae_data.hard_negatives],
+    }

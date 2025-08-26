@@ -20,10 +20,10 @@ from verl import DataProto
 from verl.workers.reward_manager import register
 
 
-@register("batch")
-class BatchRewardManager:
+@register("batch_detection")
+class BatchDetectionRewardManager:
     """
-    A batch reward manager that computes rewards for a batch of data.
+    Modfied batch reward manager that computes detection scores.
 
     Args:
         tokenizer (Tokenizer): The tokenizer to use for decoding the responses.
@@ -57,7 +57,10 @@ class BatchRewardManager:
 
         ground_truths = [item.non_tensor_batch["reward_model"].get("ground_truth", None) for item in data]
         data_sources = data.non_tensor_batch[self.reward_fn_key]
-        extras = data.non_tensor_batch.get("extra_info", [None] * len(data))
+        extras = data.non_tensor_batch.get("extra_info", {})
+        # put "sae" key in extra_info for reward function to use
+        for item in data:
+            extras[item.non_tensor_batch["sae"]] = item.non_tensor_batch["sae"]
 
         scores = self.compute_score(
             data_sources=data_sources,

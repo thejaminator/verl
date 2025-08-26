@@ -25,9 +25,9 @@ from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 import verl.utils.torch_functional as verl_F
+from detection_eval.detection_basemodels import SAEVerlDataTypedDict
 from detection_eval.steering_hooks import (
     HookArgs,
-    SAEVerlDataTypedDict,
     add_hook,
     get_hf_activation_steering_hook,
     get_rm_pad_log_probs_hook,
