@@ -3,9 +3,15 @@ from typing import Any
 
 from slist import Slist
 
-from detection_eval.caller import Caller, ChatHistory, InferenceConfig, OpenAICaller, load_multi_caller
+from detection_eval.caller import (
+    Caller,
+    ChatHistory,
+    InferenceConfig,
+    load_multi_caller,
+    read_jsonl_file_into_basemodel,
+)
+from detection_eval.detection_basemodels import SAEV2, SAEVerlData, SAEVerlDataTypedDict
 from detection_eval.detection_basemodels import SAEActivationsV2 as SAEActivationsV2
-from detection_eval.detection_basemodels import SAEVerlData, SAEVerlDataTypedDict
 from eval_detection import evaluate_sentence_matching
 from eval_detection_v2 import (
     DetectionResult,
@@ -45,11 +51,11 @@ def verl_sample_sentences(
     This mirrors the splitting logic used elsewhere, but consumes already-
     materialized positive and negative examples from `SAEVerlData`.
     """
-    if len(sae.positive_examples.sentences) == 0:
+    if len(sae.activations.sentences) == 0:
         return None
 
     # Extract positive examples for training and testing
-    all_positive_sentences = Slist(sae.positive_examples.sentences)
+    all_positive_sentences = Slist(sae.activations.sentences)
 
     # Determine how many test sentences to take (sample deterministically by SAE ID)
     sampled_test_sentences: int = test_target_activating_sentences.sample(n=1, seed=str(sae.sae_id))[0]
@@ -79,10 +85,8 @@ def verl_sample_sentences(
     test_hard_negatives: list[SAEActivationsV2] = []
 
     # Filter negative SAEs with sufficient sentences
-    valid_train_hard_negs = [
-        neg for neg in sae.negative_examples if len(neg.sentences) >= train_hard_negative_sentences
-    ]
-    valid_test_hard_negs = [neg for neg in sae.negative_examples if len(neg.sentences) >= test_hard_negative_sentences]
+    valid_train_hard_negs = [neg for neg in sae.hard_negatives if len(neg.sentences) >= train_hard_negative_sentences]
+    valid_test_hard_negs = [neg for neg in sae.hard_negatives if len(neg.sentences) >= test_hard_negative_sentences]
 
     if train_hard_negative_saes > 0 and len(valid_train_hard_negs) < train_hard_negative_saes:
         print(
@@ -149,7 +153,7 @@ async def run_detection_with_verl_format(
     )
 
 
-async def compute_score_single(explanation: str, sae: SAEVerlData, caller: OpenAICaller) -> float:
+async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Caller) -> float:
     """
     Custom reward function for math problems using proper verl interface.
 
@@ -197,13 +201,32 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: OpenA
 caller = load_multi_caller(cache_path="cache/detection_eval")
 
 
+def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData]) -> list[float]:
+    assert len(solution_str) == len(parsed_sae)
+    explanation_sae = Slist(solution_str).zip(parsed_sae)
+
+    # Run the async function in a synchronous context
+    loop = asyncio.get_event_loop()
+    print(f"Computing f1 rewards for {len(explanation_sae)} examples")
+    result = loop.run_until_complete(
+        explanation_sae.par_map_async(lambda pair: compute_score_single(pair[0], pair[1], caller=caller), tqdm=True)
+    )
+    return result
+
+
 def compute_score(
     data_source: list[str], solution_str: list[str], ground_truth: list[str | None], extra_info: list[dict[str, Any]]
 ) -> list[float]:
     sae: list[SAEVerlDataTypedDict] = [i["sae"] for i in extra_info]
     parsed_sae: list[SAEVerlData] = [SAEVerlData.from_typed_dict(i) for i in sae]
-    assert len(data_source) == len(solution_str) == len(ground_truth) == len(extra_info)
-    explanation_sae = Slist(solution_str).zip(parsed_sae)
+    return _compute_score(solution_str, parsed_sae)
 
-    result = await explanation_sae.par_map_async(compute_score_single, caller=caller, tqdm=True)
-    asyncio.run(result)
+
+if __name__ == "__main__":
+    saes = (
+        read_jsonl_file_into_basemodel(path="data/hard_negatives_0_to_200.jsonl", basemodel=SAEV2)
+        .map(lambda x: SAEVerlData.from_sae(x, feature_vector=[0.0] * 100, position_id=0))
+        .take(1)
+    )
+    solution_str = ["<explanation>specifications and features of performance vehicles</explanation>"]
+    print(_compute_score(solution_str, saes))
