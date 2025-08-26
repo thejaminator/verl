@@ -1652,5 +1652,5 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
 
 
 if __name__ == "__main__":
-    explanations_file = "32k_24aug_sae_sfted_gpt-5-mini-2025-08-07"
+    explanations_file = "data/32k_24aug_sae_sfted_gpt-5-mini-2025-08-07.jsonl"
     main(explanations_file, hf_repo_name="gemma-feelings")
