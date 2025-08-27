@@ -225,11 +225,11 @@ def load_and_convert_dataset(
         # uhhh not sure if this is correct? but using decoder vectors for now.
         feature_vector_list: list[list[float]] = W_enc[:, sae_ids].T.tolist()
 
-    for idx, sae in enumerate(jsonl_items):
+    for sae in jsonl_items:
         sample_dict = sae.model_dump()
         # Load the SAE train info. Should conform to SAE basemodel.
         sample = SAEV2.model_validate(sample_dict)
-        feature = feature_vector_list[idx]
+        feature = feature_vector_list[sae.sae_id]
 
         if testing_hack:
             # ndim 2304 for 2b
@@ -251,7 +251,7 @@ def load_and_convert_dataset(
             },
             "extra_info": {
                 "prompt": X_PROMPT,
-                "index": idx,
+                "index": sae.sae_id,
             },
             # sae information which we modify the PPO trainer to pass during rollouts
             "sae": sae_verl_data,
@@ -644,8 +644,8 @@ if __name__ == "__main__":
         # max_response_length=6_000,  # Reduced from 6000, matching reference
         # micro_batch=8,
         # micro_batch_size_per_gpu=8,
-        micro_batch=2,  # number of prompts. In reality, will be micro_batch * num_generations.
-        micro_batch_size_per_gpu=2,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
+        micro_batch=1,  # number of prompts. In reality, will be micro_batch * num_generations.
+        micro_batch_size_per_gpu=1,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
         warmup_steps=5,
         gradient_accumulation_steps=1,
         learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
