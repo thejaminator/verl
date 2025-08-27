@@ -675,7 +675,7 @@ if __name__ == "__main__":
         max_seq_length=1_000,
         max_prompt_length=500,
         max_response_length=2_000,
-        num_generations=8,  # Bigger group size since noisy explanations
+        num_generations=16,  # Bigger group size since noisy explanations
         gpu_memory_utilization=0.8,  # some other thing running
         # model_name="google/gemma-2-9b-it",
         # num_generations=16,  # Bigger group size since noisy explanations
@@ -684,8 +684,8 @@ if __name__ == "__main__":
         # max_response_length=6_000,  # Reduced from 6000, matching reference
         # micro_batch=8,
         # micro_batch_size_per_gpu=8,
-        micro_batch=8,  # number of prompts. In reality, will be micro_batch * num_generations.
-        micro_batch_size_per_gpu=8,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
+        micro_batch=4,  # number of prompts. In reality, will be micro_batch * num_generations.
+        micro_batch_size_per_gpu=4,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
         warmup_steps=5,
         gradient_accumulation_steps=1,
         learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
