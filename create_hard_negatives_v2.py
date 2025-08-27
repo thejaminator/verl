@@ -758,11 +758,13 @@ def main(
 if __name__ == "__main__":
     # Example usage - customize the feature_idxs and other parameters as needed
     # target_features = list(range(0, 100_000))
-    to_100k = list(range(0, 100_000))
+    # to_100k = list(range(0, 100_000))
+    # 100k to 100_200
+    to_100_200 = list(range(100_000, 100_200))
     main(
-        target_features=to_100k,
+        target_features=to_100_200,
         top_k_similar_features=34,
         batch_size=1024,
         target_sentences=32,
-        output="hard_negatives_0_to_100_000_v2.jsonl",
+        output="data/hard_negatives_100_000_to_100_200_v2.jsonl",
     )
