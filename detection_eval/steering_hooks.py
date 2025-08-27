@@ -170,7 +170,7 @@ def get_hf_activation_steering_hook(
         norms_B1 = orig_BD.norm(dim=-1, keepdim=True).detach()  # (B, 1)
 
         # ---- build steered vectors ----
-        normalized_features = torch.nn.functional.normalize(vec_BD, dim=-1)
+        normalized_features = torch.nn.functional.normalize(vec_BD, dim=-1).detach()
         steered_BD = normalized_features * norms_B1 * steering_coefficient  # (B, d)
 
         # somehow verl explodes here and complains about dtype?
@@ -250,7 +250,7 @@ def get_rm_pad_log_probs_hook(
 
             # ---- build steered vectors ----
             # normalized_features: (B, d_model)
-            normalized_features = torch.nn.functional.normalize(vec_BD, dim=-1)
+            normalized_features = torch.nn.functional.normalize(vec_BD, dim=-1).detach()
             steered_BD = normalized_features * norms_B1 * steering_coefficient  # (B, d_model)
             # residual: (1, total_tokens, d_model)
             if not in_place:
