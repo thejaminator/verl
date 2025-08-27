@@ -157,6 +157,7 @@ def load_and_convert_dataset(
     sae_width: int,
     use_decoder_vectors: bool,
     sae_repo_id: str,
+    limit: int | None = None,
 ) -> int:
     """
     Load dataset from JSONL and convert to verl format (parquet).
@@ -219,6 +220,8 @@ def load_and_convert_dataset(
 
     data = []
     jsonl_items = read_jsonl_file_into_basemodel(dataset_path, SAEV2)
+    if limit is not None:
+        jsonl_items = jsonl_items[:limit]
     sae_ids: list[int] = jsonl_items.map(lambda x: x.sae_id)
     sae_id_to_idx: dict[int, int] = {sae_id: idx for idx, sae_id in enumerate(sae_ids)}
     if use_decoder_vectors:
@@ -279,8 +282,6 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
         params: Training parameters with Hub configuration
         step: Training step number (for checkpoint naming)
     """
-
-
 
     # Find the latest checkpoint if step not specified
     if step is None:
@@ -471,7 +472,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         cmd.append(f"trainer.val_batch_size={bs}")
     else:
         # need to still pass val_files. set a very high number for eval steps
-        cmd.append(f"data.val_files={train_parquet}")
+        cmd.append(f"data.val_files={eval_parquet}")
         cmd.append("trainer.test_freq=-1")
 
     if params.use_feature_vector:
@@ -645,6 +646,19 @@ def verl_main(params: VerlParams):
             use_decoder_vectors=params.use_decoder_vectors,
             sae_repo_id=params.sae_repo_id,
         )
+    else:
+        eval_parquet = os.path.join(params.output_dir, "eval.parquet")
+        load_and_convert_dataset(
+            params.model_name,
+            tokenizer,
+            params.train_path,
+            eval_parquet,
+            sae_layer=params.sae_layer,
+            sae_width=params.sae_width,
+            use_decoder_vectors=params.use_decoder_vectors,
+            sae_repo_id=params.sae_repo_id,
+            limit=1,
+        )
 
     # Use math reward function directly
     reward_file = params.reward_function_file
@@ -698,7 +712,7 @@ if __name__ == "__main__":
         max_steps=4000,
         output_dir="/workspace/verl_outputs_feature_vector",
         eval_path=None,
-        save_steps=500,
+        save_steps=100,
         n_gpus=1,
         use_wandb=True,
         wandb_project="grpo-feature-vector",
