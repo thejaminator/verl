@@ -663,6 +663,58 @@ def verl_main(params: VerlParams):
     launch_verl_training(params, train_parquet, eval_parquet, reward_file)
 
 
+# Configuration (optimized based on reference GRPO setup)
+PARAMS = VerlParams(
+    # smaller model for testing
+    # model_name="google/gemma-2-2b-it",
+    model_name="thejaminator/gemma-introspection-20250821-merged",  # loras don't get merged automatically
+    # sae_repo_id="google/gemma-scope-9b-it-res",
+    use_feature_vector=True,  # debugging logprobs
+    train_path="data/hard_negatives_0_to_2000.jsonl",
+    max_seq_length=1_000,
+    max_prompt_length=500,
+    max_response_length=2_000,
+    num_generations=16,  # Bigger group size since noisy explanations
+    gpu_memory_utilization=0.8,  # some other thing running
+    # model_name="google/gemma-2-9b-it",
+    # num_generations=16,  # Bigger group size since noisy explanations
+    # max_seq_length=8_000,  # More reasonable for math problems
+    # max_prompt_length=2_000,  # Reduced from 6000, matching reference
+    # max_response_length=6_000,  # Reduced from 6000, matching reference
+    # micro_batch=8,
+    # micro_batch_size_per_gpu=8,
+    micro_batch=4,  # number of prompts. In reality, will be micro_batch * num_generations.
+    micro_batch_size_per_gpu=4,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
+    warmup_steps=5,
+    gradient_accumulation_steps=1,
+    learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
+    beta=0.01,
+    lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
+    lora_alpha=128.0,  # Typically 2x lora_rank
+    target_modules="all-linear",  # Apply LoRA to all linear layers
+    use_shm=False,
+    layered_summon=False,
+    max_steps=4000,
+    output_dir="/workspace/verl_outputs_feature_vector",
+    eval_path=None,
+    save_steps=5,
+    n_gpus=1,
+    use_wandb=True,
+    wandb_project="grpo-feature-vector",
+    # HuggingFace Hub configuration (like your current script)
+    push_to_hub=True,
+    hub_repo_id="thejaminator/grpo-feature-vector",  # Updated with "_verl" suffix
+    hf_api_key=hf_api_key,
+    reward_function_name="compute_score",
+    reward_function_file="feature_vector_reward.py",
+    wandb_api_key=wandb_key,
+    use_decoder_vectors=True,
+    sae_layer=9,
+    sae_width=131,
+    enable_gradient_checkpointing=False,
+)
+
+
 if __name__ == "__main__":
     import dotenv
 
@@ -672,55 +724,4 @@ if __name__ == "__main__":
     hf_api_key = os.getenv("HF_WRITE_TOKEN")
     wandb_key = os.getenv("WANDB_KEY")
 
-    # Configuration (optimized based on reference GRPO setup)
-    params = VerlParams(
-        # smaller model for testing
-        # model_name="google/gemma-2-2b-it",
-        model_name="thejaminator/gemma-introspection-20250821-merged",  # loras don't get merged automatically
-        # sae_repo_id="google/gemma-scope-9b-it-res",
-        use_feature_vector=True,  # debugging logprobs
-        train_path="data/hard_negatives_0_to_2000.jsonl",
-        max_seq_length=1_000,
-        max_prompt_length=500,
-        max_response_length=2_000,
-        num_generations=16,  # Bigger group size since noisy explanations
-        gpu_memory_utilization=0.8,  # some other thing running
-        # model_name="google/gemma-2-9b-it",
-        # num_generations=16,  # Bigger group size since noisy explanations
-        # max_seq_length=8_000,  # More reasonable for math problems
-        # max_prompt_length=2_000,  # Reduced from 6000, matching reference
-        # max_response_length=6_000,  # Reduced from 6000, matching reference
-        # micro_batch=8,
-        # micro_batch_size_per_gpu=8,
-        micro_batch=4,  # number of prompts. In reality, will be micro_batch * num_generations.
-        micro_batch_size_per_gpu=4,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
-        warmup_steps=5,
-        gradient_accumulation_steps=1,
-        learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
-        beta=0.01,
-        lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
-        lora_alpha=128.0,  # Typically 2x lora_rank
-        target_modules="all-linear",  # Apply LoRA to all linear layers
-        use_shm=False,
-        layered_summon=False,
-        max_steps=4000,
-        output_dir="/workspace/verl_outputs_feature_vector",
-        eval_path=None,
-        save_steps=5,
-        n_gpus=1,
-        use_wandb=True,
-        wandb_project="grpo-feature-vector",
-        # HuggingFace Hub configuration (like your current script)
-        push_to_hub=True,
-        hub_repo_id="thejaminator/grpo-feature-vector",  # Updated with "_verl" suffix
-        hf_api_key=hf_api_key,
-        reward_function_name="compute_score",
-        reward_function_file="feature_vector_reward.py",
-        wandb_api_key=wandb_key,
-        use_decoder_vectors=True,
-        sae_layer=9,
-        sae_width=131,
-        enable_gradient_checkpointing=False,
-    )
-
-    verl_main(params)
+    verl_main(PARAMS)
