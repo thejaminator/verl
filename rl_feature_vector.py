@@ -219,6 +219,7 @@ def load_and_convert_dataset(
     data = []
     jsonl_items = read_jsonl_file_into_basemodel(dataset_path, SAEV2)
     sae_ids: list[int] = jsonl_items.map(lambda x: x.sae_id)
+    sae_id_to_idx: dict[int, int] = {sae_id: idx for idx, sae_id in enumerate(sae_ids)}
     if use_decoder_vectors:
         feature_vector_list: list[list[float]] = W_dec[sae_ids].tolist()
     else:
@@ -229,7 +230,8 @@ def load_and_convert_dataset(
         sample_dict = sae.model_dump()
         # Load the SAE train info. Should conform to SAE basemodel.
         sample = SAEV2.model_validate(sample_dict)
-        feature = feature_vector_list[sae.sae_id]
+        # IMPORTANT: need to fetch the correct idx for the feature vector.
+        feature = feature_vector_list[sae_id_to_idx[sae.sae_id]]
 
         if testing_hack:
             # ndim 2304 for 2b
