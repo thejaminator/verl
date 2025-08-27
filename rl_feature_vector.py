@@ -663,6 +663,14 @@ def verl_main(params: VerlParams):
     launch_verl_training(params, train_parquet, eval_parquet, reward_file)
 
 
+import dotenv
+
+dotenv.load_dotenv()
+
+# Load environment variables
+hf_api_key = os.getenv("HF_WRITE_TOKEN")
+wandb_key = os.getenv("WANDB_KEY")
+
 # Configuration (optimized based on reference GRPO setup)
 PARAMS = VerlParams(
     # smaller model for testing
@@ -716,12 +724,4 @@ PARAMS = VerlParams(
 
 
 if __name__ == "__main__":
-    import dotenv
-
-    dotenv.load_dotenv()
-
-    # Load environment variables
-    hf_api_key = os.getenv("HF_WRITE_TOKEN")
-    wandb_key = os.getenv("WANDB_KEY")
-
     verl_main(PARAMS)
