@@ -18,6 +18,7 @@ from detection_eval.steering_hooks import X_PROMPT
 
 # set HF_HOME to /workspace
 os.environ["HF_HOME"] = "/workspace"
+import json
 import subprocess
 import sys
 
@@ -278,9 +279,6 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
         params: Training parameters with Hub configuration
         step: Training step number (for checkpoint naming)
     """
-    if not params.push_to_hub or not params.hub_repo_id or not params.hf_api_key:
-        print("Skipping HuggingFace push - not configured")
-        return
 
     # Construct checkpoint paths based on verl's default structure
     project_name = params.wandb_project
@@ -321,6 +319,47 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
         hf_output_dir = lora_adapter_dir
         print("✅ Using LoRA adapter directory directly for upload")
 
+        # Ensure README.md with correct base_model metadata exists
+        readme_path = os.path.join(hf_output_dir, "README.md")
+        readme_front_matter = (
+            f"---\n"
+            f"base_model: {params.model_name}\n"
+            f"library_name: peft\n"
+            f"tags:\n"
+            f"- lora\n"
+            f"- peft\n"
+            f"pipeline_tag: text-generation\n"
+            f"---\n\n"
+        )
+        if not os.path.exists(readme_path):
+            with open(readme_path, "w", encoding="utf-8") as f:
+                f.write(readme_front_matter)
+        else:
+            # Prepend/refresh front matter while keeping any existing content
+            with open(readme_path, encoding="utf-8") as f:
+                existing = f.read()
+            # If there's already a YAML header, replace it; otherwise, prepend
+            if existing.startswith("---\n"):
+                second_delim = existing.find("\n---\n", 4)
+                if second_delim != -1:
+                    existing_body = existing[second_delim + 5 :]
+                else:
+                    existing_body = "\n" + existing
+                new_content = readme_front_matter + existing_body
+            else:
+                new_content = readme_front_matter + existing
+            with open(readme_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+
+        # Ensure adapter_config.json contains base_model_name_or_path
+        adapter_cfg_path = os.path.join(hf_output_dir, "adapter_config.json")
+        if os.path.exists(adapter_cfg_path):
+            with open(adapter_cfg_path, encoding="utf-8") as f:
+                cfg = json.load(f)
+            cfg["base_model_name_or_path"] = params.model_name
+            with open(adapter_cfg_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
+
     else:
         print("Converting full model checkpoint to HuggingFace format...")
         print(f"Source: {actor_checkpoint_dir}")
@@ -351,12 +390,13 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
 
     # Create repo and upload the converted model
     api = HfApi()
+    assert repo_name is not None, "repo_name must not be None"
     api.create_repo(repo_name, token=params.hf_api_key, exist_ok=True, private=False)
 
     # Upload the entire model directory
     api.upload_folder(
-        folder_path=hf_output_dir,
-        repo_id=repo_name,
+        folder_path=hf_output_dir,  # type: ignore
+        repo_id=repo_name,  # type: ignore
         token=params.hf_api_key,
         commit_message=f"verl GRPO trained model at step {step}",
         ignore_patterns=["*.bin"],  # Upload safetensors instead of bin files
@@ -633,7 +673,7 @@ if __name__ == "__main__":
         model_name="thejaminator/gemma-introspection-20250821-merged",  # loras don't get merged automatically
         # sae_repo_id="google/gemma-scope-9b-it-res",
         use_feature_vector=True,  # debugging logprobs
-        train_path="data/hard_negatives_0_to_5.jsonl",
+        train_path="data/hard_negatives_0_to_2000.jsonl",
         max_seq_length=1_000,
         max_prompt_length=500,
         max_response_length=2_000,
