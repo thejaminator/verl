@@ -469,11 +469,11 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
 
     if eval_parquet:
         cmd.append(f"data.val_files={eval_parquet}")
-        cmd.append(f"trainer.val_batch_size={bs}")
+        cmd.append(f"data.val_batch_size={bs}")
     else:
         # need to still pass val_files. set a very high number for eval steps
         cmd.append(f"data.val_files={eval_parquet}")
-        cmd.append("trainer.test_freq=-1")
+        cmd.append("trainer.test_freq=999999999999999999999")
 
     if params.use_feature_vector:
         # use FeatureVectorRolloutRefWorker if we want to use feature vector steering.
