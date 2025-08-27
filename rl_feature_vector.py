@@ -257,8 +257,8 @@ def load_and_convert_dataset(
             "sae": sae_verl_data,
         }
         data.append(structured_data)
-        if idx == 0:
-            print(f"First sample:\n {structured_data}")
+    first_sample = data[0]
+    print(f"First sample:\n {first_sample}")
 
     # Save as parquet for verl using pyarrow (no pandas)
     table = pa.Table.from_pylist(data)
