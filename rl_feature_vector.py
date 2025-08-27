@@ -280,9 +280,7 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
         step: Training step number (for checkpoint naming)
     """
 
-    # Construct checkpoint paths based on verl's default structure
-    project_name = params.wandb_project
-    experiment_name = params.experiment_name or f"grpo-{params.model_name.split('/')[-1]}-no-beta"
+
 
     # Find the latest checkpoint if step not specified
     if step is None:
@@ -700,7 +698,7 @@ if __name__ == "__main__":
         max_steps=4000,
         output_dir="/workspace/verl_outputs_feature_vector",
         eval_path=None,
-        save_steps=10,
+        save_steps=100,
         n_gpus=1,
         use_wandb=True,
         wandb_project="grpo-feature-vector",
