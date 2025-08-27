@@ -405,7 +405,7 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
     print("🎉 Model conversion and upload complete!")
 
 
-def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: str | None, reward_file: str):
+def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: str, reward_file: str):
     """
     Launch verl training by passing parameters directly to the subprocess.
 
@@ -467,13 +467,8 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         "actor_rollout_ref.model.use_remove_padding=true",
     ]
 
-    if eval_parquet:
-        cmd.append(f"data.val_files={eval_parquet}")
-        cmd.append(f"data.val_batch_size={bs}")
-    else:
-        # need to still pass val_files. set a very high number for eval steps
-        cmd.append(f"data.val_files={eval_parquet}")
-        cmd.append("trainer.test_freq=999999999999999999999")
+    cmd.append(f"data.val_files={eval_parquet}")
+    cmd.append(f"data.val_batch_size={bs}")
 
     if params.use_feature_vector:
         # use FeatureVectorRolloutRefWorker if we want to use feature vector steering.
@@ -633,14 +628,13 @@ def verl_main(params: VerlParams):
         sae_repo_id=params.sae_repo_id,
     )
 
-    eval_parquet = None
+    eval_parquet = os.path.join(params.output_dir, "eval.parquet")
     if params.eval_path:
-        eval_parquet = os.path.join(params.output_dir, "eval.parquet")
         load_and_convert_dataset(
             params.model_name,
             tokenizer,
-            params.eval_path,
-            eval_parquet,
+            dataset_path=params.eval_path,
+            output_path=eval_parquet,
             sae_layer=params.sae_layer,
             sae_width=params.sae_width,
             use_decoder_vectors=params.use_decoder_vectors,
@@ -651,8 +645,8 @@ def verl_main(params: VerlParams):
         load_and_convert_dataset(
             params.model_name,
             tokenizer,
-            params.train_path,
-            eval_parquet,
+            dataset_path=params.train_path,
+            output_path=eval_parquet,
             sae_layer=params.sae_layer,
             sae_width=params.sae_width,
             use_decoder_vectors=params.use_decoder_vectors,
@@ -712,7 +706,7 @@ if __name__ == "__main__":
         max_steps=4000,
         output_dir="/workspace/verl_outputs_feature_vector",
         eval_path=None,
-        save_steps=50,
+        save_steps=5,
         n_gpus=1,
         use_wandb=True,
         wandb_project="grpo-feature-vector",
