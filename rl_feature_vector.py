@@ -684,8 +684,8 @@ if __name__ == "__main__":
         # max_response_length=6_000,  # Reduced from 6000, matching reference
         # micro_batch=8,
         # micro_batch_size_per_gpu=8,
-        micro_batch=4,  # number of prompts. In reality, will be micro_batch * num_generations.
-        micro_batch_size_per_gpu=4,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
+        micro_batch=8,  # number of prompts. In reality, will be micro_batch * num_generations.
+        micro_batch_size_per_gpu=8,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
         warmup_steps=5,
         gradient_accumulation_steps=1,
         learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
@@ -698,7 +698,7 @@ if __name__ == "__main__":
         max_steps=4000,
         output_dir="/workspace/verl_outputs_feature_vector",
         eval_path=None,
-        save_steps=100,
+        save_steps=500,
         n_gpus=1,
         use_wandb=True,
         wandb_project="grpo-feature-vector",
