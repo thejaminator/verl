@@ -712,7 +712,7 @@ if __name__ == "__main__":
         max_steps=4000,
         output_dir="/workspace/verl_outputs_feature_vector",
         eval_path=None,
-        save_steps=100,
+        save_steps=50,
         n_gpus=1,
         use_wandb=True,
         wandb_project="grpo-feature-vector",
