@@ -847,6 +847,7 @@ async def run_gemma_steering(
             extra_body={
                 "sae_index": sae.sae_id,  # the server will use this to get the SAE feature vector
             },
+            temperature=1.0, # set to 0.0 for testing
         ),
         try_number=try_number,
     )
@@ -970,7 +971,7 @@ async def main(
     if len(steering_models) > 0:
         # Run gemma steering
         print("Running gemma steering")
-        gemma_client = AsyncOpenAI(api_key="dummy api key", base_url="https://94nlcy6stx75yz-8000.proxy.runpod.net/v1")
+        gemma_client = AsyncOpenAI(api_key="dummy api key", base_url="https://728qdkul8ii0j5-8000.proxy.runpod.net/v1")
         width = 131  # not cached by api call yet, so manually add to cache path
         gemma_caller = OpenAICaller(openai_client=gemma_client, cache_path=f"cache/steering_cache_{width}")
         best_of_n = config.best_of_n
@@ -1092,10 +1093,10 @@ if __name__ == "__main__":
                 display_name="GPT-5-mini<br>(extrospecting<br>sentences)",
                 reasoning_effort="medium",
             ),
-            # ModelInfo(
-            #     model="meta-llama/llama-3-70b-instruct",
-            #     display_name="Llama-3-70b<br>(extrospecting<br>sentences)",
-            # ),
+            ModelInfo(
+                model="meta-llama/llama-3-70b-instruct",
+                display_name="Llama-3-70b<br>(extrospecting<br>sentences)",
+            ),
             # ModelInfo(
             #     model="thejaminator/gemma-introspection-20250821-step-250",
             #     display_name="SFT 1000<br>Gemma<br>(introspecting)",
@@ -1114,13 +1115,21 @@ if __name__ == "__main__":
             # ModelInfo(
             #     model="thejaminator/gemma-introspection-20250821",
             #     display_name="SFT 8000",
-            #     use_steering=True,
+            #     use_steering=True,r
             # ),
             # ModelInfo(
             #     model="thejaminator/gemma-multiepoch",
             #     display_name="SFT 8000 * 4 epochs",
             #     use_steering=True,
             # ),
+            # thejaminator/grpo-feature-vector-step-55
+            ModelInfo(model="thejaminator/grpo-feature-vector-step-55", display_name="SFT + RL 200 samples", use_steering=True),
+            ModelInfo(
+                model="thejaminator/gemma-introspection-20250821-merged",
+                display_name="SFT 8000 samples",
+                use_steering=True,
+            ),
+            
             # ModelInfo(model="gpt-5-mini-2025-08-07", display_name="GPT-5-mini", reasoning_effort="low"),
             # meta-llama/llama-3-70b-instruct
             # ModelInfo(model="gpt-4.1-2025-04-14", display_name="GPT-4.1"),
@@ -1136,11 +1145,11 @@ if __name__ == "__main__":
     )
 
     # created with create_hard_negative_and_feature_vector.py
-    sae_file = "data/hard_negatives_0_to_200.jsonl"
+    sae_file = "data/hard_negatives_100_000_to_100_200_v2.jsonl"
     # sae_file = "hard_negatives_0_to_82000.jsonl"
     # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
     # Which to use for constructing explanations vs testing detection?
-    saes_to_test = 10  # target: 32000
+    saes_to_test = 200
     sae_start_index = 0
     # sae_start_index = 20_000  # not in train set for the trained model
 
@@ -1181,6 +1190,6 @@ if __name__ == "__main__":
             # config=eight_positive_examples_config,
             # config=two_positive_examples,
             # config=four_positive_examples_config,
-            max_par=100,
+            max_par=20,
         )
     )
