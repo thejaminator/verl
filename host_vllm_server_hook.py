@@ -122,12 +122,13 @@ class VLLMServer:
             model=MODEL_NAME,
             tensor_parallel_size=1,
             max_model_len=CTX_LEN,
-            enforce_eager=True,
             dtype=DTYPE,
-            disable_async_output_proc=True,
             gpu_memory_utilization=gpu_memory_utilization,
             enable_lora=True,
             max_lora_rank=64,
+            disable_async_output_proc=True,
+            enforce_eager=True,
+            enable_prefix_caching=False,
         )
         self.model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
 

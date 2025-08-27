@@ -633,7 +633,7 @@ if __name__ == "__main__":
         model_name="thejaminator/gemma-introspection-20250821-merged",  # loras don't get merged automatically
         # sae_repo_id="google/gemma-scope-9b-it-res",
         use_feature_vector=True,  # debugging logprobs
-        train_path="data/hard_negatives_0_to_200.jsonl",
+        train_path="data/hard_negatives_0_to_5.jsonl",
         max_seq_length=1_000,
         max_prompt_length=500,
         max_response_length=2_000,
@@ -646,8 +646,8 @@ if __name__ == "__main__":
         # max_response_length=6_000,  # Reduced from 6000, matching reference
         # micro_batch=8,
         # micro_batch_size_per_gpu=8,
-        micro_batch=1,  # number of prompts. In reality, will be micro_batch * num_generations.
-        micro_batch_size_per_gpu=1,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
+        micro_batch=4,  # number of prompts. In reality, will be micro_batch * num_generations.
+        micro_batch_size_per_gpu=4,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
         warmup_steps=5,
         gradient_accumulation_steps=1,
         learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
