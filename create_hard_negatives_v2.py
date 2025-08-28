@@ -915,11 +915,16 @@ if __name__ == "__main__":
     # target_features = list(range(0, 100_000))
     # to_100k = list(range(0, 100_000))
     # 100k to 100_200
-    to_100_200 = list(range(100_000, 100_200))
+    target_features = list(range(0, 200))
     main(
-        target_features=to_100_200,
+        # model_name="google/gemma-2-9b-it",
+        # sae_repo_id="google/gemma-scope-9b-it-res",
+        model_name="Qwen/Qwen3-8B",
+        sae_repo_id="adamkarvonen/qwen3-8b-saes",
+        target_features=target_features,
         top_k_similar_features=34,
         batch_size=1024,
         target_sentences=32,
-        output="data/hard_negatives_100_000_to_100_200_v2.jsonl",
+        # output="hard_negatives_0_to_100_000.jsonl",
+        output="data/qwen_hard_negatives_0_to_200.jsonl",
     )
