@@ -61,7 +61,7 @@ SAE_WIDTH = 131  # Can be 16 or 131. Check what we trained with?
 SAE_FILENAME = f"layer_{SAE_LAYER}/width_131k/average_l0_121/params.npz"
 STEERING_COEFFICIENT = 2.0
 # INFO 08-21 04:36:17 [executor_base.py:118] Maximum concurrency for 2000 tokens per request: 55.05x
-gpu_memory_utilization = 0.3
+gpu_memory_utilization = 0.6
 # Max batch size that we call .generate with. See vllm logs for the max it can take.
 # IMPORTANT SHOULD BE >20%? THAN THE MAX PARALLELISM THAT VLLM WILL RUN.
 # OTHERWISE VLLM WILL DO WEIRD THINGS THAT MESSS UP THE HOOK?

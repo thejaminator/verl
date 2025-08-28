@@ -252,6 +252,12 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                     torch.save(extra_state_dict, extra_path)
                     log_with_rank(f"Saved extra_state to {os.path.abspath(extra_path)}", rank=self.rank, logger=logger)
 
+                    # Clear memory
+                    del model_state_dict
+                    del optimizer_state_dict
+                    del lr_scheduler_state_dict
+                    del extra_state_dict
+
         if self.rank == 0:
             # Save HF tokenizer/processor and model config on rank 0 to huggingface/ directory, no matter whether
             # huggingface model is requested to be saved or not.

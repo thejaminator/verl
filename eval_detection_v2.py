@@ -34,6 +34,7 @@ class ModelInfo(BaseModel):
     display_name: str
     reasoning_effort: str | None = None
     use_steering: bool = False
+    hook_onto_layer: int = 9
 
 
 class SAEExplained(BaseModel):
@@ -833,6 +834,7 @@ async def run_gemma_steering(
     sae: SAETrainTest,
     gemma_caller: OpenAICaller,
     lora_model: str,
+    hook_onto_layer: int,
     try_number: int = 1,
 ) -> SAETrainTestWithExplanation:
     """
@@ -846,6 +848,7 @@ async def run_gemma_steering(
             max_tokens=2000,
             extra_body={
                 "sae_index": sae.sae_id,  # the server will use this to get the SAE feature vector
+                "hook_onto_layer": hook_onto_layer,
             },
             temperature=1.0,  # set to 0.0 for testing
         ),
@@ -867,14 +870,18 @@ async def run_gemma_steering(
 
 
 async def run_gemma_steering_best_of_n(
-    sae: SAETrainTest, gemma_caller: OpenAICaller, lora_model: str, best_of_n: int
+    sae: SAETrainTest,
+    gemma_caller: OpenAICaller,
+    lora_model: str,
+    hook_onto_layer: int,
+    best_of_n: int,
 ) -> Slist[SAETrainTestWithExplanation]:
     """
     Run gemma steering for a single SAE with best-of-n.
     """
     # Run gemma steering for each try number
     _explanations: Slist[SAETrainTestWithExplanation] = await Slist(range(best_of_n)).par_map_async(
-        lambda try_number: run_gemma_steering(sae, gemma_caller, lora_model, try_number),
+        lambda try_number: run_gemma_steering(sae, gemma_caller, lora_model, hook_onto_layer, try_number),
         max_par=best_of_n,  # already max_par in outer loop
     )
     return _explanations
@@ -980,7 +987,11 @@ async def main(
         max_par_bon = max_par // best_of_n_int
         best_of_n_gemma_explanations = await split_sae_activations.product(steering_models).par_map_async(
             lambda sae_model: run_gemma_steering_best_of_n(
-                sae_model[0], gemma_caller, sae_model[1].model, best_of_n_int
+                sae_model[0],
+                gemma_caller,
+                sae_model[1].model,
+                sae_model[1].hook_onto_layer,
+                best_of_n_int,
             ),
             max_par=max_par_bon,
             tqdm=True,
@@ -1112,25 +1123,33 @@ if __name__ == "__main__":
             #     display_name="SFT 4000",
             #     use_steering=True,
             # ),
-            # ModelInfo(
-            #     model="thejaminator/gemma-introspection-20250821",
-            #     display_name="SFT 8000",
-            #     use_steering=True,r
-            # ),
+            ModelInfo(
+                model="thejaminator/gemma-introspection-20250821",
+                display_name="SFT 8000, layer 9",
+                use_steering=True,
+                hook_onto_layer=9,
+            ),
+            # thejaminator/gemma-hook-layer-0
+            ModelInfo(
+                model="thejaminator/gemma-hook-layer-0",
+                display_name="SFT 8000, layer 0",
+                use_steering=True,
+                hook_onto_layer=0,
+            ),
             # ModelInfo(
             #     model="thejaminator/gemma-multiepoch",
             #     display_name="SFT 8000 * 4 epochs",
             #     use_steering=True,
             # ),
             # thejaminator/grpo-feature-vector-step-55
-            ModelInfo(
-                model="thejaminator/grpo-feature-vector-step-55", display_name="SFT + RL 200 steps", use_steering=True
-            ),
-            ModelInfo(
-                model="thejaminator/gemma-introspection-20250821-merged",
-                display_name="SFT 8000 samples",
-                use_steering=True,
-            ),
+            # ModelInfo(
+            #     model="thejaminator/grpo-feature-vector-step-55", display_name="SFT + RL 200 steps", use_steering=True
+            # ),
+            # ModelInfo(
+            #     model="thejaminator/gemma-introspection-20250821-merged",
+            #     display_name="SFT 8000 samples",
+            #     use_steering=True,
+            # ),
             # ModelInfo(model="gpt-5-mini-2025-08-07", display_name="GPT-5-mini", reasoning_effort="low"),
             # meta-llama/llama-3-70b-instruct
             # ModelInfo(model="gpt-4.1-2025-04-14", display_name="GPT-4.1"),
@@ -1191,6 +1210,6 @@ if __name__ == "__main__":
             # config=eight_positive_examples_config,
             # config=two_positive_examples,
             # config=four_positive_examples_config,
-            max_par=20,
+            max_par=40,
         )
     )

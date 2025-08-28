@@ -465,6 +465,8 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         f"actor_rollout_ref.model.enable_gradient_checkpointing={params.enable_gradient_checkpointing}",
         "actor_rollout_ref.model.trust_remote_code=false",
         "actor_rollout_ref.model.use_remove_padding=true",
+        # prevent kabooms when dumping state dict with fsdp?
+        "actor_rollout_ref.model.enable_activation_offload=true",
     ]
 
     cmd.append(f"data.val_files={eval_parquet}")
