@@ -27,6 +27,7 @@ import os
 from dataclasses import dataclass
 from typing import Sequence
 
+import json
 import torch
 import torch.nn.functional as F
 
@@ -244,7 +245,7 @@ class BatchTopKSAE(BaseSAE):
 
     def encode(self, x: torch.Tensor):
         """Note: x can be either shape (B, F) or (B, L, F)"""
-        post_relu_feat_acts_BF = nn.functional.relu((x - self.b_dec) @ self.W_enc + self.b_enc)
+        post_relu_feat_acts_BF = torch.nn.functional.relu((x - self.b_dec) @ self.W_enc + self.b_enc)
 
         if self.use_threshold:
             if self.threshold < 0:
@@ -406,7 +407,7 @@ def get_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = Fals
 
     if "pythia" in model_name:
         return model.gpt_neox.layers[layer]
-    elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name:
+    elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name or "Qwen" in model_name:
         return model.model.layers[layer]
     else:
         raise ValueError(f"Please add submodule for model {model_name}")
@@ -469,7 +470,7 @@ def collect_activations(
     return activations_BLD
 
 
- Pydantic schema classes for JSONL output
+ # Pydantic schema classes for JSONL output
 def load_max_acts_data(
     model_name: str,
     sae_layer: int,
@@ -627,7 +628,7 @@ def load_model_and_sae(
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     # Load model
-    print("🧠 Loading Gemma 9B model...")
+    print("🧠 Loading model...")
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         torch_dtype=dtype,
@@ -729,7 +730,7 @@ def compute_sae_activations_for_sentences(
                     raise e
 
                 print(f"WARNING: Error processing batch: {e}")
-                print(f"Batch sentences: {batch_sentences}")
+                # print(f"Batch sentences: {batch_sentences}")
                 continue
 
     return sentence_infos
