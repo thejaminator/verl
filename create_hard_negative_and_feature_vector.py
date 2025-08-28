@@ -65,7 +65,7 @@ def get_sae_info(sae_repo_id: str) -> tuple[int, int, int, str]:
         assert sae_layer == 9
         assert sae_layer_percent == 25
         sae_width = 2
-        sae_filename = f"saes_Qwen_Qwen3-8B_batch_top_k/resid_post_layer_{sae_layer}/trainer_{sae_width}/ae.pt"
+        sae_filename = "acts_Qwen_Qwen3-8B_layer_9_trainer_2_layer_percent_25_context_length_32.pt"
     else:
         raise ValueError(f"Unknown SAE repo ID: {sae_repo_id}")
     return sae_width, sae_layer, sae_layer_percent, sae_filename
@@ -404,14 +404,14 @@ def get_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = Fals
     if use_lora:
         if "pythia" in model_name:
             raise ValueError("Need to determine how to get submodule for LoRA")
-        elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name:
+        elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name or "Qwen" in model_name:
             return model.base_model.model.model.layers[layer]
         else:
             raise ValueError(f"Please add submodule for model {model_name}")
 
     if "pythia" in model_name:
         return model.gpt_neox.layers[layer]
-    elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name:
+    elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name or "Qwen" in model_name:
         return model.model.layers[layer]
     else:
         raise ValueError(f"Please add submodule for model {model_name}")
