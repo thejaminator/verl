@@ -65,7 +65,7 @@ def get_sae_info(sae_repo_id: str) -> tuple[int, int, int, str]:
         assert sae_layer == 9
         assert sae_layer_percent == 25
         sae_width = 2
-        sae_filename = "acts_Qwen_Qwen3-8B_layer_9_trainer_2_layer_percent_25_context_length_32.pt"
+        sae_filename = "saes_Qwen_Qwen3-8B_batch_top_k/resid_post_layer_9/trainer_2/ae.pt"
     else:
         raise ValueError(f"Unknown SAE repo ID: {sae_repo_id}")
     return sae_width, sae_layer, sae_layer_percent, sae_filename
@@ -483,20 +483,25 @@ def load_max_acts_data(
     context_length: int = 32,
 ) -> dict[str, torch.Tensor]:
     """Load the max activating examples data."""
-    acts_dir = "max_acts"
 
-    # Construct filename
-    acts_filename = f"acts_{model_name}_layer_{sae_layer}_trainer_{sae_width}_layer_percent_{layer_percent}_context_length_{context_length}.pt".replace(
-        "/", "_"
-    )
+    if "gemma" in model_name:
+        acts_dir = "max_acts"
+        # Construct filename
+        acts_filename = f"acts_{model_name}_layer_{sae_layer}_trainer_{sae_width}_layer_percent_{layer_percent}_context_length_{context_length}.pt".replace(
+            "/", "_"
+        )
 
-    acts_path = os.path.join(acts_dir, acts_filename)
+        acts_path = os.path.join(acts_dir, acts_filename)
+
+    elif "Qwen" in model_name:
+        # NOTE: USING TRAINER 2 LAYER 9. Trainer 2 is width 65k.
+        acts_path = "acts_Qwen_Qwen3-8B_layer_9_trainer_2_layer_percent_25_context_length_32.pt"
 
     # Download if not exists
     if not os.path.exists(acts_path):
         print(f"📥 Downloading max acts data: {acts_filename}")
         try:
-            path_to_config = hf_hub_download(
+            hf_hub_download(
                 repo_id="adamkarvonen/sae_max_acts",
                 filename=acts_filename,
                 force_download=False,
@@ -657,6 +662,8 @@ def compute_sae_activations_for_sentences(
     Compute SAE activations for a list of sentences and return SentenceInfo objects.
     """
     sentence_infos = []
+    # left pad NOT RIGHT PAD
+    tokenizer.padding_side = "left"  # type: ignore
 
     # Process sentences in batches
     for i in range(0, len(sentences), batch_size):
@@ -670,7 +677,7 @@ def compute_sae_activations_for_sentences(
             truncation=True,
             max_length=512,
             padding=True,  # Pad to same length for batching
-        ).to(model.device)
+        ).to(model.device)  # type: ignore
 
         with torch.no_grad():
             try:
