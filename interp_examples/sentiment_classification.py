@@ -25,6 +25,8 @@ import gc
 import torch._dynamo
 from datasets import load_dataset
 from tqdm import tqdm
+import itertools
+import json
 
 def find_x_positions(formatted_prompt: str, tokenizer) -> list[int]:
     """Find positions of 'X' tokens in the formatted prompt."""
@@ -192,6 +194,11 @@ def parse_answer(answer: str, key_mapping: dict[str, int]) -> int | None:
     # Normalize the input: lowercase, strip spaces and punctuation
     cleaned = answer.strip().lower().rstrip(".!?,;:")
 
+    if "<explanation>" in cleaned:
+        cleaned = cleaned.split("<explanation>")[-1]
+    if "</explanation>" in cleaned:
+        cleaned = cleaned.split("</explanation>")[0]
+
     # If any of the two keys are present in cleaned, return None
     keys_found = [key for key in key_mapping.keys() if key.lower() in cleaned]
     if len(keys_found) >= 2:
@@ -219,7 +226,8 @@ def get_dataset(dataset_name: str, max_examples: int) -> tuple[list[list[dict[st
             "positive": 1,
             "negative": 0
         }
-        classification_prompt = "You must respond with only a single word. Is the sentiment of 'X' positive or negative?"
+        # classification_prompt = "You must respond with only a single word. Is the sentiment of 'X' positive or negative?"
+        classification_prompt = "You must respond with only a single word. Your options are 'positive' or 'negative'. Can you explain to me if the sentiment of 'X' is positive or negative?"
     elif dataset_name == "ag_news":
         ag_news_dataset = load_dataset("ag_news", split="test")
 
@@ -233,7 +241,7 @@ def get_dataset(dataset_name: str, max_examples: int) -> tuple[list[list[dict[st
             "business": 2,
             "sci/tech": 3
         }
-        classification_prompt = "You must respond using only one of the following options and nothing else: World, Sports, Business, Sci/Tech. What is the topic of 'X'?"
+        classification_prompt = "You must respond with only a single word. Your options are 'World', 'Sports', 'Business', 'Sci/Tech'. Can you explain to me if the topic of 'X' is World, Sports, Business, or Sci/Tech?"
     else:
         raise ValueError(f"Dataset {dataset_name} not supported")
 
@@ -260,7 +268,8 @@ LAYER = 9  # Target layer for activation steering
 MAX_DECODE_TOKENS = 100
 
 # SAE Configuration
-LOAD_LORAS = ["thejaminator/gemma-introspection-20250821"]
+# LOAD_LORAS = ["thejaminator/gemma-introspection-20250821"]
+LOAD_LORAS = ["thejaminator/gemma-hook-layer-0"]
 STEERING_COEFFICIENT = 2.0
 
 print(f"Model: {MODEL_NAME}")
@@ -291,7 +300,7 @@ llm = LLM(
 vllm_model = llm.llm_engine.model_executor.driver_worker.model_runner.model
 
 # Load LoRA adapters
-lora_requests = []
+lora_requests = [None]
 if LOAD_LORAS is not None:
     print(f"Loading LoRA adapters: {LOAD_LORAS}")
     for i, lora_id in enumerate(LOAD_LORAS, 1):
@@ -302,7 +311,7 @@ if LOAD_LORAS is not None:
 # %%
 
 
-def run_classification(tokenizer: AutoTokenizer, llm: LLM, LAYER: int, dataset_name: str, lora_request: LoRARequest | None = None, max_examples: int = 500):
+def run_classification(tokenizer: AutoTokenizer, llm: LLM, LAYER: int, dataset_name: str, lora_request: LoRARequest | None = None, max_examples: int = 500, act_layer: int = 9):
 
     vllm_model = llm.llm_engine.model_executor.driver_worker.model_runner.model
     DEVICE = torch.device("cuda")
@@ -328,9 +337,9 @@ def run_classification(tokenizer: AutoTokenizer, llm: LLM, LAYER: int, dataset_n
     )
 
 
-    act_collection_target_layer = vllm_model.model.layers[LAYER]
-    # steer_target_layer = vllm_model.model.layers[LAYER]
+    act_collection_target_layer = vllm_model.model.layers[act_layer]
 
+    # steer_target_layer = vllm_model.model.layers[LAYER]
     steer_target_layer = vllm_model.model.layers[0]
 
     answers = []
@@ -404,14 +413,53 @@ def run_classification(tokenizer: AutoTokenizer, llm: LLM, LAYER: int, dataset_n
     print(f"{correct/len(all_labels)=}")
     print(f"{format_correct/len(all_labels)=}")
 
+    results = {
+        "correct": correct,
+        "format_correct": format_correct,
+        "accuracy": correct/format_correct,
+        "total_accuracy": correct/len(all_labels),
+        "total_format_accuracy": format_correct/len(all_labels),
+        "act_layer": act_layer,
+        "lora_request": lora_request.lora_name if lora_request is not None else None,
+        "dataset_name": dataset_name,
+        "max_examples": max_examples,
+        "steering_coefficient": STEERING_COEFFICIENT,
+        "batch_size": BATCH_SIZE,
+        "offset": OFFSET,
+    }
 
-max_examples = 500
+    return results
 
-# run_classification(tokenizer, llm, LAYER, "sst2", None, max_examples)
-# run_classification(tokenizer, llm, LAYER, "sst2", lora_requests[0], max_examples)
 
-run_classification(tokenizer, llm, LAYER, "ag_news", lora_requests[0], max_examples)
-run_classification(tokenizer, llm, LAYER, "ag_news", None, max_examples)
+max_examples = 50
+# max_examples = 100
 
+act_layers = [9, 18, 27]
+
+all_results = []
+
+dataset_name = "sst2"
+
+for act_layer, lora_request in itertools.product(act_layers, lora_requests):
+
+    results = run_classification(tokenizer, llm, LAYER, "sst2", lora_request, max_examples, act_layer)
+    all_results.append(results)
+
+with open(f"sst2_results.json", "w") as f:
+    json.dump(all_results, f)
+
+
+dataset_name = "ag_news"
+
+for act_layer, lora_request in itertools.product(act_layers, lora_requests):
+
+    results = run_classification(tokenizer, llm, LAYER, "ag_news", lora_request, max_examples, act_layer)
+    all_results.append(results)
+
+with open(f"ag_news_results.json", "w") as f:
+    json.dump(all_results, f)
 
 # %%
+
+
+
