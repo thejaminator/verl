@@ -59,9 +59,11 @@ def get_sae_info(sae_repo_id: str) -> tuple[int, int, int, str]:
             sae_filename = f"layer_{sae_layer}/width_131k/average_l0_121/params.npz"
         else:
             raise ValueError(f"Unknown SAE width: {sae_width}")
-    elif sae_repo_id == "fnlp/Llama3_1-8B-Base-LXR-32x":
-        sae_width = 32
-        sae_filename = ""
+    elif sae_repo_id == "adamkarvonen/qwen3-8b-saes":
+        assert sae_layer == 9
+        assert sae_layer_percent == 25
+        sae_width = 2
+        sae_filename = f"saes_Qwen_Qwen3-8B_batch_top_k/resid_post_layer_{sae_layer}/trainer_{sae_width}/ae.pt"
     else:
         raise ValueError(f"Unknown SAE repo ID: {sae_repo_id}")
     return sae_width, sae_layer, sae_layer_percent, sae_filename
@@ -752,12 +754,16 @@ def main(
 if __name__ == "__main__":
     # Example usage - customize the feature_idxs and other parameters as needed
     # target_features = list(range(0, 100_000))
-    target_features = list(range(100_000, 100_200))
+    target_features = list(range(0, 200))
     main(
+        # model_name="google/gemma-2-9b-it",
+        # sae_repo_id="google/gemma-scope-9b-it-res",
+        model_name="Qwen/Qwen3-8B",
+        sae_repo_id="adamkarvonen/qwen3-8b-saes",
         target_features=target_features,
         top_k_similar_features=34,
         batch_size=1024,
         target_sentences=32,
         # output="hard_negatives_0_to_100_000.jsonl",
-        output="hard_negatives_100_000_to_100_200.jsonl",
+        output="qwen_hard_negatives_0_to_200.jsonl",
     )
