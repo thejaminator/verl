@@ -483,9 +483,9 @@ def load_max_acts_data(
     context_length: int = 32,
 ) -> dict[str, torch.Tensor]:
     """Load the max activating examples data."""
+    acts_dir = "max_acts"
 
     if "gemma" in model_name:
-        acts_dir = "max_acts"
         # Construct filename
         acts_filename = f"acts_{model_name}_layer_{sae_layer}_trainer_{sae_width}_layer_percent_{layer_percent}_context_length_{context_length}.pt".replace(
             "/", "_"
@@ -495,11 +495,12 @@ def load_max_acts_data(
 
     elif "Qwen" in model_name:
         # NOTE: USING TRAINER 2 LAYER 9. Trainer 2 is width 65k.
-        acts_path = "acts_Qwen_Qwen3-8B_layer_9_trainer_2_layer_percent_25_context_length_32.pt"
+        acts_filename = "acts_Qwen_Qwen3-8B_layer_9_trainer_2_layer_percent_25_context_length_32.pt"
+        acts_path = os.path.join(acts_dir, acts_filename)
 
     # Download if not exists
     if not os.path.exists(acts_path):
-        print(f"📥 Downloading max acts data: {acts_filename}")
+        print(f"📥 Downloading max acts data: {acts_path}")
         try:
             hf_hub_download(
                 repo_id="adamkarvonen/sae_max_acts",
