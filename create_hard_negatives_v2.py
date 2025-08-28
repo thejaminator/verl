@@ -59,13 +59,14 @@ def get_sae_info(sae_repo_id: str) -> tuple[int, int, int, str]:
             sae_filename = f"layer_{sae_layer}/width_131k/average_l0_121/params.npz"
         else:
             raise ValueError(f"Unknown SAE width: {sae_width}")
-    elif sae_repo_id == "fnlp/Llama3_1-8B-Base-LXR-32x":
-        sae_width = 32
-        sae_filename = ""
+    elif sae_repo_id == "adamkarvonen/qwen3-8b-saes":
+        assert sae_layer == 9
+        assert sae_layer_percent == 25
+        sae_width = 2
+        sae_filename = "saes_Qwen_Qwen3-8B_batch_top_k/resid_post_layer_9/trainer_2/ae.pt"
     else:
         raise ValueError(f"Unknown SAE repo ID: {sae_repo_id}")
     return sae_width, sae_layer, sae_layer_percent, sae_filename
-
 
 # Configuration variables - no longer need a config class
 
@@ -219,6 +220,145 @@ def load_gemma_scope_jumprelu_sae(
     return sae
 
 
+class BatchTopKSAE(BaseSAE):
+    def __init__(
+        self,
+        d_in: int,
+        d_sae: int,
+        k: int,
+        model_name: str,
+        hook_layer: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        hook_name: str | None = None,
+    ):
+        hook_name = hook_name or f"blocks.{hook_layer}.hook_resid_post"
+        super().__init__(d_in, d_sae, model_name, hook_layer, device, dtype, hook_name)
+
+        assert isinstance(k, int) and k > 0
+        self.register_buffer("k", torch.tensor(k, dtype=torch.int, device=device))
+
+        # BatchTopK requires a global threshold to use during inference. Must be positive.
+        self.use_threshold = True
+        self.register_buffer("threshold", torch.tensor(-1.0, dtype=dtype, device=device))
+
+    def encode(self, x: torch.Tensor):
+        """Note: x can be either shape (B, F) or (B, L, F)"""
+        post_relu_feat_acts_BF = nn.functional.relu((x - self.b_dec) @ self.W_enc + self.b_enc)
+
+        if self.use_threshold:
+            if self.threshold < 0:
+                raise ValueError("Threshold is not set. The threshold must be set to use it during inference")
+            encoded_acts_BF = post_relu_feat_acts_BF * (post_relu_feat_acts_BF > self.threshold)
+            return encoded_acts_BF
+
+        post_topk = post_relu_feat_acts_BF.topk(self.k, sorted=False, dim=-1)
+
+        tops_acts_BK = post_topk.values
+        top_indices_BK = post_topk.indices
+
+        buffer_BF = torch.zeros_like(post_relu_feat_acts_BF)
+        encoded_acts_BF = buffer_BF.scatter_(dim=-1, index=top_indices_BK, src=tops_acts_BK)
+        return encoded_acts_BF
+
+    def decode(self, feature_acts: torch.Tensor):
+        return (feature_acts @ self.W_dec) + self.b_dec
+
+    def forward(self, x: torch.Tensor):
+        x = self.encode(x)
+        recon = self.decode(x)
+        return recon
+
+
+def load_dictionary_learning_batch_topk_sae(
+    repo_id: str,
+    filename: str,
+    model_name: str,
+    device: torch.device,
+    dtype: torch.dtype,
+    layer: int | None = None,
+    local_dir: str = "downloaded_saes",
+) -> BatchTopKSAE:
+    assert "ae.pt" in filename
+
+    path_to_params = hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        force_download=False,
+        local_dir=local_dir,
+    )
+
+    pt_params = torch.load(path_to_params, map_location=torch.device("cpu"))
+
+    config_filename = filename.replace("ae.pt", "config.json")
+    path_to_config = hf_hub_download(
+        repo_id=repo_id,
+        filename=config_filename,
+        force_download=False,
+        local_dir=local_dir,
+    )
+
+    with open(path_to_config) as f:
+        config = json.load(f)
+
+    if layer is not None:
+        assert layer == config["trainer"]["layer"]
+    else:
+        layer = config["trainer"]["layer"]
+
+    # Transformer lens often uses a shortened model name
+    assert model_name in config["trainer"]["lm_name"]
+
+    k = config["trainer"]["k"]
+
+    # Print original keys for debugging
+    print("Original keys in state_dict:", pt_params.keys())
+
+    # Map old keys to new keys
+    key_mapping = {
+        "encoder.weight": "W_enc",
+        "decoder.weight": "W_dec",
+        "encoder.bias": "b_enc",
+        "bias": "b_dec",
+        "k": "k",
+        "threshold": "threshold",
+    }
+
+    # Create a new dictionary with renamed keys
+    renamed_params = {key_mapping.get(k, k): v for k, v in pt_params.items()}
+
+    # due to the way torch uses nn.Linear, we need to transpose the weight matrices
+    renamed_params["W_enc"] = renamed_params["W_enc"].T
+    renamed_params["W_dec"] = renamed_params["W_dec"].T
+
+    # Print renamed keys for debugging
+    print("Renamed keys in state_dict:", renamed_params.keys())
+
+    sae = BatchTopKSAE(
+        d_in=renamed_params["b_dec"].shape[0],
+        d_sae=renamed_params["b_enc"].shape[0],
+        k=k,
+        model_name=model_name,
+        hook_layer=layer,  # type: ignore
+        device=device,
+        dtype=dtype,
+    )
+
+    sae.load_state_dict(renamed_params)
+
+    sae.to(device=device, dtype=dtype)
+
+    d_sae, d_in = sae.W_dec.data.shape
+
+    assert d_sae >= d_in
+
+    normalized = sae.check_decoder_norms()
+    if not normalized:
+        raise ValueError("Decoder vectors are not normalized. Please normalize them")
+
+    return sae
+
+
 def load_sae(
     sae_repo_id: str,
     sae_filename: str,
@@ -238,12 +378,19 @@ def load_sae(
             device=device,
             dtype=dtype,
         )
+    elif sae_repo_id == "adamkarvonen/qwen3-8b-saes":
+        sae = load_dictionary_learning_batch_topk_sae(
+            repo_id=sae_repo_id,
+            filename=sae_filename,
+            layer=sae_layer,
+            model_name=model_name,
+            device=device,
+            dtype=dtype,
+        )
     else:
         raise ValueError(f"Unknown SAE repo ID: {sae_repo_id}")
 
     return sae
-
-
 # Model utilities
 def get_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = False):
     """Gets the residual stream submodule"""
@@ -252,7 +399,7 @@ def get_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = Fals
     if use_lora:
         if "pythia" in model_name:
             raise ValueError("Need to determine how to get submodule for LoRA")
-        elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name:
+        elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name or "Qwen" in model_name:
             return model.base_model.model.model.layers[layer]
         else:
             raise ValueError(f"Please add submodule for model {model_name}")
@@ -322,7 +469,7 @@ def collect_activations(
     return activations_BLD
 
 
-# Pydantic schema classes for JSONL output
+ Pydantic schema classes for JSONL output
 def load_max_acts_data(
     model_name: str,
     sae_layer: int,
@@ -333,18 +480,24 @@ def load_max_acts_data(
     """Load the max activating examples data."""
     acts_dir = "max_acts"
 
-    # Construct filename
-    acts_filename = f"acts_{model_name}_layer_{sae_layer}_trainer_{sae_width}_layer_percent_{layer_percent}_context_length_{context_length}.pt".replace(
-        "/", "_"
-    )
+    if "gemma" in model_name:
+        # Construct filename
+        acts_filename = f"acts_{model_name}_layer_{sae_layer}_trainer_{sae_width}_layer_percent_{layer_percent}_context_length_{context_length}.pt".replace(
+            "/", "_"
+        )
 
-    acts_path = os.path.join(acts_dir, acts_filename)
+        acts_path = os.path.join(acts_dir, acts_filename)
+
+    elif "Qwen" in model_name:
+        # NOTE: USING TRAINER 2 LAYER 9. Trainer 2 is width 65k.
+        acts_filename = "acts_Qwen_Qwen3-8B_layer_9_trainer_2_layer_percent_25_context_length_32.pt"
+        acts_path = os.path.join(acts_dir, acts_filename)
 
     # Download if not exists
     if not os.path.exists(acts_path):
-        print(f"📥 Downloading max acts data: {acts_filename}")
+        print(f"📥 Downloading max acts data: {acts_path}")
         try:
-            path_to_config = hf_hub_download(
+            hf_hub_download(
                 repo_id="adamkarvonen/sae_max_acts",
                 filename=acts_filename,
                 force_download=False,
@@ -361,7 +514,6 @@ def load_max_acts_data(
     acts_data = torch.load(acts_path, map_location=device)
 
     return acts_data
-
 
 def decode_tokens_to_sentences(tokens: torch.Tensor, tokenizer: AutoTokenizer, skip_bos: bool = True) -> list[str]:
     """Convert token tensors to readable sentences using batch decoding."""
@@ -509,6 +661,9 @@ def compute_sae_activations_for_sentences(
     # Process sentences in batches
     for i in range(0, len(sentences), batch_size):
         batch_sentences = sentences[i : i + batch_size]
+
+        # left pad NOT RIGHT PAD
+        tokenizer.padding_side = "left"  # type: ignore
 
         # Batch tokenize all sentences at once
         tokenized = tokenizer(
