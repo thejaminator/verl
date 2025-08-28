@@ -48,10 +48,8 @@ from huggingface_hub import hf_hub_download
 
 
 # Configuration and SAE classes
-def get_sae_info(sae_repo_id: str) -> tuple[int, int, int, str]:
-    sae_layer = 9
+def get_sae_info(sae_repo_id: str, sae_width: int = 131, sae_layer: int = 9) -> tuple[int, int, int, str]:
     sae_layer_percent = 25
-    sae_width = 131
 
     if sae_repo_id == "google/gemma-scope-9b-it-res":
         if sae_width == 16:
@@ -585,7 +583,7 @@ def find_most_similar_features(
 ) -> list[SimilarFeature]:
     """Find the most similar features to a target feature using cosine similarity of encoder vectors."""
     # Get encoder weights - shape: [d_in, d_sae]
-    W_enc = sae.W_enc.data  # Remove gradient tracking
+    W_enc = sae.W_enc.data
 
     # Get the target feature vector - shape: [d_in]
     target_vector = W_enc[:, target_feature_idx]

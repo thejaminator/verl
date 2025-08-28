@@ -102,14 +102,11 @@ def get_gemma_layer_module(actor_module: nn.Module, layer_number: int) -> nn.Mod
     if hasattr(unwrapped_module, "base_model") and isinstance(unwrapped_module.base_model, nn.Module):
         unwrapped_module = unwrapped_module.base_model
 
-    assert unwrapped_module
+    if unwrapped_module is None:
+        breakpoint()
+        raise ValueError(f"Unwrapped module is None: {unwrapped_module}")
 
-    from transformers.models.gemma2.modeling_gemma2 import Gemma2Model
-
-    if isinstance(unwrapped_module, Gemma2Model):
-        return unwrapped_module.layers[layer_number]
-    else:
-        raise ValueError(f"Unwrapped module is not a Gemma2Model: {type(unwrapped_module)}")
+    return unwrapped_module.layers[layer_number]
 
 
 class DataParallelPPOActor(BasePPOActor):

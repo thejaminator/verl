@@ -30,16 +30,12 @@ import gc
 import json
 
 # All necessary imports are now included above
-from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 
-import numpy as np
-import safetensors.torch
 import torch
-import torch.nn as nn
 import wandb
-from huggingface_hub import hf_hub_download, login, whoami
+from huggingface_hub import login, whoami
 from peft import LoraConfig, get_peft_model
 from pydantic import BaseModel
 from torch.nn.utils import clip_grad_norm_
@@ -48,6 +44,8 @@ from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.tokenization_utils import PreTrainedTokenizer
+
+from create_hard_negatives_v2 import get_sae_info, load_sae
 
 # ==============================================================================
 # 1. HUGGING FACE SETUP
@@ -197,25 +195,6 @@ This adapter was trained using the lightweight SAE introspection training script
 # ==============================================================================
 
 
-def get_sae_info(sae_repo_id: str, sae_width: int, sae_layer: int) -> str:
-    if sae_repo_id == "google/gemma-scope-9b-it-res":
-        if sae_width == 16:
-            sae_filename = f"layer_{sae_layer}/width_16k/average_l0_88/params.npz"
-        elif sae_width == 131:
-            sae_filename = f"layer_{sae_layer}/width_131k/average_l0_121/params.npz"
-        else:
-            raise ValueError(f"Unknown SAE width: {sae_width}")
-        return sae_filename
-    # elif sae_repo_id == "fnlp/Llama3_1-8B-Base-LXR-32x":
-    #     if sae_width != 32:
-    #         raise ValueError(
-    #             f"Only expansion factor 32x is supported for {sae_repo_id}. Got: {sae_width}"
-    #         )
-    #     return ""
-    else:
-        raise ValueError(f"Unknown SAE repo ID: {sae_repo_id}")
-
-
 @dataclass
 class SelfInterpTrainingConfig:
     """Configuration settings for the script."""
@@ -263,7 +242,9 @@ class SelfInterpTrainingConfig:
 
     def __post_init__(self):
         """Called after the dataclass is initialized."""
-        sae_filename = get_sae_info(self.sae_repo_id, self.sae_width, self.sae_layer)
+        _, _, _, sae_filename = get_sae_info(
+            sae_layer=self.sae_layer, sae_repo_id=self.sae_repo_id, sae_width=self.sae_width
+        )
         self.sae_filename = sae_filename
 
 
@@ -450,175 +431,6 @@ def collect_activations(
         raise RuntimeError("Failed to collect activations")
 
     return activations_BLD
-
-
-# ==============================================================================
-# 5. SAE CLASSES
-# ==============================================================================
-
-
-class BaseSAE(nn.Module, ABC):
-    def __init__(
-        self,
-        d_in: int,
-        d_sae: int,
-        model_name: str,
-        hook_layer: int,
-        device: torch.device,
-        dtype: torch.dtype,
-        hook_name: str | None = None,
-    ):
-        super().__init__()
-
-        # Required parameters
-        self.W_enc = nn.Parameter(torch.zeros(d_in, d_sae))
-        self.W_dec = nn.Parameter(torch.zeros(d_sae, d_in))
-
-        self.b_enc = nn.Parameter(torch.zeros(d_sae))
-        self.b_dec = nn.Parameter(torch.zeros(d_in))
-
-        # Required attributes
-        self.device: torch.device = device
-        self.dtype: torch.dtype = dtype
-        self.hook_layer = hook_layer
-
-        hook_name = hook_name or f"blocks.{hook_layer}.hook_resid_post"
-        self.to(dtype=self.dtype, device=self.device)
-
-    @abstractmethod
-    def encode(self, x: torch.Tensor):
-        """Must be implemented by child classes"""
-        raise NotImplementedError("Encode method must be implemented by child classes")
-
-    @abstractmethod
-    def decode(self, feature_acts: torch.Tensor):
-        """Must be implemented by child classes"""
-        raise NotImplementedError("Encode method must be implemented by child classes")
-
-    @abstractmethod
-    def forward(self, x: torch.Tensor):
-        """Must be implemented by child classes"""
-        raise NotImplementedError("Encode method must be implemented by child classes")
-
-    def to(self, *args, **kwargs):
-        """Handle device and dtype updates"""
-        super().to(*args, **kwargs)
-        device = kwargs.get("device", None)
-        dtype = kwargs.get("dtype", None)
-
-        if device:
-            self.device = device
-        if dtype:
-            self.dtype = dtype
-        return self
-
-    @torch.no_grad()
-    def check_decoder_norms(self) -> bool:
-        """
-        It's important to check that the decoder weights are normalized.
-        """
-        norms = torch.norm(self.W_dec, dim=1).to(dtype=self.dtype, device=self.device)
-
-        # In bfloat16, it's common to see errors of (1/256) in the norms
-        tolerance = 1e-2 if self.W_dec.dtype in [torch.bfloat16, torch.float16] else 1e-5
-
-        if torch.allclose(norms, torch.ones_like(norms), atol=tolerance):
-            return True
-        else:
-            max_diff = torch.max(torch.abs(norms - torch.ones_like(norms)))
-            print(f"Decoder weights are not normalized. Max diff: {max_diff.item()}")
-            return False
-
-
-class JumpReluSAE(BaseSAE):
-    def __init__(
-        self,
-        d_in: int,
-        d_sae: int,
-        model_name: str,
-        hook_layer: int,
-        device: torch.device,
-        dtype: torch.dtype,
-        hook_name: str | None = None,
-    ):
-        hook_name = hook_name or f"blocks.{hook_layer}.hook_resid_post"
-        super().__init__(d_in, d_sae, model_name, hook_layer, device, dtype, hook_name)
-
-        self.threshold = nn.Parameter(torch.zeros(d_sae, dtype=dtype, device=device))
-        self.d_sae = d_sae
-        self.d_in = d_in
-
-    def encode(self, x: torch.Tensor):
-        pre_acts = x @ self.W_enc + self.b_enc
-        mask = pre_acts > self.threshold
-        acts = mask * torch.nn.functional.relu(pre_acts)
-        return acts
-
-    def decode(self, feature_acts: torch.Tensor):
-        return feature_acts @ self.W_dec + self.b_dec
-
-    def forward(self, x: torch.Tensor):
-        x = self.encode(x)
-        recon = self.decode(x)
-        return recon
-
-
-class TopKSAE(BaseSAE):
-    def __init__(
-        self,
-        d_in: int,
-        d_sae: int,
-        k: int,
-        model_name: str,
-        hook_layer: int,
-        device: torch.device,
-        dtype: torch.dtype,
-        use_threshold: bool = False,
-        hook_name: str | None = None,
-    ):
-        hook_name = hook_name or f"blocks.{hook_layer}.hook_resid_post"
-        super().__init__(d_in, d_sae, model_name, hook_layer, device, dtype, hook_name)
-
-        assert isinstance(k, int) and k > 0
-        self.register_buffer("k", torch.tensor(k, dtype=torch.int, device=device))
-        self.d_sae = d_sae
-        self.d_in = d_in
-        self.pre_encoder_bias = False
-
-        self.use_threshold = use_threshold
-        if use_threshold:
-            # Optional global threshold to use during inference. Must be positive.
-            self.register_buffer("threshold", torch.tensor(-1.0, dtype=dtype, device=device))
-
-    def encode(self, x: torch.Tensor):
-        """Note: x can be either shape (B, F) or (B, L, F)"""
-        pre_acts = x @ self.W_enc + self.b_enc
-
-        # Get top-k activations
-        top_acts, top_indices = torch.topk(pre_acts, self.k.item(), dim=-1)
-
-        # Create sparse representation
-        acts = torch.zeros_like(pre_acts)
-        if len(acts.shape) == 2:  # (B, F)
-            batch_indices = torch.arange(acts.shape[0], device=acts.device).unsqueeze(1)
-            acts[batch_indices, top_indices] = torch.nn.functional.relu(top_acts)
-        else:  # (B, L, F)
-            batch_indices = torch.arange(acts.shape[0], device=acts.device).unsqueeze(1).unsqueeze(2)
-            seq_indices = torch.arange(acts.shape[1], device=acts.device).unsqueeze(0).unsqueeze(2)
-            acts[batch_indices, seq_indices, top_indices] = torch.nn.functional.relu(top_acts)
-
-        if self.use_threshold and hasattr(self, "threshold"):
-            acts = acts * (acts > self.threshold)
-
-        return acts
-
-    def decode(self, feature_acts: torch.Tensor):
-        return feature_acts @ self.W_dec + self.b_dec
-
-    def forward(self, x: torch.Tensor):
-        x = self.encode(x)
-        recon = self.decode(x)
-        return recon
 
 
 # ==============================================================================
@@ -1029,118 +841,6 @@ def save_logs(
 
 
 # ==============================================================================
-# 7. SAE LOADING FUNCTIONS
-# ==============================================================================
-
-
-def load_gemma_scope_jumprelu_sae(
-    repo_id: str,
-    filename: str,
-    layer: int,
-    model_name: str,
-    device: torch.device,
-    dtype: torch.dtype,
-    local_dir: str = "downloaded_saes",
-) -> JumpReluSAE:
-    path_to_params = hf_hub_download(
-        repo_id=repo_id,
-        filename=filename,
-        force_download=False,
-        local_dir=local_dir,
-    )
-    pytorch_path = path_to_params.replace(".npz", ".pt")
-
-    # Doing this because npz files are often insanely slow to load
-    if not os.path.exists(pytorch_path):
-        params = np.load(path_to_params)
-        pt_params = {k: torch.from_numpy(v) for k, v in params.items()}
-        torch.save(pt_params, pytorch_path)
-
-    pt_params = torch.load(pytorch_path)
-
-    d_in = pt_params["W_enc"].shape[0]
-    d_sae = pt_params["W_enc"].shape[1]
-
-    assert d_sae >= d_in
-
-    sae = JumpReluSAE(d_in, d_sae, model_name, layer, device, dtype)
-    sae.load_state_dict(pt_params)
-    sae.to(dtype=dtype, device=device)
-
-    normalized = sae.check_decoder_norms()
-    if not normalized:
-        raise ValueError("Decoder norms are not normalized. Implement a normalization method.")
-
-    return sae
-
-
-def load_llama_scope_topk_sae(
-    model_name: str,
-    device: torch.device,
-    dtype: torch.dtype,
-    layer: int,
-    expansion_factor: int,
-) -> TopKSAE:
-    repo_id = f"fnlp/Llama3_1-8B-Base-LXR-{expansion_factor}x"
-    config_filename = f"Llama3_1-8B-Base-L{layer}R-{expansion_factor}x/hyperparams.json"
-    filename = f"Llama3_1-8B-Base-L{layer}R-{expansion_factor}x/checkpoints/final.safetensors"
-
-    path_to_params = hf_hub_download(
-        repo_id=repo_id,
-        filename=filename,
-        force_download=False,
-        local_dir="downloaded_saes",
-    )
-
-    path_to_config = hf_hub_download(
-        repo_id=repo_id,
-        filename=config_filename,
-        force_download=False,
-        local_dir="downloaded_saes",
-    )
-
-    with open(path_to_config) as f:
-        config = json.load(f)
-
-    threshold = config["jump_relu_threshold"]
-    k = config["top_k"]
-
-    pt_params = safetensors.torch.load_file(path_to_params)
-
-    key_mapping = {
-        "encoder.weight": "W_enc",
-        "decoder.weight": "W_dec",
-        "encoder.bias": "b_enc",
-        "decoder.bias": "b_dec",
-    }
-
-    renamed_params = {key_mapping.get(k, k): v for k, v in pt_params.items()}
-    renamed_params["W_enc"] = renamed_params["W_enc"].T
-    renamed_params["W_dec"] = renamed_params["W_dec"].T
-    renamed_params["k"] = torch.tensor(k, dtype=torch.int, device=device)
-    renamed_params["threshold"] = torch.tensor(threshold, dtype=dtype, device=device)
-
-    sae = TopKSAE(
-        d_in=renamed_params["b_dec"].shape[0],
-        d_sae=renamed_params["b_enc"].shape[0],
-        k=k,
-        model_name=model_name,
-        hook_layer=layer,
-        device=device,
-        dtype=dtype,
-        use_threshold=True,
-    )
-
-    sae.load_state_dict(renamed_params)
-    sae.to(device=device, dtype=dtype)
-
-    # https://github.com/OpenMOSS/Language-Model-SAEs/blob/25180e32e82176924b62ab30a75fffd234260a9e/src/lm_saes/sae.py#L172
-    # openmoss scaling strategy
-    dataset_average_activation_norm = config["dataset_average_activation_norm"]
-    input_norm_factor = sae.d_in**0.5 / dataset_average_activation_norm["in"]
-    sae.b_enc.data /= input_norm_factor
-
-    return sae
 
 
 # ==============================================================================
@@ -1173,37 +873,6 @@ def load_model(
         model.print_trainable_parameters()
 
     return model
-
-
-def load_sae(
-    cfg: SelfInterpTrainingConfig,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> BaseSAE:
-    # Note: There's some duplication here with saes.sae_loading_utils.py
-    print(f"Loading SAE for layer {cfg.sae_layer} from {cfg.sae_repo_id}...")
-
-    if cfg.sae_repo_id == "google/gemma-scope-9b-it-res":
-        sae = load_gemma_scope_jumprelu_sae(
-            repo_id=cfg.sae_repo_id,
-            filename=cfg.sae_filename,
-            layer=cfg.sae_layer,
-            model_name=cfg.model_name,
-            device=device,
-            dtype=dtype,
-        )
-    elif cfg.sae_repo_id == "fnlp/Llama3_1-8B-Base-LXR-32x":
-        sae = load_llama_scope_topk_sae(
-            model_name=cfg.model_name,
-            device=device,
-            dtype=dtype,
-            layer=cfg.sae_layer,
-            expansion_factor=cfg.sae_width,
-        )
-    else:
-        raise ValueError(f"Unknown SAE repo ID: {cfg.sae_repo_id}")
-
-    return sae
 
 
 def get_bos_eos_pad_mask(tokenizer: PreTrainedTokenizer, token_ids: torch.Tensor) -> torch.Tensor:
@@ -1424,7 +1093,13 @@ def train_model(
     # wandb finishing is handled in main()
 
 
-def main(explanations_file: str, hf_repo_name: Optional[str] = None):
+def main(
+    explanations_file: str,
+    model_name: str,
+    sae_repo_id: str,
+    hook_layer: int,
+    hf_repo_name: Optional[str] = None,
+):
     """Main script logic."""
 
     # Set up Hugging Face login at the start
@@ -1455,7 +1130,7 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
         # SAE settings
         sae_repo_id="google/gemma-scope-9b-it-res",
         sae_layer=9,
-        hook_onto_layer=0,
+        hook_onto_layer=hook_layer,
         sae_width=131,
         # Experiment settings
         eval_set_size=100,
@@ -1517,7 +1192,14 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
 
     model = load_model(cfg, device, dtype, use_lora=cfg.use_lora)
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
-    sae = load_sae(cfg, device, dtype)
+    sae = load_sae(
+        sae_repo_id=cfg.sae_repo_id,
+        sae_filename=cfg.sae_filename,
+        sae_layer=cfg.sae_layer,
+        model_name=cfg.model_name,
+        device=device,
+        dtype=dtype,
+    )
     submodule = get_submodule(model, cfg.hook_onto_layer, cfg.use_lora)
 
     if not tokenizer.pad_token:
@@ -1586,5 +1268,16 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
 
 
 if __name__ == "__main__":
-    explanations_file = "data/20aug_sae_sfted_gpt-5-mini-2025-08-07.jsonl"
-    main(explanations_file, hf_repo_name="gemma-hook-layer-0")
+    # main(
+    #     explanations_file="data/20aug_sae_sfted_gpt-5-mini-2025-08-07.jsonl",
+    #     hf_repo_name="gemma-hook-layer-0",
+    #     model_name="google/gemma-2-9b-it",
+    #     sae_repo_id="google/gemma-scope-9b-it-res",
+    # )
+    main(
+        explanations_file="data/qwen_28aug_sae_sfted_gpt-5-mini-2025-08-07.jsonl",
+        hf_repo_name="qwen-hook-layer-0",
+        model_name="Qwen/Qwen3-8B",
+        hook_layer=9,
+        sae_repo_id="adamkarvonen/qwen3-8b-saes",
+    )
