@@ -1586,5 +1586,5 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
 
 
 if __name__ == "__main__":
-    explanations_file = "20aug_sae_sfted_gpt-5-mini-2025-08-07.jsonl"
+    explanations_file = "data/20aug_sae_sfted_gpt-5-mini-2025-08-07.jsonl"
     main(explanations_file, hf_repo_name="gemma-hook-layer-0")
