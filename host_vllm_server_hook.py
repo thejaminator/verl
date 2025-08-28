@@ -49,9 +49,10 @@ load_loras = [
     # "thejaminator/gemma-introspection-20250821-step-1000",
     # 8000 steps
     "thejaminator/gemma-introspection-20250821",
-    "thejaminator/gemma-25aug-22k",
-    "thejaminator/gemma-feelings-step-4000",
-    "thejaminator/gemma-feelings",
+    "thejaminator/gemma-hook-layer-0",
+    # "thejaminator/gemma-25aug-22k",
+    # "thejaminator/gemma-feelings-step-4000",
+    # "thejaminator/gemma-feelings",
     # "thejaminator/gemma-retry",
     # "thejaminator/gemma-multiepoch",
     # "thejaminator/gemma-posneg-cot",
