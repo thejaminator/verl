@@ -1453,7 +1453,7 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
         eval_batch_size=128,  # 8 * 16
         # SAE settings
         sae_repo_id="google/gemma-scope-9b-it-res",
-        sae_layer=9,
+        sae_layer=0,
         sae_width=131,
         # Experiment settings
         eval_set_size=100,
@@ -1585,4 +1585,4 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
 
 if __name__ == "__main__":
     explanations_file = "20aug_sae_sfted_gpt-5-mini-2025-08-07.jsonl"
-    main(explanations_file, hf_repo_name="gemma-retry")
+    main(explanations_file, hf_repo_name="gemma-layer-0")
