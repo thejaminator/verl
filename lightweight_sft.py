@@ -227,6 +227,7 @@ class SelfInterpTrainingConfig:
 
     # --- SAE (Sparse Autoencoder) Settings ---
     sae_repo_id: str
+    hook_onto_layer: int
     sae_layer: int
     sae_width: int
 
@@ -1453,7 +1454,8 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
         eval_batch_size=128,  # 8 * 16
         # SAE settings
         sae_repo_id="google/gemma-scope-9b-it-res",
-        sae_layer=0,
+        sae_layer=9,
+        hook_onto_layer=0,
         sae_width=131,
         # Experiment settings
         eval_set_size=100,
@@ -1516,7 +1518,7 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
     model = load_model(cfg, device, dtype, use_lora=cfg.use_lora)
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
     sae = load_sae(cfg, device, dtype)
-    submodule = get_submodule(model, cfg.sae_layer, cfg.use_lora)
+    submodule = get_submodule(model, cfg.hook_onto_layer, cfg.use_lora)
 
     if not tokenizer.pad_token:
         tokenizer.pad_token = tokenizer.eos_token
@@ -1585,4 +1587,4 @@ def main(explanations_file: str, hf_repo_name: Optional[str] = None):
 
 if __name__ == "__main__":
     explanations_file = "20aug_sae_sfted_gpt-5-mini-2025-08-07.jsonl"
-    main(explanations_file, hf_repo_name="gemma-layer-0")
+    main(explanations_file, hf_repo_name="gemma-hook-layer-0")
