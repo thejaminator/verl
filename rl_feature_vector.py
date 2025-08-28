@@ -694,7 +694,7 @@ PARAMS = VerlParams(
     micro_batch=4,  # number of prompts. In reality, will be micro_batch * num_generations.
     micro_batch_size_per_gpu=4,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
     warmup_steps=5,
-    gradient_accumulation_steps=2,
+    gradient_accumulation_steps=1,
     learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
     beta=0.02,
     lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model

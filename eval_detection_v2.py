@@ -1123,7 +1123,7 @@ if __name__ == "__main__":
             #     use_steering=True,
             # ),
             # thejaminator/grpo-feature-vector-step-55
-            ModelInfo(model="thejaminator/grpo-feature-vector-step-55", display_name="SFT + RL 200 samples", use_steering=True),
+            ModelInfo(model="thejaminator/grpo-feature-vector-step-55", display_name="SFT + RL 200 steps", use_steering=True),
             ModelInfo(
                 model="thejaminator/gemma-introspection-20250821-merged",
                 display_name="SFT 8000 samples",
