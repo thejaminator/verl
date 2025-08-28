@@ -691,12 +691,12 @@ PARAMS = VerlParams(
     # max_response_length=6_000,  # Reduced from 6000, matching reference
     # micro_batch=8,
     # micro_batch_size_per_gpu=8,
-    micro_batch=2,  # number of prompts. In reality, will be micro_batch * num_generations.
-    micro_batch_size_per_gpu=2,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
+    micro_batch=4,  # number of prompts. In reality, will be micro_batch * num_generations.
+    micro_batch_size_per_gpu=4,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
     warmup_steps=5,
-    gradient_accumulation_steps=1,
+    gradient_accumulation_steps=2,
     learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
-    beta=0.01,
+    beta=0.02,
     lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
     lora_alpha=128.0,  # Typically 2x lora_rank
     target_modules="all-linear",  # Apply LoRA to all linear layers
