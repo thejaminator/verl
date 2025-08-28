@@ -34,8 +34,7 @@ MODEL_NAME = "google/gemma-2-9b-it"
 DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
 CTX_LEN = 2000
-LAYER = 9  # Target layer for activation steering (matching lightweight_sft.py)
-
+SAE_LAYER = 9  # Target layer for activation steering (matching lightweight_sft.py)
 GENERATE_WAIT_SECONDS = 2
 
 # SAE Configuration
@@ -58,7 +57,7 @@ load_loras = [
     # "thejaminator/gemma-posneg-cot",
 ]
 SAE_WIDTH = 131  # Can be 16 or 131. Check what we trained with?
-SAE_FILENAME = f"layer_{LAYER}/width_131k/average_l0_121/params.npz"
+SAE_FILENAME = f"layer_{SAE_LAYER}/width_131k/average_l0_121/params.npz"
 STEERING_COEFFICIENT = 2.0
 # INFO 08-21 04:36:17 [executor_base.py:118] Maximum concurrency for 2000 tokens per request: 55.05x
 gpu_memory_utilization = 0.3
@@ -79,6 +78,7 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: Optional[int] = 100
     temperature: Optional[float] = 0.0
     sae_index: Optional[int] = None  # Custom parameter for SAE feature index
+    hook_onto_layer: int = 9  # Default to 9 for historical reasons
 
 
 class Choice(BaseModel):
@@ -144,7 +144,7 @@ class VLLMServer:
         self.sae = load_gemma_scope_sae(
             repo_id=SAE_REPO_ID,
             filename=SAE_FILENAME,
-            layer=LAYER,
+            layer=SAE_LAYER,
             device=DEVICE,
             dtype=DTYPE,
         )
@@ -156,15 +156,15 @@ class VLLMServer:
         self.queues: dict[str, deque[QueuedRequest]] = defaultdict(deque)
         self.processing_lock = asyncio.Lock()  # Ensure synchronous generation
 
-    def get_model_key(self, model_name: str) -> str:
+    def get_model_key(self, model_name: str, hook_onto_layer: int) -> str:
         """Get the key for queue management based on model name."""
         if model_name == MODEL_NAME:
             return "base"
-        return model_name
+        return model_name + str(hook_onto_layer)
 
     async def add_to_queue(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
         """Add request to appropriate queue and handle processing."""
-        model_key = self.get_model_key(request.model)
+        model_key = self.get_model_key(request.model, hook_onto_layer=request.hook_onto_layer)
         request_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
 
         # Create future for async response
@@ -282,9 +282,11 @@ class VLLMServer:
                 device=DEVICE,
                 dtype=DTYPE,
             )
+            # get the layer number from the hook_onto_layer
+            layer_number = batch_requests[0].request.hook_onto_layer
 
             # Generate batch with steering
-            target_layer = self.model.model.layers[LAYER]
+            target_layer = self.model.model.layers[layer_number]
             with torch.no_grad():
                 with add_hook(target_layer, hook_fn):
                     outputs = self.llm.generate(

@@ -847,7 +847,7 @@ async def run_gemma_steering(
             extra_body={
                 "sae_index": sae.sae_id,  # the server will use this to get the SAE feature vector
             },
-            temperature=1.0, # set to 0.0 for testing
+            temperature=1.0,  # set to 0.0 for testing
         ),
         try_number=try_number,
     )
@@ -1123,13 +1123,14 @@ if __name__ == "__main__":
             #     use_steering=True,
             # ),
             # thejaminator/grpo-feature-vector-step-55
-            ModelInfo(model="thejaminator/grpo-feature-vector-step-55", display_name="SFT + RL 200 steps", use_steering=True),
+            ModelInfo(
+                model="thejaminator/grpo-feature-vector-step-55", display_name="SFT + RL 200 steps", use_steering=True
+            ),
             ModelInfo(
                 model="thejaminator/gemma-introspection-20250821-merged",
                 display_name="SFT 8000 samples",
                 use_steering=True,
             ),
-            
             # ModelInfo(model="gpt-5-mini-2025-08-07", display_name="GPT-5-mini", reasoning_effort="low"),
             # meta-llama/llama-3-70b-instruct
             # ModelInfo(model="gpt-4.1-2025-04-14", display_name="GPT-4.1"),
