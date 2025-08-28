@@ -249,12 +249,12 @@ class BatchTopKSAE(BaseSAE):
         post_relu_feat_acts_BF = torch.nn.functional.relu((x - self.b_dec) @ self.W_enc + self.b_enc)
 
         if self.use_threshold:
-            if self.threshold < 0:
+            if self.threshold < 0:  # type: ignore
                 raise ValueError("Threshold is not set. The threshold must be set to use it during inference")
-            encoded_acts_BF = post_relu_feat_acts_BF * (post_relu_feat_acts_BF > self.threshold)
+            encoded_acts_BF = post_relu_feat_acts_BF * (post_relu_feat_acts_BF > self.threshold)  # type: ignore
             return encoded_acts_BF
 
-        post_topk = post_relu_feat_acts_BF.topk(self.k, sorted=False, dim=-1)
+        post_topk = post_relu_feat_acts_BF.topk(self.k, sorted=False, dim=-1)  # type: ignore
 
         tops_acts_BK = post_topk.values
         top_indices_BK = post_topk.indices
@@ -398,20 +398,20 @@ def load_sae(
 # Model utilities
 def get_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = False):
     """Gets the residual stream submodule"""
-    model_name = model.config._name_or_path
+    model_name = model.config._name_or_path  # type: ignore
 
     if use_lora:
         if "pythia" in model_name:
             raise ValueError("Need to determine how to get submodule for LoRA")
         elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name or "Qwen" in model_name:
-            return model.base_model.model.model.layers[layer]
+            return model.base_model.model.model.layers[layer]  # type: ignore
         else:
             raise ValueError(f"Please add submodule for model {model_name}")
 
     if "pythia" in model_name:
-        return model.gpt_neox.layers[layer]
+        return model.gpt_neox.layers[layer]  # type: ignore
     elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name or "Qwen" in model_name:
-        return model.model.layers[layer]
+        return model.model.layers[layer]  # type: ignore
     else:
         raise ValueError(f"Please add submodule for model {model_name}")
 
@@ -461,7 +461,7 @@ def collect_activations(
     try:
         # Use the selected context manager
         with context_manager:
-            _ = model(**inputs_BL)
+            _ = model(**inputs_BL)  # type: ignore
     except EarlyStopException:
         pass
     except Exception as e:
@@ -470,7 +470,7 @@ def collect_activations(
     finally:
         handle.remove()
 
-    return activations_BLD
+    return activations_BLD  # type: ignore
 
 
 # Pydantic schema classes for JSONL output
@@ -530,7 +530,7 @@ def decode_tokens_to_sentences(tokens: torch.Tensor, tokenizer: AutoTokenizer, s
     token_lists = tokens.tolist()
 
     # Batch decode all sequences at once
-    sentences = tokenizer.batch_decode(token_lists, skip_special_tokens=True)
+    sentences = tokenizer.batch_decode(token_lists, skip_special_tokens=True)  # type: ignore
 
     # Strip whitespace from each sentence
     sentences = [sentence.strip() for sentence in sentences]
@@ -644,9 +644,9 @@ def load_model_and_sae(
     sae = load_sae(sae_repo_id, sae_filename, sae_layer, model_name, device, dtype)
 
     # Get submodule for activation collection
-    submodule = get_submodule(model, sae_layer)
+    submodule = get_submodule(model, sae_layer)  # type: ignore
 
-    return model, tokenizer, sae, submodule
+    return model, tokenizer, sae, submodule  # type: ignore
 
 
 def compute_sae_activations_for_sentences(
@@ -678,7 +678,7 @@ def compute_sae_activations_for_sentences(
             truncation=True,
             max_length=512,
             padding=True,  # Pad to same length for batching
-        ).to(model.device)
+        ).to(model.device)  # type: ignore
 
         with torch.no_grad():
             try:
@@ -686,7 +686,7 @@ def compute_sae_activations_for_sentences(
                 layer_acts_BLD = collect_activations(model, submodule, tokenized)
 
                 # Encode through SAE
-                encoded_acts_BLF = sae.encode(layer_acts_BLD)
+                encoded_acts_BLF = sae.encode(layer_acts_BLD)  # type: ignore
 
                 # Process each sentence in the batch
                 for batch_idx, sentence in enumerate(batch_sentences):
@@ -705,7 +705,7 @@ def compute_sae_activations_for_sentences(
                         if not is_valid:  # Skip padding tokens
                             continue
 
-                        token_str = tokenizer.decode([token_id.item()], skip_special_tokens=True)
+                        token_str = tokenizer.decode([token_id.item()], skip_special_tokens=True)  # type: ignore
                         tokens_str.append(token_str)
                         if activation.item() > 0:
                             rounded_to_1dp = round(activation.item(), 1)
@@ -802,7 +802,7 @@ def main(
     print("🚀 Loading model and SAE...")
     model, tokenizer, sae, submodule = load_model_and_sae(model_name, sae_repo_id, sae_filename, sae_layer)
     # how many features in sae?
-    print(f"🔍 Number of features in SAE: {len(sae.W_dec)}")
+    print(f"🔍 Number of features in SAE: {len(sae.W_dec)}")  # type: ignore
 
     # Process each feature index
 
@@ -836,7 +836,7 @@ def main(
             all_similar_sentences = []
             similar_feature_mapping = []  # Track which sentences belong to which similar feature
 
-            for similar_feature in enumerate(similar_features):
+            for idx, similar_feature in enumerate(similar_features):
                 # Get sentences for this similar feature
                 similar_max_acts = get_feature_max_activating_sentences(
                     acts_data, tokenizer, similar_feature.feature_idx, num_sentences=negative_sentences
