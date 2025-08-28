@@ -23,11 +23,11 @@ TODO:
 5. round activaiton to 2 d.p
 """
 
+import json
 import os
 from dataclasses import dataclass
 from typing import Sequence
 
-import json
 import torch
 import torch.nn.functional as F
 
@@ -68,6 +68,7 @@ def get_sae_info(sae_repo_id: str) -> tuple[int, int, int, str]:
     else:
         raise ValueError(f"Unknown SAE repo ID: {sae_repo_id}")
     return sae_width, sae_layer, sae_layer_percent, sae_filename
+
 
 # Configuration variables - no longer need a config class
 
@@ -392,6 +393,8 @@ def load_sae(
         raise ValueError(f"Unknown SAE repo ID: {sae_repo_id}")
 
     return sae
+
+
 # Model utilities
 def get_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = False):
     """Gets the residual stream submodule"""
@@ -470,7 +473,7 @@ def collect_activations(
     return activations_BLD
 
 
- # Pydantic schema classes for JSONL output
+# Pydantic schema classes for JSONL output
 def load_max_acts_data(
     model_name: str,
     sae_layer: int,
@@ -515,6 +518,7 @@ def load_max_acts_data(
     acts_data = torch.load(acts_path, map_location=device)
 
     return acts_data
+
 
 def decode_tokens_to_sentences(tokens: torch.Tensor, tokenizer: AutoTokenizer, skip_bos: bool = True) -> list[str]:
     """Convert token tensors to readable sentences using batch decoding."""
@@ -832,13 +836,15 @@ def main(
             all_similar_sentences = []
             similar_feature_mapping = []  # Track which sentences belong to which similar feature
 
-            for similar_feature in similar_features:
+            for similar_feature in enumerate(similar_features):
                 # Get sentences for this similar feature
                 similar_max_acts = get_feature_max_activating_sentences(
                     acts_data, tokenizer, similar_feature.feature_idx, num_sentences=negative_sentences
                 )
                 # sometimes empty???
                 candidate_similar_sentences = [s for s in similar_max_acts.sentences if s != ""]
+                if idx == 0:
+                    print(f"candidate_similar_sentences: {candidate_similar_sentences}")
 
                 # Track the range of sentences for this feature
                 start_idx = len(all_similar_sentences)

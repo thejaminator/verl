@@ -18,13 +18,9 @@ from detection_eval.caller import (
 )
 from detection_eval.detection_basemodels import (
     SAEV2,
+    SAEActivationsV2,
     SentenceInfoV2,
-)
-from detection_eval.detection_basemodels import (
-    SAEActivationsV2 as SAEActivationsV2,
-)
-from detection_eval.detection_basemodels import (
-    TokenActivationV2 as TokenActivationV2,
+    TokenActivationV2,
 )
 from detection_eval.steering_hooks import X_PROMPT
 
@@ -1104,10 +1100,10 @@ if __name__ == "__main__":
                 display_name="GPT-5-mini<br>(extrospecting<br>sentences)",
                 reasoning_effort="medium",
             ),
-            ModelInfo(
-                model="meta-llama/llama-3-70b-instruct",
-                display_name="Llama-3-70b<br>(extrospecting<br>sentences)",
-            ),
+            # ModelInfo(
+            #     model="meta-llama/llama-3-70b-instruct",
+            #     display_name="Llama-3-70b<br>(extrospecting<br>sentences)",
+            # ),
             # ModelInfo(
             #     model="thejaminator/gemma-introspection-20250821-step-250",
             #     display_name="SFT 1000<br>Gemma<br>(introspecting)",
@@ -1123,19 +1119,19 @@ if __name__ == "__main__":
             #     display_name="SFT 4000",
             #     use_steering=True,
             # ),
-            ModelInfo(
-                model="thejaminator/gemma-introspection-20250821",
-                display_name="SFT 8000, layer 9",
-                use_steering=True,
-                hook_onto_layer=9,
-            ),
-            # thejaminator/gemma-hook-layer-0
-            ModelInfo(
-                model="thejaminator/gemma-hook-layer-0",
-                display_name="SFT 8000, layer 0",
-                use_steering=True,
-                hook_onto_layer=0,
-            ),
+            # ModelInfo(
+            #     model="thejaminator/gemma-introspection-20250821",
+            #     display_name="SFT 8000, layer 9",
+            #     use_steering=True,
+            #     hook_onto_layer=9,
+            # ),
+            # # thejaminator/gemma-hook-layer-0
+            # ModelInfo(
+            #     model="thejaminator/gemma-hook-layer-0",
+            #     display_name="SFT 8000, layer 0",
+            #     use_steering=True,
+            #     hook_onto_layer=0,
+            # ),
             # ModelInfo(
             #     model="thejaminator/gemma-multiepoch",
             #     display_name="SFT 8000 * 4 epochs",
@@ -1165,11 +1161,12 @@ if __name__ == "__main__":
     )
 
     # created with create_hard_negative_and_feature_vector.py
-    sae_file = "data/hard_negatives_100_000_to_100_200_v2.jsonl"
+    # sae_file = "data/hard_negatives_100_000_to_100_200_v2.jsonl"
+    sae_file = "data/qwen_hard_negatives_0_to_200.jsonl"
     # sae_file = "hard_negatives_0_to_82000.jsonl"
     # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
     # Which to use for constructing explanations vs testing detection?
-    saes_to_test = 200
+    saes_to_test = 10
     sae_start_index = 0
     # sae_start_index = 20_000  # not in train set for the trained model
 

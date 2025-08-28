@@ -1,6 +1,7 @@
 import asyncio
 from typing import Any
 
+from eval_detection import evaluate_sentence_matching
 from slist import Slist
 
 from detection_eval.caller import (
@@ -12,7 +13,6 @@ from detection_eval.caller import (
 )
 from detection_eval.detection_basemodels import SAEV2, SAEVerlData, SAEVerlDataTypedDict
 from detection_eval.detection_basemodels import SAEActivationsV2 as SAEActivationsV2
-from eval_detection import evaluate_sentence_matching
 from eval_detection_v2 import (
     DetectionResult,
     SAETrainTestWithExplanation,
