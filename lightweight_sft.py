@@ -45,7 +45,7 @@ from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.tokenization_utils import PreTrainedTokenizer
 
-from create_hard_negatives_v2 import get_sae_info, load_sae
+from create_hard_negatives_v2 import get_sae_info, load_sae, BaseSAE, JumpReluSAE, get_submodule
 
 # ==============================================================================
 # 1. HUGGING FACE SETUP
@@ -358,25 +358,6 @@ class BatchData:
 # 4. MODEL UTILITIES
 # ==============================================================================
 
-
-def get_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = False):
-    """Gets the residual stream submodule"""
-    model_name = model.config._name_or_path
-
-    if use_lora:
-        if "pythia" in model_name:
-            raise ValueError("Need to determine how to get submodule for LoRA")
-        elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name:
-            return model.base_model.model.model.layers[layer]
-        else:
-            raise ValueError(f"Please add submodule for model {model_name}")
-
-    if "pythia" in model_name:
-        return model.gpt_neox.layers[layer]
-    elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name:
-        return model.model.layers[layer]
-    else:
-        raise ValueError(f"Please add submodule for model {model_name}")
 
 
 class EarlyStopException(Exception):
@@ -1124,11 +1105,11 @@ def main(
     explanations: list[SAEExplained] = load_explanations_from_jsonl(explanations_file)
     cfg = SelfInterpTrainingConfig(
         # Model settings
-        model_name="google/gemma-2-9b-it",
-        train_batch_size=2,
+        model_name=model_name,
+        train_batch_size=4,
         eval_batch_size=128,  # 8 * 16
         # SAE settings
-        sae_repo_id="google/gemma-scope-9b-it-res",
+        sae_repo_id=sae_repo_id,
         sae_layer=9,
         hook_onto_layer=hook_layer,
         sae_width=131,
@@ -1149,9 +1130,9 @@ def main(
         lora_target_modules="all-linear",
         # Training settings
         lr=2e-5,
-        eval_steps=1000,
+        eval_steps=99999999,
         num_epochs=1,
-        save_steps=int(1000 / 2),  # save every 1000 samples
+        save_steps=int(2000 / 4),  # save every 2000 samples
         # num_epochs=4,
         # save every epoch
         # save_steps=math.ceil(len(explanations) / 4),
@@ -1275,8 +1256,8 @@ if __name__ == "__main__":
     #     sae_repo_id="google/gemma-scope-9b-it-res",
     # )
     main(
-        explanations_file="data/qwen_28aug_sae_sfted_gpt-5-mini-2025-08-07.jsonl",
-        hf_repo_name="qwen-hook-layer-0",
+        explanations_file="data/10k_qwen_28aug_sae_sfted_gpt-5-mini-2025-08-07.jsonl",
+        hf_repo_name="qwen-hook-layer-9",
         model_name="Qwen/Qwen3-8B",
         hook_layer=9,
         sae_repo_id="adamkarvonen/qwen3-8b-saes",

@@ -177,10 +177,10 @@ def upload_to_hf(model, tokenizer, target_repo: str, token: Optional[str] = None
 
 def main(
     source_model: str = typer.Option(
-        "thejaminator/gemma-introspection-20250821", "--source-model", help="Source model identifier on HuggingFace"
+        "thejaminator/qwen-hook-layer-9", "--source-model", help="Source model identifier on HuggingFace"
     ),
     target_model: str = typer.Option(
-        "thejaminator/gemma-introspection-20250821-merged", "--target-model", help="Target model identifier for upload"
+        "thejaminator/qwen-hook-layer-9-merged", "--target-model", help="Target model identifier for upload"
     ),
     token: Optional[str] = typer.Option(
         None, "--token", help="HuggingFace token (can also be set via HF_TOKEN env var)"

@@ -1,7 +1,6 @@
 import asyncio
 from typing import Any
 
-from eval_detection import evaluate_sentence_matching
 from slist import Slist
 
 from detection_eval.caller import (
@@ -206,6 +205,8 @@ caller = load_openai_caller(cache_path="cache/detection_eval")
 
 def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData]) -> list[float]:
     assert len(solution_str) == len(parsed_sae)
+    first_str = solution_str[0]
+    print(f"First string: {first_str}")
     explanation_sae = Slist(solution_str).zip(parsed_sae)
 
     # Run the async function in a synchronous context

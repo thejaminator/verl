@@ -268,7 +268,7 @@ class DataParallelPPOActor(BasePPOActor):
                             **extra_args,
                         )  # prevent model thinks we are generating
                     except Exception as e:
-                        breakpoint()
+                        # breakpoint()
                         raise e
 
                 if self.use_fused_kernels:

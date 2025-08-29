@@ -1078,7 +1078,7 @@ async def main(
 
         sft_data = evaluation_results.map(lambda x: x.to_sae_explained()).filter(lambda x: x.f1 > 0.8)
         # Save the SAE explanations
-        sae_explanations_output_file = f"qwen_28aug_sae_sfted_{safe_model_name}.jsonl"
+        sae_explanations_output_file = f"10k_qwen_28aug_sae_sfted_{safe_model_name}.jsonl"
         write_jsonl_file_from_basemodel(path=sae_explanations_output_file, basemodels=sft_data)
         print(f"  SAE explanations saved to {sae_explanations_output_file}")
 
@@ -1162,11 +1162,12 @@ if __name__ == "__main__":
 
     # created with create_hard_negative_and_feature_vector.py
     # sae_file = "data/hard_negatives_100_000_to_100_200_v2.jsonl"
-    sae_file = "data/qwen_hard_negatives_0_to_200.jsonl"
+    # sae_file = "data/qwen_hard_negatives_0_to_200.jsonl"
+    sae_file = "data/qwen_hard_negatives_0_to_30_000.jsonl"
     # sae_file = "hard_negatives_0_to_82000.jsonl"
     # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
     # Which to use for constructing explanations vs testing detection?
-    saes_to_test = 100
+    saes_to_test = 10_000
     sae_start_index = 0
     # sae_start_index = 20_000  # not in train set for the trained model
 
@@ -1200,9 +1201,9 @@ if __name__ == "__main__":
             sae_file=sae_file,
             explainer_models=explainer_models,
             add_random_explanations=False,
-            config=hard_negatives_config,
+            # config=hard_negatives_config,
             # config=best_of_8_config,
-            # config=best_of_4_config,
+            config=best_of_4_config,
             # config=no_train_hard_negatives_config,
             # config=eight_positive_examples_config,
             # config=two_positive_examples,

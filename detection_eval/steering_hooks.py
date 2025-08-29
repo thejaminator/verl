@@ -144,13 +144,24 @@ def get_hf_activation_steering_hook(
     vec_BD = vec_BD.to(device, dtype)
     pos_B = pos_B.to(device)
 
-    def hook_fn(module, _input, output):
-        resid_BLD, *rest = output  # Gemma returns (resid, hidden_states, ...)
+    def hook_fn(module, _input, output):        
+        if isinstance(output, tuple):
+            # gemma
+            resid_BLD, *rest = output
+            output_is_tuple = True
+        else:
+            # qwen
+            resid_BLD = output
+            output_is_tuple = False
+        # resid_BLD, *rest = output  # Gemma returns (resid, hidden_states, ...)
         B_actual, L, d_model_actual = resid_BLD.shape
 
         # Only touch the *prompt* forward pass (sequence length > 1)
         if L <= 1:
-            return (resid_BLD, *rest)
+            if output_is_tuple:
+                return (resid_BLD, *rest)
+            else:
+                return resid_BLD
 
         # Safety: make sure every position is inside current sequence
         if (pos_B >= L).any():
@@ -186,7 +197,10 @@ def get_hf_activation_steering_hook(
 
         # ---- in-place replacement via advanced indexing ----
         resid_BLD[batch_idx_B, pos_B] = steered_BD
-        return (resid_BLD, *rest)
+        if output_is_tuple:
+            return (resid_BLD, *rest)
+        else:
+            return resid_BLD
 
     return hook_fn
 
@@ -216,7 +230,13 @@ def get_rm_pad_log_probs_hook(
     def hook_fn(module, _input, output):
         try:
             # residual: (1, total_tokens, d_model)
-            residual, *rest = output
+            if isinstance(output, tuple):
+                residual, *rest = output
+                output_is_tuple = True
+            else:
+                residual = output
+                output_is_tuple = False
+
             _, total_tokens, d_model_actual = residual.shape  # (1, L, d_model)
             expected_length = verl_positions.shape[1]
             assert total_tokens == expected_length, f"Expected length {expected_length}, got {total_tokens}"
@@ -256,7 +276,10 @@ def get_rm_pad_log_probs_hook(
             if not in_place:
                 residual = residual.clone()
             residual[0, global_indices, :] = steered_BD.to(dtype)  # replace B locations
-            return (residual, *rest)
+            if output_is_tuple:
+                return (residual, *rest)
+            else:
+                return residual
         except Exception as e:
             breakpoint()
             raise e

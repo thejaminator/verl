@@ -12,6 +12,7 @@ import os
 
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
+from create_hard_negatives_v2 import get_sae_info, load_sae
 from detection_eval.caller import read_jsonl_file_into_basemodel
 from detection_eval.detection_basemodels import SAEV2, SAEVerlDataTypedDict, make_sae_verl_typed_dict
 from detection_eval.steering_hooks import X_PROMPT
@@ -91,52 +92,26 @@ class VerlParams(BaseModel):
     wandb_api_key: str | None = None
 
 
-def get_sae_info(sae_repo_id: str, sae_width: int, sae_layer: int) -> str:
-    if sae_repo_id == "google/gemma-scope-9b-it-res":
-        if sae_width == 16:
-            return f"layer_{sae_layer}/width_16k/average_l0_88/params.npz"
-        elif sae_width == 131:
-            return f"layer_{sae_layer}/width_131k/average_l0_121/params.npz"
-        else:
-            raise ValueError(f"Unknown SAE width: {sae_width}")
-    else:
-        raise ValueError(f"Unknown SAE repo ID: {sae_repo_id}")
 
 
 def load_sae_params_for_model(
     sae_layer: int,
     sae_width: int,
     sae_repo_id: str,
+    model_name: str,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Download and load SAE params (W_enc, W_dec) for the tokenizer's model family."""
-    filename = get_sae_info(sae_repo_id, sae_width, sae_layer)
-    path_to_params = hf_hub_download(
-        repo_id=sae_repo_id,
-        filename=filename,
-        force_download=False,
-        local_dir="downloaded_saes",
-    )
-    pytorch_path = path_to_params.replace(".npz", ".pt")
-    if not os.path.exists(pytorch_path):
-        params = np.load(path_to_params)
-        pt_params = {k: torch.from_numpy(v) for k, v in params.items()}
-        torch.save(pt_params, pytorch_path)
-    pt_params = torch.load(pytorch_path)
-    W_enc = pt_params["W_enc"]  # [d_in, d_sae]
-    W_dec = pt_params["W_dec"]  # [d_sae, d_in]
+    sae_info = get_sae_info(sae_repo_id, sae_width, sae_layer)
+    filename = sae_info.sae_filename
+    # just load on cpu, since going to dump
+    device = torch.device("cpu")
+    dtype = torch.float32
+    sae = load_sae(sae_repo_id=sae_repo_id, sae_filename=filename, sae_layer=sae_layer, model_name=model_name, device=device, dtype=dtype)
+    W_enc = sae.W_enc.data
+    W_dec = sae.W_dec.data
     return W_enc, W_dec
 
 
-def get_feature_vector_from_params(
-    W_enc: torch.Tensor,
-    W_dec: torch.Tensor,
-    sae_id: int,
-    use_decoder_vectors: bool,
-) -> list[float]:
-    if use_decoder_vectors:
-        return W_dec[sae_id].to(torch.float32).tolist()
-    else:
-        return W_enc[:, sae_id].to(torch.float32).tolist()
 
 
 def extract_answer(text: str) -> str:
@@ -210,6 +185,7 @@ def load_and_convert_dataset(
         sae_layer=sae_layer,
         sae_width=sae_width,
         sae_repo_id=sae_repo_id,
+        model_name=model,
     )
 
     # ---------------- build rows ----------------
@@ -677,13 +653,15 @@ wandb_key = os.getenv("WANDB_KEY")
 PARAMS = VerlParams(
     # smaller model for testing
     # model_name="google/gemma-2-2b-it",
-    model_name="thejaminator/gemma-introspection-20250821-merged",  # loras don't get merged automatically
+    # model_name="thejaminator/gemma-introspection-20250821-merged",  # loras don't get merged automatically
     # sae_repo_id="google/gemma-scope-9b-it-res",
+    model_name="thejaminator/qwen-hook-layer-9-merged",
+    train_path="data/qwen_hard_negatives_0_to_200.jsonl",
+    sae_repo_id="adamkarvonen/qwen3-8b-saes",
     use_feature_vector=True,  # debugging logprobs
-    train_path="data/hard_negatives_0_to_2000.jsonl",
     max_seq_length=6_000,
     max_prompt_length=500,
-    max_response_length=2_000,
+    max_response_length=4500,
     num_generations=16,  # Bigger group size since noisy explanations
     gpu_memory_utilization=0.8,  # some other thing running
     # model_name="google/gemma-2-9b-it",
@@ -693,8 +671,8 @@ PARAMS = VerlParams(
     # max_response_length=6_000,  # Reduced from 6000, matching reference
     # micro_batch=8,
     # micro_batch_size_per_gpu=8,
-    micro_batch=4,  # number of prompts. In reality, will be micro_batch * num_generations.
-    micro_batch_size_per_gpu=4,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
+    micro_batch=2,  # number of prompts. In reality, will be micro_batch * num_generations.
+    micro_batch_size_per_gpu=2,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
     warmup_steps=5,
     gradient_accumulation_steps=1,
     learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
@@ -705,7 +683,7 @@ PARAMS = VerlParams(
     use_shm=False,
     layered_summon=False,
     max_steps=4000,
-    output_dir="/workspace/verl_outputs_feature_vector",
+    output_dir="/workspace/outputs_qwen",
     eval_path=None,
     save_steps=50,  # saving causes OOM. Why?
     n_gpus=1,
