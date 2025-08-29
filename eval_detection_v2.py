@@ -31,6 +31,7 @@ class ModelInfo(BaseModel):
     reasoning_effort: str | None = None
     use_steering: bool = False
     hook_onto_layer: int = 9
+    enable_thinking: bool = False
 
 
 class SAEExplained(BaseModel):
@@ -829,8 +830,7 @@ class SAEExperimentConfig(BaseModel):
 async def run_gemma_steering(
     sae: SAETrainTest,
     gemma_caller: OpenAICaller,
-    lora_model: str,
-    hook_onto_layer: int,
+    model_info: ModelInfo,
     try_number: int = 1,
 ) -> SAETrainTestWithExplanation:
     """
@@ -840,11 +840,12 @@ async def run_gemma_steering(
     response = await gemma_caller.call(
         messages=history,
         config=InferenceConfig(
-            model=lora_model,
+            model=model_info.model,
             max_tokens=2000,
             extra_body={
                 "sae_index": sae.sae_id,  # the server will use this to get the SAE feature vector
-                "hook_onto_layer": hook_onto_layer,
+                "hook_onto_layer": model_info.hook_onto_layer,
+                "enable_thinking": model_info.enable_thinking,
             },
             temperature=1.0,  # set to 0.0 for testing
         ),
@@ -855,7 +856,7 @@ async def run_gemma_steering(
     return SAETrainTestWithExplanation(
         sae_id=sae.sae_id,
         explanation=history.add_assistant(explanation),
-        explainer_model=lora_model,
+        explainer_model=model_info.model,
         # note: technically we didn't use these "train" things but we'll just pass it on.
         train_hard_negatives=sae.train_hard_negatives,
         train_activations=sae.train_activations,
@@ -868,8 +869,7 @@ async def run_gemma_steering(
 async def run_gemma_steering_best_of_n(
     sae: SAETrainTest,
     gemma_caller: OpenAICaller,
-    lora_model: str,
-    hook_onto_layer: int,
+    model_info: ModelInfo,
     best_of_n: int,
 ) -> Slist[SAETrainTestWithExplanation]:
     """
@@ -877,7 +877,7 @@ async def run_gemma_steering_best_of_n(
     """
     # Run gemma steering for each try number
     _explanations: Slist[SAETrainTestWithExplanation] = await Slist(range(best_of_n)).par_map_async(
-        lambda try_number: run_gemma_steering(sae, gemma_caller, lora_model, hook_onto_layer, try_number),
+        lambda try_number: run_gemma_steering(sae, gemma_caller, model_info, try_number),
         max_par=best_of_n,  # already max_par in outer loop
     )
     return _explanations
@@ -985,8 +985,7 @@ async def main(
             lambda sae_model: run_gemma_steering_best_of_n(
                 sae_model[0],
                 gemma_caller,
-                sae_model[1].model,
-                sae_model[1].hook_onto_layer,
+                sae_model[1],
                 best_of_n_int,
             ),
             max_par=max_par_bon,

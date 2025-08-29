@@ -288,7 +288,7 @@ def load_dictionary_learning_batch_topk_sae(
     layer: int | None = None,
     local_dir: str = "downloaded_saes",
 ) -> BatchTopKSAE:
-    assert "ae.pt" in filename
+    assert "ae.pt" in filename, f"Filename {filename} does not contain 'ae.pt'"
 
     path_to_params = hf_hub_download(
         repo_id=repo_id,
@@ -777,6 +777,11 @@ def main(
     hard_negative_threshold: float = 0.5,
     batch_size: int = 20,
 ):
+    # check if output file exists
+    if os.path.exists(output):
+        print(f"🔍 Output file {output} already exists. Not going to overwrite it.")
+        return
+
     # Get SAE info
     sae_width, sae_layer, sae_layer_percent, sae_filename = get_sae_info(sae_repo_id)
 
@@ -929,7 +934,8 @@ if __name__ == "__main__":
     # target_features = list(range(0, 100_000))
     # to_100k = list(range(0, 100_000))
     # 100k to 100_200
-    target_features = list(range(0, 200))
+    # target_features = list(range(0, 200))
+    target_features = list(range(50_000, 50_600))
     main(
         # model_name="google/gemma-2-9b-it",
         # sae_repo_id="google/gemma-scope-9b-it-res",
@@ -940,5 +946,5 @@ if __name__ == "__main__":
         batch_size=1024,
         target_sentences=32,
         # output="hard_negatives_0_to_100_000.jsonl",
-        output="data/qwen_hard_negatives_0_to_200.jsonl",
+        output="data/qwen_hard_negatives_50_000_to_50_600.jsonl",
     )

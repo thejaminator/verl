@@ -20,7 +20,7 @@ from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 from vllm.lora.request import LoRARequest
 
-from create_hard_negatives_v2 import JumpReluSAE, load_sae
+from create_hard_negatives_v2 import JumpReluSAE, get_sae_info, load_sae
 from detection_eval.steering_hooks import add_hook, get_vllm_steering_hook
 
 # Environment setup
@@ -28,16 +28,18 @@ os.environ["VLLM_USE_V1"] = "0"
 os.environ["NVTE_ALLOW_NONDETERMINISTIC_ALGO"] = "1"
 
 # Configuration
+# MODEL_NAME = "google/gemma-2-9b-it"
+MODEL_NAME = "Qwen/Qwen3-8B"
 DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
-CTX_LEN = 2000
+CTX_LEN = 6000
 SAE_LAYER = 9  # Target layer for activation steering (matching lightweight_sft.py)
 GENERATE_WAIT_SECONDS = 2
-
-MODEL_NAME = "Qwen/Qwen3-8B"
 # SAE Configuration
+# SAE_REPO_ID = "google/gemma-scope-9b-it-res"
 SAE_REPO_ID = "adamkarvonen/qwen3-8b-saes"
-load_loras = [
+
+gemma_loras = [
     # "thejaminator/sae-introspection-lora",
     # # 1000 steps
     # "thejaminator/gemma-introspection-20250821-step-250",
@@ -55,8 +57,15 @@ load_loras = [
     # "thejaminator/gemma-multiepoch",
     # "thejaminator/gemma-posneg-cot",
 ]
-SAE_WIDTH = 131  # Can be 16 or 131. Check what we trained with?
-SAE_FILENAME = f"layer_{SAE_LAYER}/width_131k/average_l0_121/params.npz"
+qwen_loras = [
+    "thejaminator/qwen-hook-layer-9",
+]
+load_loras = qwen_loras
+# SAE_WIDTH = 131  # Can be 16 or 131. Check what we trained with?
+# SAE_FILENAME = f"layer_{SAE_LAYER}/width_131k/average_l0_121/params.npz"
+
+
+
 STEERING_COEFFICIENT = 2.0
 # INFO 08-21 04:36:17 [executor_base.py:118] Maximum concurrency for 2000 tokens per request: 55.05x
 gpu_memory_utilization = 0.6
@@ -78,6 +87,7 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = 0.0
     sae_index: Optional[int] = None  # Custom parameter for SAE feature index
     hook_onto_layer: int = 9  # Default to 9 for historical reasons
+    enable_thinking: bool = False
 
 
 class Choice(BaseModel):
@@ -140,10 +150,12 @@ class VLLMServer:
                 self.llm.llm_engine.add_lora(lora_request)
 
         print("Loading SAE...")
+        sae_info = get_sae_info(SAE_REPO_ID)
         self.sae = load_sae(
-            repo_id=SAE_REPO_ID,
-            filename=SAE_FILENAME,
-            layer=SAE_LAYER,
+            sae_repo_id=SAE_REPO_ID,
+            sae_filename=sae_info.sae_filename,
+            sae_layer=sae_info.sae_layer,
+            model_name=MODEL_NAME,
             device=DEVICE,
             dtype=DTYPE,
         )
@@ -236,7 +248,10 @@ class VLLMServer:
 
                 # Format prompt
                 formatted_prompt = self.tokenizer.apply_chat_template(
-                    [msg.dict() for msg in request.messages], tokenize=False, add_generation_prompt=True
+                    [msg.dict() for msg in request.messages],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=request.enable_thinking,
                 )
                 prompts.append(formatted_prompt)
 
