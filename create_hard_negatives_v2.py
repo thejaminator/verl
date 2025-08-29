@@ -31,7 +31,12 @@ from typing import NamedTuple, Sequence
 import torch
 import torch.nn.functional as F
 
-from detection_eval.detection_basemodels import SAEV2, SAEActivationsV2, SentenceInfoV2, TokenActivationV2
+from detection_eval.detection_basemodels import (
+    SAEV2,
+    SAEActivationsV2,
+    SentenceInfoV2,
+    TokenActivationV2,
+)
 
 try:
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -54,26 +59,55 @@ class SAEInfo(NamedTuple):
     sae_filename: str
 
 
-# Configuration and SAE classes
-def get_sae_info(sae_repo_id: str, sae_width: int = 131, sae_layer: int = 9) -> SAEInfo:
-    sae_layer_percent = 25
-
+def get_sae_info(sae_repo_id: str, sae_layer_percent: int, sae_width: int | None = 131) -> SAEInfo:
     if sae_repo_id == "google/gemma-scope-9b-it-res":
+        num_layers = 42
+        assert sae_layer_percent == 25
+        sae_layer = 9
+
+        # Gemma scope IT saes: https://huggingface.co/google/gemma-scope-9b-it-res/tree/main
+        assert sae_layer in [9, 20, 31]
+
+        # Note: For gemma_scope saes you need to specify the L0 if you use different layers / widths
+
+        if sae_width is None:
+            sae_width = 131
+
         if sae_width == 16:
             sae_filename = f"layer_{sae_layer}/width_16k/average_l0_88/params.npz"
         elif sae_width == 131:
             sae_filename = f"layer_{sae_layer}/width_131k/average_l0_121/params.npz"
         else:
             raise ValueError(f"Unknown SAE width: {sae_width}")
-    elif sae_repo_id == "adamkarvonen/qwen3-8b-saes":
-        assert sae_layer == 9
+    elif sae_repo_id == "fnlp/Llama3_1-8B-Base-LXR-32x":
+        num_layers = 32
+
         assert sae_layer_percent == 25
-        sae_width = 2
-        sae_filename = "saes_Qwen_Qwen3-8B_batch_top_k/resid_post_layer_9/trainer_2/ae.pt"
+        sae_layer = int(num_layers * (sae_layer_percent / 100))
+
+        assert sae_layer in [8, 16, 24]
+
+        if sae_width is None:
+            sae_width = 32
+        sae_filename = ""
+    elif sae_repo_id == "adamkarvonen/qwen3-8b-saes":
+        assert sae_layer is None
+        num_layers = 36
+        sae_layer = int(num_layers * (sae_layer_percent / 100))
+
+        # Only have these SAEs available: https://huggingface.co/adamkarvonen/qwen3-8b-saes/tree/main
+        assert sae_layer in [9, 18, 27]
+
+        if sae_width is None:
+            sae_width = 2
+        sae_filename = f"saes_Qwen_Qwen3-8B_batch_top_k/resid_post_layer_{sae_layer}/trainer_{sae_width}/ae.pt"
     else:
         raise ValueError(f"Unknown SAE repo ID: {sae_repo_id}")
     return SAEInfo(
-        sae_width=sae_width, sae_layer=sae_layer, sae_layer_percent=sae_layer_percent, sae_filename=sae_filename
+        sae_width=sae_width,
+        sae_layer=sae_layer,
+        sae_layer_percent=sae_layer_percent,
+        sae_filename=sae_filename,
     )
 
 
@@ -619,7 +653,10 @@ def find_most_similar_features(
     similar_features = []
     for sim_score, feature_idx in zip(top_similarities, top_indices, strict=False):
         similar_features.append(
-            SimilarFeature(feature_idx=int(feature_idx.item()), similarity_score=float(sim_score.item()))
+            SimilarFeature(
+                feature_idx=int(feature_idx.item()),
+                similarity_score=float(sim_score.item()),
+            )
         )
 
     return similar_features
@@ -838,7 +875,13 @@ def main(
             # Compute actual SAE activations for target feature sentences
             print("🧮 Computing SAE activations for target feature sentences...")
             target_sentence_infos = compute_sae_activations_for_sentences(
-                model, tokenizer, sae, submodule, target_sentence_list, feature_idx, batch_size
+                model,
+                tokenizer,
+                sae,
+                submodule,
+                target_sentence_list,
+                feature_idx,
+                batch_size,
             )
 
             # Analyze similar features and collect hard negatives - OPTIMIZED WITH BATCHING
@@ -852,7 +895,10 @@ def main(
             for idx, similar_feature in enumerate(similar_features):
                 # Get sentences for this similar feature
                 similar_max_acts = get_feature_max_activating_sentences(
-                    acts_data, tokenizer, similar_feature.feature_idx, num_sentences=negative_sentences
+                    acts_data,
+                    tokenizer,
+                    similar_feature.feature_idx,
+                    num_sentences=negative_sentences,
                 )
                 # sometimes empty???
                 candidate_similar_sentences = [s for s in similar_max_acts.sentences if s != ""]
@@ -876,7 +922,13 @@ def main(
             # Compute target feature activations on ALL similar feature sentences in batches
             print(f"🧮 Computing SAE activations for {len(all_similar_sentences)} sentences from similar features...")
             all_similar_sentence_infos = compute_sae_activations_for_sentences(
-                model, tokenizer, sae, submodule, all_similar_sentences, feature_idx, batch_size
+                model,
+                tokenizer,
+                sae,
+                submodule,
+                all_similar_sentences,
+                feature_idx,
+                batch_size,
             )
 
             # Process results by similar feature and rebuild SAEActivations
@@ -936,7 +988,9 @@ if __name__ == "__main__":
     # to_100k = list(range(0, 100_000))
     # 100k to 100_200
     # target_features = list(range(0, 200))
-    target_features = list(range(50_000, 50_600))
+    min_idx = 50_000
+    max_idx = 50_600
+    target_features = list(range(min_idx, max_idx))
     main(
         # model_name="google/gemma-2-9b-it",
         # sae_repo_id="google/gemma-scope-9b-it-res",
@@ -946,6 +1000,5 @@ if __name__ == "__main__":
         top_k_similar_features=34,
         batch_size=1024,
         target_sentences=32,
-        # output="hard_negatives_0_to_100_000.jsonl",
-        output="data/qwen_hard_negatives_50_000_to_50_600.jsonl",
+        output=f"data/qwen_hard_negatives_{min_idx}_{max_idx}.jsonl",
     )
