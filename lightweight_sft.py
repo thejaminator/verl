@@ -238,7 +238,7 @@ class SelfInterpTrainingConfig:
     # --- Fields with defaults (must come after fields without defaults) ---
     sae_filename: str = field(init=False)
     eval_features: list[int] = field(default_factory=list)
-    positive_negative_examples: bool = True
+    positive_negative_examples: bool = False
 
     def __post_init__(self):
         """Called after the dataclass is initialized."""

@@ -177,15 +177,16 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
     if explanation_parsed is None:
         print(f"WARNING: No parsed explanation for {sae.sae_id}. Explanation: {explanation}")
         return None
-
+    
     # turn into SAETrainTestWithExplanation
     sae_train_test = verl_sample_sentences(
         sae=sae,
         explanation=explanation_parsed,
         test_target_activating_sentences=Slist([4, 5, 6, 7, 8]),
-        train_activating_sentences=16,
-        train_hard_negative_sentences=2,
-        train_hard_negative_saes=16,
+        train_activating_sentences=1,
+        train_hard_negative_sentences=1,
+        train_hard_negative_saes=1,
+        ### Note: The "train" ones here don't matter if just using feature vector, since they don't appear in the prompt.
         test_hard_negative_sentences=6,
         test_hard_negative_saes=16,
     )

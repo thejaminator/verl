@@ -348,6 +348,8 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                 )
                 del state_dict
                 del save_model
+                torch.cuda.empty_cache()
+                gc.collect()
 
             # wait for rank0 to dump hf_model to local
             torch.distributed.barrier()
