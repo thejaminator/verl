@@ -1085,6 +1085,7 @@ async def main(
     rename_map = {m.model: m.display_name for m in explainer_models}
     print(rename_map)
     plot_f1_scores_by_model(groupby_by_model, rename_map)
+    # plot_f1_scores_by_model(groupby_by_model, rename_map)
 
     # Plot precision vs recall by model
     plot_precision_vs_recall_by_model(groupby_by_model, rename_map)
@@ -1098,6 +1099,21 @@ if __name__ == "__main__":
                 model="gpt-5-mini-2025-08-07",
                 display_name="GPT-5-mini<br>(extrospecting<br>sentences)",
                 reasoning_effort="medium",
+            ),
+            # "thejaminator/qwen-hook-layer-9"
+            # ModelInfo(
+            #     model="thejaminator/qwen-hook-layer-9",
+            #     display_name="No-CoT Qwen-3-8B<br>(extrospecting<br>sentences)",
+            #     use_steering=True,
+            #     hook_onto_layer=9,
+            #     enable_thinking=False,
+            # ),
+            ModelInfo(
+                model="thejaminator/qwen-hook-layer-9",
+                display_name="CoT Qwen-3-8B<br>(extrospecting<br>sentences)",
+                use_steering=True,
+                hook_onto_layer=9,
+                enable_thinking=True,
             ),
             # ModelInfo(
             #     model="meta-llama/llama-3-70b-instruct",
@@ -1162,11 +1178,12 @@ if __name__ == "__main__":
     # created with create_hard_negative_and_feature_vector.py
     # sae_file = "data/hard_negatives_100_000_to_100_200_v2.jsonl"
     # sae_file = "data/qwen_hard_negatives_0_to_200.jsonl"
-    sae_file = "data/qwen_hard_negatives_0_to_30_000.jsonl"
+    sae_file = "data/qwen_hard_negatives_50_000_to_50_600.jsonl"
+    # sae_file = "data/qwen_hard_negatives_0_to_30_000.jsonl"
     # sae_file = "hard_negatives_0_to_82000.jsonl"
     # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
     # Which to use for constructing explanations vs testing detection?
-    saes_to_test = 10_000
+    saes_to_test = 100
     sae_start_index = 0
     # sae_start_index = 20_000  # not in train set for the trained model
 
@@ -1200,9 +1217,9 @@ if __name__ == "__main__":
             sae_file=sae_file,
             explainer_models=explainer_models,
             add_random_explanations=False,
-            # config=hard_negatives_config,
+            config=hard_negatives_config,
             # config=best_of_8_config,
-            config=best_of_4_config,
+            # config=best_of_4_config,
             # config=no_train_hard_negatives_config,
             # config=eight_positive_examples_config,
             # config=two_positive_examples,
