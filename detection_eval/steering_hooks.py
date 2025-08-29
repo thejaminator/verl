@@ -144,7 +144,7 @@ def get_hf_activation_steering_hook(
     vec_BD = vec_BD.to(device, dtype)
     pos_B = pos_B.to(device)
 
-    def hook_fn(module, _input, output):        
+    def hook_fn(module, _input, output):
         if isinstance(output, tuple):
             # gemma
             resid_BLD, *rest = output

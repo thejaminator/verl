@@ -12,17 +12,15 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Optional
 
-import numpy as np
 import torch
-import torch.nn as nn
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException
-from huggingface_hub import hf_hub_download
 from pydantic import BaseModel
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 from vllm.lora.request import LoRARequest
 
+from create_hard_negatives_v2 import JumpReluSAE, load_sae
 from detection_eval.steering_hooks import add_hook, get_vllm_steering_hook
 
 # Environment setup
@@ -30,15 +28,15 @@ os.environ["VLLM_USE_V1"] = "0"
 os.environ["NVTE_ALLOW_NONDETERMINISTIC_ALGO"] = "1"
 
 # Configuration
-MODEL_NAME = "google/gemma-2-9b-it"
 DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
 CTX_LEN = 2000
 SAE_LAYER = 9  # Target layer for activation steering (matching lightweight_sft.py)
 GENERATE_WAIT_SECONDS = 2
 
+MODEL_NAME = "Qwen/Qwen3-8B"
 # SAE Configuration
-SAE_REPO_ID = "google/gemma-scope-9b-it-res"
+SAE_REPO_ID = "adamkarvonen/qwen3-8b-saes"
 load_loras = [
     # "thejaminator/sae-introspection-lora",
     # # 1000 steps
@@ -142,7 +140,7 @@ class VLLMServer:
                 self.llm.llm_engine.add_lora(lora_request)
 
         print("Loading SAE...")
-        self.sae = load_gemma_scope_sae(
+        self.sae = load_sae(
             repo_id=SAE_REPO_ID,
             filename=SAE_FILENAME,
             layer=SAE_LAYER,
@@ -344,66 +342,6 @@ class VLLMServer:
             for queued_request in batch_requests:
                 if not queued_request.future.done():
                     queued_request.future.set_exception(e)
-
-
-# SAE Classes
-class JumpReluSAE(nn.Module):
-    def __init__(self, d_in: int, d_sae: int, device: torch.device, dtype: torch.dtype):
-        super().__init__()
-        self.W_enc = nn.Parameter(torch.zeros(d_in, d_sae))
-        self.W_dec = nn.Parameter(torch.zeros(d_sae, d_in))
-        self.b_enc = nn.Parameter(torch.zeros(d_sae))
-        self.b_dec = nn.Parameter(torch.zeros(d_in))
-        self.threshold = nn.Parameter(torch.zeros(d_sae, dtype=dtype, device=device))
-        self.device = device
-        self.dtype = dtype
-        self.d_sae = d_sae
-        self.d_in = d_in
-        self.to(dtype=dtype, device=device)
-
-    def encode(self, x: torch.Tensor):
-        pre_acts = x @ self.W_enc + self.b_enc
-        mask = pre_acts > self.threshold
-        acts = mask * torch.nn.functional.relu(pre_acts)
-        return acts
-
-    def decode(self, feature_acts: torch.Tensor):
-        return feature_acts @ self.W_dec + self.b_dec
-
-
-def load_gemma_scope_sae(
-    repo_id: str,
-    filename: str,
-    layer: int,
-    device: torch.device,
-    dtype: torch.dtype,
-    local_dir: str = "downloaded_saes",
-) -> JumpReluSAE:
-    """Load Gemma Scope SAE from Hugging Face Hub."""
-    path_to_params = hf_hub_download(
-        repo_id=repo_id,
-        filename=filename,
-        force_download=False,
-        local_dir=local_dir,
-    )
-    pytorch_path = path_to_params.replace(".npz", ".pt")
-
-    # Convert npz to pt for faster loading
-    if not os.path.exists(pytorch_path):
-        params = np.load(path_to_params)
-        pt_params = {k: torch.from_numpy(v) for k, v in params.items()}
-        torch.save(pt_params, pytorch_path)
-
-    pt_params = torch.load(pytorch_path)
-
-    d_in = pt_params["W_enc"].shape[0]
-    d_sae = pt_params["W_enc"].shape[1]
-
-    sae = JumpReluSAE(d_in, d_sae, device, dtype)
-    sae.load_state_dict(pt_params)
-    sae.to(dtype=dtype, device=device)
-
-    return sae
 
 
 def get_sae_feature_vector(sae_index: int, sae: JumpReluSAE) -> torch.Tensor:

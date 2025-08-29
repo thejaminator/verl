@@ -23,14 +23,13 @@ import json
 import subprocess
 import sys
 
-import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
 import wandb
 
 # Step 2: Push to HuggingFace Hub
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import HfApi
 from pydantic import BaseModel
 
 
@@ -92,8 +91,6 @@ class VerlParams(BaseModel):
     wandb_api_key: str | None = None
 
 
-
-
 def load_sae_params_for_model(
     sae_layer: int,
     sae_width: int,
@@ -106,12 +103,17 @@ def load_sae_params_for_model(
     # just load on cpu, since going to dump
     device = torch.device("cpu")
     dtype = torch.float32
-    sae = load_sae(sae_repo_id=sae_repo_id, sae_filename=filename, sae_layer=sae_layer, model_name=model_name, device=device, dtype=dtype)
+    sae = load_sae(
+        sae_repo_id=sae_repo_id,
+        sae_filename=filename,
+        sae_layer=sae_layer,
+        model_name=model_name,
+        device=device,
+        dtype=dtype,
+    )
     W_enc = sae.W_enc.data
     W_dec = sae.W_dec.data
     return W_enc, W_dec
-
-
 
 
 def extract_answer(text: str) -> str:

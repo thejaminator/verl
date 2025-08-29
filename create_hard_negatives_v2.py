@@ -47,12 +47,12 @@ import numpy as np
 from huggingface_hub import hf_hub_download
 
 
-
 class SAEInfo(NamedTuple):
     sae_width: int
     sae_layer: int
     sae_layer_percent: int
     sae_filename: str
+
 
 # Configuration and SAE classes
 def get_sae_info(sae_repo_id: str, sae_width: int = 131, sae_layer: int = 9) -> SAEInfo:
@@ -72,7 +72,9 @@ def get_sae_info(sae_repo_id: str, sae_width: int = 131, sae_layer: int = 9) -> 
         sae_filename = "saes_Qwen_Qwen3-8B_batch_top_k/resid_post_layer_9/trainer_2/ae.pt"
     else:
         raise ValueError(f"Unknown SAE repo ID: {sae_repo_id}")
-    return SAEInfo(sae_width=sae_width, sae_layer=sae_layer, sae_layer_percent=sae_layer_percent, sae_filename=sae_filename)
+    return SAEInfo(
+        sae_width=sae_width, sae_layer=sae_layer, sae_layer_percent=sae_layer_percent, sae_filename=sae_filename
+    )
 
 
 # Configuration variables - no longer need a config class

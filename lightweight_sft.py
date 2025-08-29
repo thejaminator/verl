@@ -45,7 +45,7 @@ from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.tokenization_utils import PreTrainedTokenizer
 
-from create_hard_negatives_v2 import get_sae_info, load_sae, BaseSAE, JumpReluSAE, get_submodule
+from create_hard_negatives_v2 import BaseSAE, JumpReluSAE, get_sae_info, get_submodule, load_sae
 
 # ==============================================================================
 # 1. HUGGING FACE SETUP
@@ -357,7 +357,6 @@ class BatchData:
 # ==============================================================================
 # 4. MODEL UTILITIES
 # ==============================================================================
-
 
 
 class EarlyStopException(Exception):
