@@ -105,6 +105,7 @@ class BaseSAE(torch.nn.Module, ABC):
         self.device: torch.device = device
         self.dtype: torch.dtype = dtype
         self.hook_layer = hook_layer
+        self.d_sae = d_sae
 
         hook_name = hook_name or f"blocks.{hook_layer}.hook_resid_post"
         self.to(dtype=self.dtype, device=self.device)

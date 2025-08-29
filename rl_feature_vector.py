@@ -53,6 +53,7 @@ class VerlParams(BaseModel):
     micro_batch: int = 16
     gradient_accumulation_steps: int = 1
     micro_batch_size_per_gpu: int = 8  # New parameter for fine control
+    max_train_samples: int | None = None
     max_steps: int = 100
     learning_rate: float = 5e-6
 
@@ -101,8 +102,8 @@ def load_sae_params_for_model(
     sae_info = get_sae_info(sae_repo_id, sae_width, sae_layer)
     filename = sae_info.sae_filename
     # just load on cpu, since going to dump
-    device = torch.device("cpu")
-    dtype = torch.float32
+    device = torch.device("cuda")
+    dtype = torch.bfloat16
     sae = load_sae(
         sae_repo_id=sae_repo_id,
         sae_filename=filename,
@@ -197,9 +198,7 @@ def load_and_convert_dataset(
         testing_hack = True
 
     data = []
-    jsonl_items = read_jsonl_file_into_basemodel(dataset_path, SAEV2)
-    if limit is not None:
-        jsonl_items = jsonl_items[:limit]
+    jsonl_items = read_jsonl_file_into_basemodel(dataset_path, SAEV2, limit=limit)
     sae_ids: list[int] = jsonl_items.map(lambda x: x.sae_id)
     sae_id_to_idx: dict[int, int] = {sae_id: idx for idx, sae_id in enumerate(sae_ids)}
     if use_decoder_vectors:
@@ -606,6 +605,7 @@ def verl_main(params: VerlParams):
         sae_width=params.sae_width,
         use_decoder_vectors=params.use_decoder_vectors,
         sae_repo_id=params.sae_repo_id,
+        limit=params.max_train_samples,
     )
 
     eval_parquet = os.path.join(params.output_dir, "eval.parquet")
@@ -658,7 +658,8 @@ PARAMS = VerlParams(
     # model_name="thejaminator/gemma-introspection-20250821-merged",  # loras don't get merged automatically
     # sae_repo_id="google/gemma-scope-9b-it-res",
     model_name="thejaminator/qwen-hook-layer-9-merged",
-    train_path="data/qwen_hard_negatives_0_to_200.jsonl",
+    train_path="data/qwen_hard_negatives_0_to_30_000.jsonl",
+    max_train_samples=2000,
     sae_repo_id="adamkarvonen/qwen3-8b-saes",
     use_feature_vector=True,  # debugging logprobs
     max_seq_length=6_000,
@@ -673,8 +674,8 @@ PARAMS = VerlParams(
     # max_response_length=6_000,  # Reduced from 6000, matching reference
     # micro_batch=8,
     # micro_batch_size_per_gpu=8,
-    micro_batch=2,  # number of prompts. In reality, will be micro_batch * num_generations.
-    micro_batch_size_per_gpu=2,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
+    micro_batch=4,  # number of prompts. In reality, will be micro_batch * num_generations.
+    micro_batch_size_per_gpu=4,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
     warmup_steps=5,
     gradient_accumulation_steps=1,
     learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)

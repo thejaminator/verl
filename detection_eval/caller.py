@@ -243,9 +243,19 @@ def write_jsonl_file_from_basemodel(path: Path | str, basemodels: Sequence[BaseM
             f.write(basemodel.model_dump_json() + "\n")
 
 
-def read_jsonl_file_into_basemodel(path: Path | str, basemodel: type[GenericBaseModel]) -> Slist[GenericBaseModel]:
+def read_jsonl_file_into_basemodel(
+    path: Path | str, basemodel: type[GenericBaseModel], limit: int | None = None
+) -> Slist[GenericBaseModel]:
     with open(path) as f:
-        return Slist(basemodel.model_validate_json(line) for line in f)
+        if limit is None:
+            return Slist(basemodel.model_validate_json(line) for line in f)
+        else:
+            out = Slist()
+            for line in f:
+                out.append(basemodel.model_validate_json(line))
+                if len(out) >= limit:
+                    break
+            return out
 
 
 def deterministic_hash(something: str) -> str:
