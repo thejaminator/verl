@@ -177,7 +177,7 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
     if explanation_parsed is None:
         print(f"WARNING: No parsed explanation for {sae.sae_id}. Explanation: {explanation}")
         return None
-    
+
     # turn into SAETrainTestWithExplanation
     sae_train_test = verl_sample_sentences(
         sae=sae,

@@ -65,7 +65,6 @@ load_loras = qwen_loras
 # SAE_FILENAME = f"layer_{SAE_LAYER}/width_131k/average_l0_121/params.npz"
 
 
-
 STEERING_COEFFICIENT = 2.0
 # INFO 08-21 04:36:17 [executor_base.py:118] Maximum concurrency for 2000 tokens per request: 55.05x
 gpu_memory_utilization = 0.6
