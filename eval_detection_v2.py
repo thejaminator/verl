@@ -405,15 +405,15 @@ def extract_explanation_text(explanation_response: str) -> str:
     start_tag = "<explanation>"
     end_tag = "</explanation>"
 
-    start_idx = explanation_response.find(start_tag)
-    end_idx = explanation_response.find(end_tag)
-
-    if start_idx != -1 and end_idx != -1:
-        start_idx += len(start_tag)
-        return explanation_response[start_idx:end_idx].strip()
-    else:
-        # Fallback: return the whole response if tags aren't found
-        return explanation_response.strip().replace("<explanation>", "").replace("</explanation>", "")
+    # find the last start_tag
+    start_idx = explanation_response.rfind(start_tag)
+    if start_idx == -1:
+        return explanation_response
+    # find the first end_tag after the last start_tag
+    end_idx = explanation_response.find(end_tag, start_idx)
+    if end_idx == -1:
+        return explanation_response
+    return explanation_response[start_idx + len(start_tag) : end_idx].strip()
 
 
 def create_detection_batch(

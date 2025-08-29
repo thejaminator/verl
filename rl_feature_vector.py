@@ -173,7 +173,7 @@ def load_and_convert_dataset(
         add_generation_prompt=True,
         return_tensors=None,
         padding=False,
-        enable_thinking=False,
+        enable_thinking=True,
     )
     x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
     # find positional index of the 'X' token within the prompt token ids
