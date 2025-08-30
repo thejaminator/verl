@@ -70,11 +70,11 @@ def collect_activations(
     return activations_BLD
 
 
-def get_sae_info(sae_repo_id: str) -> tuple[int, int, int, str]:
-    sae_layer = 9
-    sae_layer_percent = 25
-
+def get_sae_info(sae_repo_id: str, sae_layer_percent: int) -> tuple[int, int, str]:
     if sae_repo_id == "google/gemma-scope-9b-it-res":
+        assert sae_layer_percent == 25
+        sae_layer = 9
+
         sae_width = 131
 
         if sae_width == 16:
@@ -84,16 +84,20 @@ def get_sae_info(sae_repo_id: str) -> tuple[int, int, int, str]:
         else:
             raise ValueError(f"Unknown SAE width: {sae_width}")
     elif sae_repo_id == "fnlp/Llama3_1-8B-Base-LXR-32x":
+        assert sae_layer_percent == 25
+        sae_layer = 9
         sae_width = 32
         sae_filename = ""
     elif sae_repo_id == "adamkarvonen/qwen3-8b-saes":
-        assert sae_layer == 9
-        assert sae_layer_percent == 25
+        sae_layer = int(36 * (sae_layer_percent / 100))
+
+        assert sae_layer in [9, 18, 27]
+
         sae_width = 2
         sae_filename = f"saes_Qwen_Qwen3-8B_batch_top_k/resid_post_layer_{sae_layer}/trainer_{sae_width}/ae.pt"
     else:
         raise ValueError(f"Unknown SAE repo ID: {sae_repo_id}")
-    return sae_width, sae_layer, sae_layer_percent, sae_filename
+    return sae_width, sae_layer, sae_filename
 
 
 class BaseSAE(nn.Module, ABC):
@@ -159,7 +163,9 @@ class BaseSAE(nn.Module, ABC):
         norms = torch.norm(self.W_dec, dim=1).to(dtype=self.dtype, device=self.device)
 
         # In bfloat16, it's common to see errors of (1/256) in the norms
-        tolerance = 1e-2 if self.W_dec.dtype in [torch.bfloat16, torch.float16] else 1e-5
+        tolerance = (
+            1e-2 if self.W_dec.dtype in [torch.bfloat16, torch.float16] else 1e-5
+        )
 
         if torch.allclose(norms, torch.ones_like(norms), atol=tolerance):
             return True
@@ -189,16 +195,24 @@ class BatchTopKSAE(BaseSAE):
 
         # BatchTopK requires a global threshold to use during inference. Must be positive.
         self.use_threshold = True
-        self.register_buffer("threshold", torch.tensor(-1.0, dtype=dtype, device=device))
+        self.register_buffer(
+            "threshold", torch.tensor(-1.0, dtype=dtype, device=device)
+        )
 
     def encode(self, x: torch.Tensor):
         """Note: x can be either shape (B, F) or (B, L, F)"""
-        post_relu_feat_acts_BF = nn.functional.relu((x - self.b_dec) @ self.W_enc + self.b_enc)
+        post_relu_feat_acts_BF = nn.functional.relu(
+            (x - self.b_dec) @ self.W_enc + self.b_enc
+        )
 
         if self.use_threshold:
             if self.threshold < 0:
-                raise ValueError("Threshold is not set. The threshold must be set to use it during inference")
-            encoded_acts_BF = post_relu_feat_acts_BF * (post_relu_feat_acts_BF > self.threshold)
+                raise ValueError(
+                    "Threshold is not set. The threshold must be set to use it during inference"
+                )
+            encoded_acts_BF = post_relu_feat_acts_BF * (
+                post_relu_feat_acts_BF > self.threshold
+            )
             return encoded_acts_BF
 
         post_topk = post_relu_feat_acts_BF.topk(self.k, sorted=False, dim=-1)
@@ -207,7 +221,9 @@ class BatchTopKSAE(BaseSAE):
         top_indices_BK = post_topk.indices
 
         buffer_BF = torch.zeros_like(post_relu_feat_acts_BF)
-        encoded_acts_BF = buffer_BF.scatter_(dim=-1, index=top_indices_BK, src=tops_acts_BK)
+        encoded_acts_BF = buffer_BF.scatter_(
+            dim=-1, index=top_indices_BK, src=tops_acts_BK
+        )
         return encoded_acts_BF
 
     def decode(self, feature_acts: torch.Tensor):
@@ -308,7 +324,9 @@ def load_dictionary_learning_batch_topk_sae(
     return sae
 
 
-def dataset_to_list_of_strs(dataset_name: str, min_row_chars: int, total_chars: int) -> list[str]:
+def dataset_to_list_of_strs(
+    dataset_name: str, min_row_chars: int, total_chars: int
+) -> list[str]:
     """
     Grab text data from a streaming dataset, stopping once we've collected total_chars.
     """
@@ -340,7 +358,9 @@ def dataset_to_list_of_strs(dataset_name: str, min_row_chars: int, total_chars: 
 
 
 @torch.no_grad
-def get_bos_pad_eos_mask(tokens: torch.Tensor, tokenizer: AutoTokenizer | Any) -> torch.Tensor:
+def get_bos_pad_eos_mask(
+    tokens: torch.Tensor, tokenizer: AutoTokenizer | Any
+) -> torch.Tensor:
     mask = (
         (tokens == tokenizer.pad_token_id)  # type: ignore
         | (tokens == tokenizer.eos_token_id)  # type: ignore
@@ -365,7 +385,9 @@ def tokenize_and_concat_dataset(
     # Divide into chunks to speed up tokenization
     num_chunks = 20
     chunk_length = (len(full_text) - 1) // num_chunks + 1
-    chunks = [full_text[i * chunk_length : (i + 1) * chunk_length] for i in range(num_chunks)]
+    chunks = [
+        full_text[i * chunk_length : (i + 1) * chunk_length] for i in range(num_chunks)
+    ]
     all_tokens = []
     for chunk in chunks:
         token_ids = tokenizer(chunk)["input_ids"]
@@ -387,7 +409,9 @@ def tokenize_and_concat_dataset(
 
     # Drop last partial batch if not full
     tokens = tokens[: num_batches * seq_len]
-    tokens = einops.rearrange(tokens, "(batch seq) -> batch seq", batch=num_batches, seq=seq_len)
+    tokens = einops.rearrange(
+        tokens, "(batch seq) -> batch seq", batch=num_batches, seq=seq_len
+    )
 
     # Overwrite first token in each block with BOS if desired
     if add_bos:
@@ -426,9 +450,9 @@ def load_and_tokenize_and_concat_dataset(
     )
 
     # Double-check we have enough tokens
-    assert (token_dict["input_ids"].shape[0] * token_dict["input_ids"].shape[1]) >= num_tokens, (
-        "Not enough tokens found!"
-    )
+    assert (
+        token_dict["input_ids"].shape[0] * token_dict["input_ids"].shape[1]
+    ) >= num_tokens, "Not enough tokens found!"
     return token_dict
 
 
@@ -465,7 +489,9 @@ def get_batched_tokens(
         print(f"Loading tokenized dataset from {filename}")
         token_dict = torch.load(filename)
 
-    token_dict = {k: v.to(device) if torch.is_tensor(v) else v for k, v in token_dict.items()}
+    token_dict = {
+        k: v.to(device) if torch.is_tensor(v) else v for k, v in token_dict.items()
+    }
 
     batched_tokens = []
 
@@ -552,12 +578,22 @@ def get_max_activating_prompts(
     feature_count = dim_indices.shape[0]
 
     # We'll store results in [F, k] or [F, k, L] shape
-    max_activating_indices_FK = torch.zeros((feature_count, k), device=device, dtype=torch.int32)
-    max_activations_FK = torch.zeros((feature_count, k), device=device, dtype=torch.bfloat16)
-    max_tokens_FKL = torch.zeros((feature_count, k, context_length), device=device, dtype=torch.int32)
-    max_activations_FKL = torch.zeros((feature_count, k, context_length), device=device, dtype=torch.bfloat16)
+    max_activating_indices_FK = torch.zeros(
+        (feature_count, k), device=device, dtype=torch.int32
+    )
+    max_activations_FK = torch.zeros(
+        (feature_count, k), device=device, dtype=torch.bfloat16
+    )
+    max_tokens_FKL = torch.zeros(
+        (feature_count, k, context_length), device=device, dtype=torch.int32
+    )
+    max_activations_FKL = torch.zeros(
+        (feature_count, k, context_length), device=device, dtype=torch.bfloat16
+    )
 
-    for i, inputs_BL in tqdm(enumerate(tokenized_inputs_bL), total=len(tokenized_inputs_bL)):
+    for i, inputs_BL in tqdm(
+        enumerate(tokenized_inputs_bL), total=len(tokenized_inputs_bL)
+    ):
         batch_offset = i * batch_size
         attention_mask = inputs_BL["attention_mask"]
 
@@ -574,7 +610,9 @@ def get_max_activating_prompts(
 
         if max_act_norm_multiple is not None:
             median_norm = activations_BLF.norm(dim=-1).median()
-            norm_mask_BL = activations_BLF.norm(dim=-1) < median_norm * max_act_norm_multiple
+            norm_mask_BL = (
+                activations_BLF.norm(dim=-1) < median_norm * max_act_norm_multiple
+            )
             activations_BLF *= norm_mask_BL[:, :, None]
 
         activations_BLF = activations_BLF[:, :, dim_indices]  # shape: [B, L, Fselected]
@@ -589,7 +627,9 @@ def get_max_activating_prompts(
         activations_FB = einops.reduce(activations_FBL, "F B L -> F B", "max")
 
         # We'll replicate the tokens to shape [F, B, L]
-        tokens_FBL = einops.repeat(inputs_BL["input_ids"], "B L -> F B L", F=feature_count)
+        tokens_FBL = einops.repeat(
+            inputs_BL["input_ids"], "B L -> F B L", F=feature_count
+        )
 
         # Create an index for the batch offset
         indices_B = torch.arange(batch_offset, batch_offset + batch_size, device=device)
@@ -599,17 +639,25 @@ def get_max_activating_prompts(
         combined_activations_FB = torch.cat([max_activations_FK, activations_FB], dim=1)
         combined_indices_FB = torch.cat([max_activating_indices_FK, indices_FB], dim=1)
 
-        combined_activations_FBL = torch.cat([max_activations_FKL, activations_FBL], dim=1)
+        combined_activations_FBL = torch.cat(
+            [max_activations_FKL, activations_FBL], dim=1
+        )
         combined_tokens_FBL = torch.cat([max_tokens_FKL, tokens_FBL], dim=1)
 
         # 4) Sort to keep only top-k
-        topk_activations_FK, topk_indices_FK = torch.topk(combined_activations_FB, k, dim=1)
+        topk_activations_FK, topk_indices_FK = torch.topk(
+            combined_activations_FB, k, dim=1
+        )
 
         max_activations_FK = topk_activations_FK
         feature_indices_F1 = torch.arange(feature_count, device=device)[:, None]
 
-        max_activating_indices_FK = combined_indices_FB[feature_indices_F1, topk_indices_FK]
-        max_activations_FKL = combined_activations_FBL[feature_indices_F1, topk_indices_FK]
+        max_activating_indices_FK = combined_indices_FB[
+            feature_indices_F1, topk_indices_FK
+        ]
+        max_activations_FKL = combined_activations_FBL[
+            feature_indices_F1, topk_indices_FK
+        ]
         max_tokens_FKL = combined_tokens_FBL[feature_indices_F1, topk_indices_FK]
 
     return max_tokens_FKL, max_activations_FKL
@@ -622,14 +670,24 @@ def get_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = Fals
     if use_lora:
         if "pythia" in model_name:
             raise ValueError("Need to determine how to get submodule for LoRA")
-        elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name or "Qwen" in model_name:
+        elif (
+            "gemma" in model_name
+            or "mistral" in model_name
+            or "Llama" in model_name
+            or "Qwen" in model_name
+        ):
             return model.base_model.model.model.layers[layer]
         else:
             raise ValueError(f"Please add submodule for model {model_name}")
 
     if "pythia" in model_name:
         return model.gpt_neox.layers[layer]
-    elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name or "Qwen" in model_name:
+    elif (
+        "gemma" in model_name
+        or "mistral" in model_name
+        or "Llama" in model_name
+        or "Qwen" in model_name
+    ):
         return model.model.layers[layer]
     else:
         raise ValueError(f"Please add submodule for model {model_name}")
@@ -660,70 +718,77 @@ if __name__ == "__main__":
     sae_repo_id = "adamkarvonen/qwen3-8b-saes"
     model_name = "Qwen/Qwen3-8B"
 
-    sae_width, sae_layer, sae_layer_percent, sae_filename = get_sae_info(sae_repo_id)
+    sae_layer_percents = [50, 75]
 
-    num_tokens = 60_000_000
-    context_length = 32
-    max_acts_batch_size = 128
-
-    model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", torch_dtype=dtype)
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-    # Qwen doesn't have a bos token, so we'll use the eos token
-    if tokenizer.bos_token is None:
-        tokenizer.bos_token = tokenizer.eos_token
-
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    sae = load_dictionary_learning_batch_topk_sae(
-        repo_id=sae_repo_id,
-        filename=sae_filename,
-        model_name=model_name,
-        device=device,
-        dtype=dtype,
-    )
-
-    acts_folder = "max_acts"
-    os.makedirs(acts_folder, exist_ok=True)
-
-    submodules = [get_submodule(model, sae_layer)]
-
-    acts_filename = os.path.join(
-        acts_folder,
-        f"acts_{model_name}_layer_{sae_layer}_trainer_{sae_width}_layer_percent_{sae_layer_percent}_context_length_{context_length}.pt".replace(
-            "/", "_"
-        ),
-    )
-
-    if not os.path.exists(acts_filename):
-        max_tokens, max_acts = get_interp_prompts(
-            model,
-            submodules[0],
-            sae,
-            torch.tensor(list(range(sae.W_dec.shape[0]))),
-            context_length=context_length,
-            tokenizer=tokenizer,
-            batch_size=max_acts_batch_size,
-            num_tokens=num_tokens,
+    for sae_layer_percent in sae_layer_percents:
+        sae_width, sae_layer, sae_filename = get_sae_info(
+            sae_repo_id, sae_layer_percent
         )
 
-        config = {
-            "sae_width": sae_width,
-            "sae_layer": sae_layer,
-            "sae_layer_percent": sae_layer_percent,
-            "context_length": context_length,
-            "max_acts_batch_size": max_acts_batch_size,
-            "num_tokens": num_tokens,
-            "model_name": model_name,
-            "sae_repo_id": sae_repo_id,
-        }
+        num_tokens = 60_000_000
+        context_length = 32
+        max_acts_batch_size = 128
 
-        acts_data = {
-            "max_tokens": max_tokens,
-            "max_acts": max_acts,
-            "config": config,
-        }
-        torch.save(acts_data, acts_filename)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, device_map="auto", torch_dtype=dtype
+        )
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-        upload_acts_to_hf(acts_filename)
+        # Qwen doesn't have a bos token, so we'll use the eos token
+        if tokenizer.bos_token is None:
+            tokenizer.bos_token = tokenizer.eos_token
+
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        sae = load_dictionary_learning_batch_topk_sae(
+            repo_id=sae_repo_id,
+            filename=sae_filename,
+            model_name=model_name,
+            device=device,
+            dtype=dtype,
+        )
+
+        acts_folder = "max_acts"
+        os.makedirs(acts_folder, exist_ok=True)
+
+        submodules = [get_submodule(model, sae_layer)]
+
+        acts_filename = os.path.join(
+            acts_folder,
+            f"acts_{model_name}_layer_{sae_layer}_trainer_{sae_width}_layer_percent_{sae_layer_percent}_context_length_{context_length}.pt".replace(
+                "/", "_"
+            ),
+        )
+
+        if not os.path.exists(acts_filename):
+            max_tokens, max_acts = get_interp_prompts(
+                model,
+                submodules[0],
+                sae,
+                torch.tensor(list(range(sae.W_dec.shape[0]))),
+                context_length=context_length,
+                tokenizer=tokenizer,
+                batch_size=max_acts_batch_size,
+                num_tokens=num_tokens,
+            )
+
+            config = {
+                "sae_width": sae_width,
+                "sae_layer": sae_layer,
+                "sae_layer_percent": sae_layer_percent,
+                "context_length": context_length,
+                "max_acts_batch_size": max_acts_batch_size,
+                "num_tokens": num_tokens,
+                "model_name": model_name,
+                "sae_repo_id": sae_repo_id,
+            }
+
+            acts_data = {
+                "max_tokens": max_tokens,
+                "max_acts": max_acts,
+                "config": config,
+            }
+            torch.save(acts_data, acts_filename)
+
+            upload_acts_to_hf(acts_filename)
