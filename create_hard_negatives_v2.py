@@ -30,6 +30,7 @@ from typing import NamedTuple, Sequence
 
 import torch
 import torch.nn.functional as F
+from tqdm import tqdm
 
 from detection_eval.detection_basemodels import (
     SAEV2,
@@ -59,7 +60,7 @@ class SAEInfo(NamedTuple):
     sae_filename: str
 
 
-def get_sae_info(sae_repo_id: str, sae_layer_percent: int, sae_width: int | None = 131) -> SAEInfo:
+def get_sae_info(sae_repo_id: str, sae_layer_percent: int = 25, sae_width: int | None = None) -> SAEInfo:
     if sae_repo_id == "google/gemma-scope-9b-it-res":
         num_layers = 42
         assert sae_layer_percent == 25
@@ -91,7 +92,6 @@ def get_sae_info(sae_repo_id: str, sae_layer_percent: int, sae_width: int | None
             sae_width = 32
         sae_filename = ""
     elif sae_repo_id == "adamkarvonen/qwen3-8b-saes":
-        assert sae_layer is None
         num_layers = 36
         sae_layer = int(num_layers * (sae_layer_percent / 100))
 
@@ -535,8 +535,7 @@ def load_max_acts_data(
         acts_path = os.path.join(acts_dir, acts_filename)
 
     elif "Qwen" in model_name:
-        # NOTE: USING TRAINER 2 LAYER 9. Trainer 2 is width 65k.
-        acts_filename = "acts_Qwen_Qwen3-8B_layer_9_trainer_2_layer_percent_25_context_length_32.pt"
+        acts_filename = f"acts_Qwen_Qwen3-8B_layer_{sae_layer}_trainer_{sae_width}_layer_percent_{layer_percent}_context_length_{context_length}.pt"
         acts_path = os.path.join(acts_dir, acts_filename)
 
     # Download if not exists
@@ -562,17 +561,14 @@ def load_max_acts_data(
     return acts_data
 
 
-def decode_tokens_to_sentences(tokens: torch.Tensor, tokenizer: AutoTokenizer, skip_bos: bool = True) -> list[str]:
+def decode_tokens_to_sentences(tokens: torch.Tensor, tokenizer: AutoTokenizer) -> list[str]:
     """Convert token tensors to readable sentences using batch decoding."""
-    # Skip BOS token if requested
-    if skip_bos and tokens.shape[1] > 0:
-        tokens = tokens[:, 1:]  # Remove first token from all sequences
 
     # Convert to list format for batch decoding
     token_lists = tokens.tolist()
 
     # Batch decode all sequences at once
-    sentences = tokenizer.batch_decode(token_lists, skip_special_tokens=True)  # type: ignore
+    sentences = tokenizer.batch_decode(token_lists, skip_special_tokens=False)  # type: ignore
 
     # Strip whitespace from each sentence
     sentences = [sentence.strip() for sentence in sentences]
@@ -720,67 +716,68 @@ def compute_sae_activations_for_sentences(
             batch_sentences,
             return_tensors="pt",
             add_special_tokens=False,
-            truncation=True,
-            max_length=512,
             padding=True,  # Pad to same length for batching
         ).to(model.device)  # type: ignore
 
         with torch.no_grad():
-            try:
-                # Get model activations at the SAE layer for the whole batch
-                layer_acts_BLD = collect_activations(model, submodule, tokenized)
+            # Get model activations at the SAE layer for the whole batch
+            layer_acts_BLD = collect_activations(model, submodule, tokenized)
 
-                # Encode through SAE
-                encoded_acts_BLF = sae.encode(layer_acts_BLD)  # type: ignore
+            # Encode through SAE
+            encoded_acts_BLF = sae.encode(layer_acts_BLD)  # type: ignore
 
-                # Process each sentence in the batch
-                for batch_idx, sentence in enumerate(batch_sentences):
-                    # Get activations for this sentence and target feature
-                    feature_acts = encoded_acts_BLF[batch_idx, :, target_feature_idx]  # [seq_len]
+            norms_BL = torch.norm(layer_acts_BLD, dim=-1)
+            median_norm = norms_BL.median()
+            norm_mask_BL = norms_BL < median_norm * 10
 
-                    # Convert to token activations
-                    tokens_str: list[str] = []
-                    token_activations: list[TokenActivationV2] = []
-                    token_ids = tokenized["input_ids"][batch_idx]  # [seq_len]
-                    attention_mask = tokenized["attention_mask"][batch_idx]  # [seq_len]
+            norm_mask_BL *= tokenized["attention_mask"].bool()
 
-                    for token_idx, (token_id, activation, is_valid) in enumerate(
-                        zip(token_ids, feature_acts, attention_mask, strict=False)
-                    ):
-                        if not is_valid:  # Skip padding tokens
-                            continue
+            if tokenizer.bos_token_id is not None:
+                bos_mask_BL = tokenized["input_ids"] != tokenizer.bos_token_id
+                norm_mask_BL *= bos_mask_BL
 
-                        token_str = tokenizer.decode([token_id.item()], skip_special_tokens=True)  # type: ignore
-                        tokens_str.append(token_str)
-                        if activation.item() > 0:
-                            rounded_to_1dp = round(activation.item(), 1)
-                            token_activations.append(
-                                TokenActivationV2(
-                                    s=token_str,
-                                    act=rounded_to_1dp,
-                                    pos=token_idx,
-                                )
+            encoded_acts_BLF *= norm_mask_BL[:, :, None]
+
+            # Process each sentence in the batch
+            for batch_idx, sentence in enumerate(batch_sentences):
+                # Get activations for this sentence and target feature
+                feature_acts = encoded_acts_BLF[batch_idx, :, target_feature_idx]  # [seq_len]
+
+                # Convert to token activations
+                tokens_str: list[str] = []
+                token_activations: list[TokenActivationV2] = []
+                token_ids = tokenized["input_ids"][batch_idx]  # [seq_len]
+                attention_mask = tokenized["attention_mask"][batch_idx]  # [seq_len]
+
+                for token_idx, (token_id, activation, is_valid) in enumerate(
+                    zip(token_ids, feature_acts, attention_mask, strict=False)
+                ):
+                    if not is_valid:  # Skip padding tokens
+                        continue
+
+                    token_str = tokenizer.decode([token_id.item()], skip_special_tokens=True)  # type: ignore
+                    tokens_str.append(token_str)
+                    if activation.item() > 0:
+                        rounded_to_1dp = round(activation.item(), 1)
+                        token_activations.append(
+                            TokenActivationV2(
+                                s=token_str,
+                                act=rounded_to_1dp,
+                                pos=token_idx,
                             )
+                        )
 
-                    # Create SentenceInfo
-                    # Only consider non-padding tokens for max activation
-                    valid_activations = feature_acts[attention_mask.bool()]
-                    max_activation = valid_activations.max().item() if len(valid_activations) > 0 else 0.0
-                    sentence_info = SentenceInfoV2(
-                        max_act=max_activation,
-                        tokens=tokens_str,
-                        act_tokens=token_activations,
-                    )
+                # Create SentenceInfo
+                # Only consider non-padding tokens for max activation
+                valid_activations = feature_acts[attention_mask.bool()]
+                max_activation = valid_activations.max().item() if len(valid_activations) > 0 else 0.0
+                sentence_info = SentenceInfoV2(
+                    max_act=max_activation,
+                    tokens=tokens_str,
+                    act_tokens=token_activations,
+                )
 
-                    sentence_infos.append(sentence_info)
-
-            except Exception as e:
-                if "CUDA out of memory" in str(e):
-                    raise e
-
-                print(f"WARNING: Error processing batch: {e}")
-                # print(f"Batch sentences: {batch_sentences}")
-                continue
+                sentence_infos.append(sentence_info)
 
     return sentence_infos
 
@@ -788,7 +785,6 @@ def compute_sae_activations_for_sentences(
 def identify_hard_negatives(
     similar_sentence_infos: list[SentenceInfoV2],
     threshold: float = 0.5,
-    batch_size: int = 8,
 ) -> list[SentenceInfoV2]:
     """
     Identify sentences that have low activation for the target feature.
@@ -812,16 +808,18 @@ def main(
     model_name: str = "google/gemma-2-9b-it",
     sae_repo_id: str = "google/gemma-scope-9b-it-res",
     context_length: int = 32,
-    hard_negative_threshold: float = 0.5,
+    hard_negative_threshold: float = 0.05,
     batch_size: int = 20,
+    sae_layer_percent: int = 25,
+    verbose: bool = False,
 ):
     # check if output file exists
-    if os.path.exists(output):
+    if os.path.exists(output) and False:
         print(f"🔍 Output file {output} already exists. Not going to overwrite it.")
         return
 
     # Get SAE info
-    sae_width, sae_layer, sae_layer_percent, sae_filename = get_sae_info(sae_repo_id)
+    sae_width, sae_layer, sae_layer_percent, sae_filename = get_sae_info(sae_repo_id, sae_layer_percent)
 
     print("🔧 Configuration:")
     print(f"   Model: {model_name}")
@@ -858,22 +856,12 @@ def main(
 
     # open file to append
     with open(output, "a") as f:
-        for feature_idx in target_features:
-            print(f"\n🎯 Processing feature {feature_idx}...")
-
-            # Find most similar features
-            print(f"🔍 Finding {top_k_similar_features} most similar features to feature {feature_idx}...")
+        for feature_idx in tqdm(target_features, desc="Processing features"):
             similar_features = find_most_similar_features(sae, feature_idx, top_k=top_k_similar_features)
-
-            # Get sentences for target feature
-            print(f"📝 Getting sentences for target feature {feature_idx}...")
             target_max_acts: FeatureMaxActivations = get_feature_max_activating_sentences(
                 acts_data, tokenizer, feature_idx, target_sentences
             )
             target_sentence_list = target_max_acts.sentences
-
-            # Compute actual SAE activations for target feature sentences
-            print("🧮 Computing SAE activations for target feature sentences...")
             target_sentence_infos = compute_sae_activations_for_sentences(
                 model,
                 tokenizer,
@@ -884,11 +872,13 @@ def main(
                 batch_size,
             )
 
+            max_target_act = 0
+
+            for sentence_info in target_sentence_infos:
+                max_target_act = max(max_target_act, sentence_info.max_act)
+
             # Analyze similar features and collect hard negatives - OPTIMIZED WITH BATCHING
             hard_negatives_list = []
-
-            # Collect all sentences from similar features first
-            print(f"📝 Collecting sentences from {len(similar_features)} similar features...")
             all_similar_sentences = []
             similar_feature_mapping = []  # Track which sentences belong to which similar feature
 
@@ -902,7 +892,7 @@ def main(
                 )
                 # sometimes empty???
                 candidate_similar_sentences = [s for s in similar_max_acts.sentences if s != ""]
-                if idx == 0:
+                if idx == 0 and verbose:
                     print(f"candidate_similar_sentences: {candidate_similar_sentences}")
 
                 # Track the range of sentences for this feature
@@ -918,9 +908,6 @@ def main(
                         "num_sentences": len(candidate_similar_sentences),
                     }
                 )
-
-            # Compute target feature activations on ALL similar feature sentences in batches
-            print(f"🧮 Computing SAE activations for {len(all_similar_sentences)} sentences from similar features...")
             all_similar_sentence_infos = compute_sae_activations_for_sentences(
                 model,
                 tokenizer,
@@ -930,6 +917,24 @@ def main(
                 feature_idx,
                 batch_size,
             )
+            if verbose:
+                print(f"\n🎯 Processing feature {feature_idx}...")
+                # Find most similar features
+                print(f"🔍 Finding {top_k_similar_features} most similar features to feature {feature_idx}...")
+
+                # Get sentences for target feature
+                print(f"📝 Getting sentences for target feature {feature_idx}...")
+
+                # Compute actual SAE activations for target feature sentences
+                print("🧮 Computing SAE activations for target feature sentences...")
+
+                # Collect all sentences from similar features first
+                print(f"📝 Collecting sentences from {len(similar_features)} similar features...")
+
+                # Compute target feature activations on ALL similar feature sentences in batches
+                print(
+                    f"🧮 Computing SAE activations for {len(all_similar_sentences)} sentences from similar features..."
+                )
 
             # Process results by similar feature and rebuild SAEActivations
             for feature_info in similar_feature_mapping:
@@ -937,22 +942,29 @@ def main(
                 start_idx = feature_info["start_idx"]
                 end_idx = feature_info["end_idx"]
 
-                print(
-                    f"📝 Analyzing similar feature {similar_feature.feature_idx} (similarity: {similar_feature.similarity_score:.4f})..."
-                )
+                if verbose:
+                    print(
+                        f"📝 Analyzing similar feature {similar_feature.feature_idx} (similarity: {similar_feature.similarity_score:.4f})..."
+                    )
 
                 # Extract sentence infos for this specific similar feature
                 similar_sentence_infos = all_similar_sentence_infos[start_idx:end_idx]
 
                 # Identify hard negatives
-                hard_negatives = identify_hard_negatives(similar_sentence_infos, hard_negative_threshold, batch_size)
+                hard_negatives = identify_hard_negatives(
+                    similar_sentence_infos, hard_negative_threshold * max_target_act
+                )
 
                 if hard_negatives:
                     hard_negatives_sae = SAEActivationsV2(sae_id=similar_feature.feature_idx, sentences=hard_negatives)
                     hard_negatives_list.append(hard_negatives_sae)
-                    print(f"   Found {len(hard_negatives)} hard negatives from feature {similar_feature.feature_idx}")
+                    if verbose:
+                        print(
+                            f"   Found {len(hard_negatives)} hard negatives from feature {similar_feature.feature_idx}"
+                        )
                 else:
-                    print(f"   No hard negatives found from feature {similar_feature.feature_idx}")
+                    if verbose:
+                        print(f"   No hard negatives found from feature {similar_feature.feature_idx}")
 
             # Create final SAE object for this feature
             target_activations = SAEActivationsV2(sae_id=feature_idx, sentences=target_sentence_infos)
@@ -967,10 +979,11 @@ def main(
                 hard_negatives=hard_negatives_list,
             )
 
-            print(f"✅ Feature {feature_idx} complete!")
-            print(f"   Target sentences analyzed: {len(target_sentence_infos)}")
-            print(f"   Similar features analyzed: {len(similar_features)}")
-            print(f"   Hard negative groups found: {len(hard_negatives_list)}")
+            if verbose or True:
+                print(f"✅ Feature {feature_idx} complete!")
+                print(f"   Target sentences analyzed: {len(target_sentence_infos)}")
+                print(f"   Similar features analyzed: {len(similar_features)}")
+                print(f"   Hard negative groups found: {len(hard_negatives_list)}")
 
             f.write(sae_result.model_dump_json(exclude_none=True) + "\n")
 
@@ -988,17 +1001,25 @@ if __name__ == "__main__":
     # to_100k = list(range(0, 100_000))
     # 100k to 100_200
     # target_features = list(range(0, 200))
-    min_idx = 50_000
-    max_idx = 50_600
+    min_idx = 0
+    # max_idx = 10_000
+    max_idx = 30
     target_features = list(range(min_idx, max_idx))
-    main(
-        # model_name="google/gemma-2-9b-it",
-        # sae_repo_id="google/gemma-scope-9b-it-res",
-        model_name="Qwen/Qwen3-8B",
-        sae_repo_id="adamkarvonen/qwen3-8b-saes",
-        target_features=target_features,
-        top_k_similar_features=34,
-        batch_size=1024,
-        target_sentences=32,
-        output=f"data/qwen_hard_negatives_{min_idx}_{max_idx}.jsonl",
-    )
+
+    data_folder = "data"
+    os.makedirs(data_folder, exist_ok=True)
+
+    for sae_layer_percent in [25, 50, 75]:
+        main(
+            # model_name="google/gemma-2-9b-it",
+            # sae_repo_id="google/gemma-scope-9b-it-res",
+            model_name="Qwen/Qwen3-8B",
+            sae_repo_id="adamkarvonen/qwen3-8b-saes",
+            target_features=target_features,
+            top_k_similar_features=34,
+            batch_size=1024,
+            target_sentences=32,
+            output=f"{data_folder}/qwen_hard_negatives_{min_idx}_{max_idx}_layer_percent_{sae_layer_percent}.jsonl",
+            sae_layer_percent=sae_layer_percent,
+            verbose=True,
+        )
