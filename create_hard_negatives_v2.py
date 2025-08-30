@@ -28,8 +28,10 @@ import os
 from dataclasses import dataclass
 from typing import NamedTuple, Sequence
 
+import einops
 import torch
 import torch.nn.functional as F
+from pydantic import BaseModel
 from tqdm import tqdm
 
 from detection_eval.detection_basemodels import (
@@ -561,61 +563,12 @@ def load_max_acts_data(
     return acts_data
 
 
-def decode_tokens_to_sentences(tokens: torch.Tensor, tokenizer: AutoTokenizer) -> list[str]:
-    """Convert token tensors to readable sentences using batch decoding."""
-
-    # Convert to list format for batch decoding
-    token_lists = tokens.tolist()
-
-    # Batch decode all sequences at once
-    sentences = tokenizer.batch_decode(token_lists, skip_special_tokens=False)  # type: ignore
-
-    # Strip whitespace from each sentence
-    sentences = [sentence.strip() for sentence in sentences]
-
-    return sentences
-
-
-@dataclass(kw_only=True)
-class FeatureMaxActivations:
-    """Contains the maximum activating sentences and data for a feature."""
-
-    sentences: list[str]
-    activations: torch.Tensor  # Shape: [num_sentences, seq_len]
-    tokens: torch.Tensor  # Shape: [num_sentences, seq_len]
-
-
 @dataclass(kw_only=True)
 class SimilarFeature:
     """Represents a feature similar to a target feature."""
 
     feature_idx: int
     similarity_score: float
-
-
-def get_feature_max_activating_sentences(
-    acts_data: dict[str, torch.Tensor],
-    tokenizer: AutoTokenizer,
-    feature_idx: int,
-    num_sentences: int = 5,
-) -> FeatureMaxActivations:
-    """
-    Get the top maximally activating sentences for a specific feature.
-
-    Returns:
-        FeatureMaxActivations containing sentences, activations, and tokens
-    """
-    if feature_idx >= acts_data["max_tokens"].shape[0]:
-        raise ValueError(f"Feature {feature_idx} not found. Max feature index: {acts_data['max_tokens'].shape[0] - 1}")
-
-    # Get tokens and activations for this feature
-    feature_tokens = acts_data["max_tokens"][feature_idx, :num_sentences]  # Shape: [num_sentences, seq_len]
-    feature_activations = acts_data["max_acts"][feature_idx, :num_sentences]  # Shape: [num_sentences, seq_len]
-
-    # Decode tokens to sentences
-    sentences = decode_tokens_to_sentences(feature_tokens, tokenizer)
-
-    return FeatureMaxActivations(sentences=sentences, activations=feature_activations, tokens=feature_tokens)
 
 
 def find_most_similar_features(
@@ -695,29 +648,25 @@ def compute_sae_activations_for_sentences(
     tokenizer: AutoTokenizer,
     sae: object,
     submodule: torch.nn.Module,
-    sentences: list[str],
+    tokens_BL: torch.Tensor,
     target_feature_idx: int,
     batch_size: int = 8,
-) -> list[SentenceInfoV2]:
+) -> torch.Tensor:
     """
     Compute SAE activations for a list of sentences and return SentenceInfo objects.
     """
-    sentence_infos = []
+
+    all_acts_BL = []
 
     # Process sentences in batches
-    for i in range(0, len(sentences), batch_size):
-        batch_sentences = sentences[i : i + batch_size]
+    for i in range(0, tokens_BL.shape[0], batch_size):
+        batch_tokens_BL = tokens_BL[i : i + batch_size]
+        attn_mask_BL = torch.ones_like(batch_tokens_BL)
 
-        # left pad NOT RIGHT PAD
-        tokenizer.padding_side = "left"  # type: ignore
-
-        # Batch tokenize all sentences at once
-        tokenized = tokenizer(
-            batch_sentences,
-            return_tensors="pt",
-            add_special_tokens=False,
-            padding=True,  # Pad to same length for batching
-        ).to(model.device)  # type: ignore
+        tokenized = {
+            "input_ids": batch_tokens_BL,
+            "attention_mask": attn_mask_BL,
+        }
 
         with torch.no_grad():
             # Get model activations at the SAE layer for the whole batch
@@ -730,73 +679,21 @@ def compute_sae_activations_for_sentences(
             median_norm = norms_BL.median()
             norm_mask_BL = norms_BL < median_norm * 10
 
-            norm_mask_BL *= tokenized["attention_mask"].bool()
+            norm_mask_BL *= attn_mask_BL.bool()
 
             if tokenizer.bos_token_id is not None:
-                bos_mask_BL = tokenized["input_ids"] != tokenizer.bos_token_id
+                bos_mask_BL = batch_tokens_BL != tokenizer.bos_token_id
                 norm_mask_BL *= bos_mask_BL
 
             encoded_acts_BLF *= norm_mask_BL[:, :, None]
 
-            # Process each sentence in the batch
-            for batch_idx, sentence in enumerate(batch_sentences):
-                # Get activations for this sentence and target feature
-                feature_acts = encoded_acts_BLF[batch_idx, :, target_feature_idx]  # [seq_len]
+            encoded_acts_BL = encoded_acts_BLF[:, :, target_feature_idx]
 
-                # Convert to token activations
-                tokens_str: list[str] = []
-                token_activations: list[TokenActivationV2] = []
-                token_ids = tokenized["input_ids"][batch_idx]  # [seq_len]
-                attention_mask = tokenized["attention_mask"][batch_idx]  # [seq_len]
+            all_acts_BL.append(encoded_acts_BL)
 
-                for token_idx, (token_id, activation, is_valid) in enumerate(
-                    zip(token_ids, feature_acts, attention_mask, strict=False)
-                ):
-                    if not is_valid:  # Skip padding tokens
-                        continue
+    all_acts_BL = torch.cat(all_acts_BL, dim=0)
 
-                    token_str = tokenizer.decode([token_id.item()], skip_special_tokens=True)  # type: ignore
-                    tokens_str.append(token_str)
-                    if activation.item() > 0:
-                        rounded_to_1dp = round(activation.item(), 1)
-                        token_activations.append(
-                            TokenActivationV2(
-                                s=token_str,
-                                act=rounded_to_1dp,
-                                pos=token_idx,
-                            )
-                        )
-
-                # Create SentenceInfo
-                # Only consider non-padding tokens for max activation
-                valid_activations = feature_acts[attention_mask.bool()]
-                max_activation = valid_activations.max().item() if len(valid_activations) > 0 else 0.0
-                sentence_info = SentenceInfoV2(
-                    max_act=max_activation,
-                    tokens=tokens_str,
-                    act_tokens=token_activations,
-                )
-
-                sentence_infos.append(sentence_info)
-
-    return sentence_infos
-
-
-def identify_hard_negatives(
-    similar_sentence_infos: list[SentenceInfoV2],
-    threshold: float = 0.5,
-) -> list[SentenceInfoV2]:
-    """
-    Identify sentences that have low activation for the target feature.
-    These are hard negatives - sentences from similar features that don't activate the target.
-    """
-    hard_negatives = []
-
-    for sentence_info in similar_sentence_infos:
-        if sentence_info.max_act < threshold:
-            hard_negatives.append(sentence_info)
-
-    return hard_negatives
+    return all_acts_BL
 
 
 def main(
@@ -858,62 +755,27 @@ def main(
     with open(output, "a") as f:
         for feature_idx in tqdm(target_features, desc="Processing features"):
             similar_features = find_most_similar_features(sae, feature_idx, top_k=top_k_similar_features)
-            target_max_acts: FeatureMaxActivations = get_feature_max_activating_sentences(
-                acts_data, tokenizer, feature_idx, target_sentences
-            )
-            target_sentence_list = target_max_acts.sentences
-            target_sentence_infos = compute_sae_activations_for_sentences(
+
+            pos_tokens_BL = acts_data["max_tokens"][feature_idx, :target_sentences]
+
+            pos_acts_BL = acts_data["max_acts"][feature_idx, :target_sentences]
+
+            max_target_act = pos_acts_BL.max()
+
+            all_similar_tokens_BL = []
+
+            similar_feature_indices = [similar_feature.feature_idx for similar_feature in similar_features]
+
+            all_similar_tokens_KBL = acts_data["max_tokens"][similar_feature_indices, :negative_sentences]
+
+            all_similar_tokens_BL = einops.rearrange(all_similar_tokens_KBL, "K B L -> (K B) L")
+
+            all_similar_acts_BL = compute_sae_activations_for_sentences(
                 model,
                 tokenizer,
                 sae,
                 submodule,
-                target_sentence_list,
-                feature_idx,
-                batch_size,
-            )
-
-            max_target_act = 0
-
-            for sentence_info in target_sentence_infos:
-                max_target_act = max(max_target_act, sentence_info.max_act)
-
-            # Analyze similar features and collect hard negatives - OPTIMIZED WITH BATCHING
-            hard_negatives_list = []
-            all_similar_sentences = []
-            similar_feature_mapping = []  # Track which sentences belong to which similar feature
-
-            for idx, similar_feature in enumerate(similar_features):
-                # Get sentences for this similar feature
-                similar_max_acts = get_feature_max_activating_sentences(
-                    acts_data,
-                    tokenizer,
-                    similar_feature.feature_idx,
-                    num_sentences=negative_sentences,
-                )
-                # sometimes empty???
-                candidate_similar_sentences = [s for s in similar_max_acts.sentences if s != ""]
-                if idx == 0 and verbose:
-                    print(f"candidate_similar_sentences: {candidate_similar_sentences}")
-
-                # Track the range of sentences for this feature
-                start_idx = len(all_similar_sentences)
-                all_similar_sentences.extend(candidate_similar_sentences)
-                end_idx = len(all_similar_sentences)
-
-                similar_feature_mapping.append(
-                    {
-                        "feature": similar_feature,
-                        "start_idx": start_idx,
-                        "end_idx": end_idx,
-                        "num_sentences": len(candidate_similar_sentences),
-                    }
-                )
-            all_similar_sentence_infos = compute_sae_activations_for_sentences(
-                model,
-                tokenizer,
-                sae,
-                submodule,
-                all_similar_sentences,
+                all_similar_tokens_BL,
                 feature_idx,
                 batch_size,
             )
@@ -933,59 +795,18 @@ def main(
 
                 # Compute target feature activations on ALL similar feature sentences in batches
                 print(
-                    f"🧮 Computing SAE activations for {len(all_similar_sentences)} sentences from similar features..."
+                    f"🧮 Computing SAE activations for {all_similar_tokens_BL.shape[0]} sentences from similar features..."
                 )
 
-            # Process results by similar feature and rebuild SAEActivations
-            for feature_info in similar_feature_mapping:
-                similar_feature = feature_info["feature"]
-                start_idx = feature_info["start_idx"]
-                end_idx = feature_info["end_idx"]
+            max_similar_acts_B = all_similar_acts_BL.max(dim=1).values
+            hard_negatives_mask_B = max_similar_acts_B < (hard_negative_threshold * max_target_act)
+            hard_negatives_BL = all_similar_tokens_BL[hard_negatives_mask_B]
 
-                if verbose:
-                    print(
-                        f"📝 Analyzing similar feature {similar_feature.feature_idx} (similarity: {similar_feature.similarity_score:.4f})..."
-                    )
+            if verbose:
+                print(f"Found {hard_negatives_BL.shape[0]} hard negatives")
 
-                # Extract sentence infos for this specific similar feature
-                similar_sentence_infos = all_similar_sentence_infos[start_idx:end_idx]
-
-                # Identify hard negatives
-                hard_negatives = identify_hard_negatives(
-                    similar_sentence_infos, hard_negative_threshold * max_target_act
-                )
-
-                if hard_negatives:
-                    hard_negatives_sae = SAEActivationsV2(sae_id=similar_feature.feature_idx, sentences=hard_negatives)
-                    hard_negatives_list.append(hard_negatives_sae)
-                    if verbose:
-                        print(
-                            f"   Found {len(hard_negatives)} hard negatives from feature {similar_feature.feature_idx}"
-                        )
-                else:
-                    if verbose:
-                        print(f"   No hard negatives found from feature {similar_feature.feature_idx}")
-
-            # Create final SAE object for this feature
-            target_activations = SAEActivationsV2(sae_id=feature_idx, sentences=target_sentence_infos)
-
-            # # Extract feature vector from SAE decoder weights
-            # feature_vector = sae.W_dec[feature_idx].cpu().tolist()
-
-            sae_result = SAEV2(
-                sae_id=feature_idx,
-                # feature_vector=feature_vector,
-                activations=target_activations,
-                hard_negatives=hard_negatives_list,
-            )
-
-            if verbose or True:
-                print(f"✅ Feature {feature_idx} complete!")
-                print(f"   Target sentences analyzed: {len(target_sentence_infos)}")
-                print(f"   Similar features analyzed: {len(similar_features)}")
-                print(f"   Hard negative groups found: {len(hard_negatives_list)}")
-
-            f.write(sae_result.model_dump_json(exclude_none=True) + "\n")
+            decoded_hard_negatives = tokenizer.batch_decode(hard_negatives_BL, skip_special_tokens=True)
+            decoded_pos_sentences = tokenizer.batch_decode(pos_tokens_BL, skip_special_tokens=True)
 
     # Write all results to JSONL
     print(f"\n💾 Writing results to {output}...")
@@ -1002,8 +823,8 @@ if __name__ == "__main__":
     # 100k to 100_200
     # target_features = list(range(0, 200))
     min_idx = 0
-    # max_idx = 10_000
-    max_idx = 30
+    max_idx = 10_000
+    # max_idx = 30
     target_features = list(range(min_idx, max_idx))
 
     data_folder = "data"
@@ -1021,5 +842,5 @@ if __name__ == "__main__":
             target_sentences=32,
             output=f"{data_folder}/qwen_hard_negatives_{min_idx}_{max_idx}_layer_percent_{sae_layer_percent}.jsonl",
             sae_layer_percent=sae_layer_percent,
-            verbose=True,
+            verbose=False,
         )
