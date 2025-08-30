@@ -696,6 +696,23 @@ def compute_sae_activations_for_sentences(
     return all_acts_BL
 
 
+def list_decode(x: torch.Tensor, tokenizer: AutoTokenizer) -> list[list[str]]:
+    """
+    Input: torch.Tensor of shape [batch_size, seq_length]
+    Output: list of list of strings of len [batch_size, seq_length] Each inner list corresponds to a single token
+    """
+    assert len(x.shape) == 1 or len(x.shape) == 2
+    # Convert to list of lists, even if x is 1D
+    if len(x.shape) == 1:
+        x = x.unsqueeze(0)  # Make it 2D for consistent handling
+
+    # Convert tensor to list of list of ints
+    token_ids = x.tolist()
+
+    # Convert token ids to token strings
+    return [tokenizer.batch_decode(seq, skip_special_tokens=False) for seq in token_ids]
+
+
 def main(
     target_features: Sequence[int] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
     target_sentences: int = 20,
@@ -779,6 +796,17 @@ def main(
                 feature_idx,
                 batch_size,
             )
+
+            all_similar_acts_BL = all_similar_acts_BL.cpu()
+            all_similar_tokens_BL = all_similar_tokens_BL.cpu()
+            pos_tokens_BL = pos_tokens_BL.cpu()
+            pos_acts_BL = pos_acts_BL.cpu()
+            max_target_act = max_target_act.cpu()
+
+            max_similar_acts_B = all_similar_acts_BL.max(dim=1).values
+            hard_negatives_mask_B = max_similar_acts_B < (hard_negative_threshold * max_target_act)
+            hard_negatives_BL = all_similar_tokens_BL[hard_negatives_mask_B]
+
             if verbose:
                 print(f"\n🎯 Processing feature {feature_idx}...")
                 # Find most similar features
@@ -797,16 +825,50 @@ def main(
                 print(
                     f"🧮 Computing SAE activations for {all_similar_tokens_BL.shape[0]} sentences from similar features..."
                 )
-
-            max_similar_acts_B = all_similar_acts_BL.max(dim=1).values
-            hard_negatives_mask_B = max_similar_acts_B < (hard_negative_threshold * max_target_act)
-            hard_negatives_BL = all_similar_tokens_BL[hard_negatives_mask_B]
-
-            if verbose:
                 print(f"Found {hard_negatives_BL.shape[0]} hard negatives")
 
-            decoded_hard_negatives = tokenizer.batch_decode(hard_negatives_BL, skip_special_tokens=True)
-            decoded_pos_sentences = tokenizer.batch_decode(pos_tokens_BL, skip_special_tokens=True)
+            decoded_hard_negative_tokens = list_decode(hard_negatives_BL, tokenizer)
+            decoded_pos_tokens = list_decode(pos_tokens_BL, tokenizer)
+
+            pos_sentence_infos = []
+
+            for i, pos_tokens in zip(range(len(decoded_pos_tokens)), decoded_pos_tokens):
+                token_activations = []
+                for j, token in enumerate(pos_tokens):
+                    token_activations.append(TokenActivationV2.model_construct(s=token, act=pos_acts_BL[i, j], pos=j))
+                pos_sentence_infos.append(
+                    SentenceInfoV2.model_construct(
+                        max_act=pos_acts_BL[i, :].max(), tokens=pos_tokens, act_tokens=token_activations
+                    )
+                )
+
+            pos_sae_activations = SAEActivationsV2(sae_id=feature_idx, sentences=pos_sentence_infos)
+
+            hard_negative_sentence_infos = []
+
+            for i, hard_negative_tokens in zip(range(len(decoded_hard_negative_tokens)), decoded_hard_negative_tokens):
+                token_activations = []
+                for j, token in enumerate(hard_negative_tokens):
+                    token_activations.append(
+                        TokenActivationV2.model_construct(s=token, act=all_similar_acts_BL[i, j], pos=j)
+                    )
+                hard_negative_sentence_infos.append(
+                    SentenceInfoV2.model_construct(
+                        max_act=all_similar_acts_BL[i, :].max(),
+                        tokens=hard_negative_tokens,
+                        act_tokens=token_activations,
+                    )
+                )
+
+            # using -1 as feature idx because we don't need the feature idx for hard negatives, and it involves a little extra work to get it currently
+            hard_negative_sae_activations = SAEActivationsV2.model_construct(
+                sae_id=-1, sentences=hard_negative_sentence_infos
+            )
+
+            sae_result = SAEV2(
+                sae_id=feature_idx, activations=pos_sae_activations, hard_negatives=[hard_negative_sae_activations]
+            )
+            f.write(sae_result.model_dump_json(exclude_none=True) + "\n")
 
     # Write all results to JSONL
     print(f"\n💾 Writing results to {output}...")
