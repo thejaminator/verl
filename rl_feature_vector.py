@@ -436,6 +436,11 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         "algorithm.use_kl_in_reward=false",
         "algorithm.kl_ctrl.type=fixed",
         f"algorithm.kl_ctrl.kl_coef={params.beta}",
+        # dr grpo settings to prevent long rollouts due to bias
+        "actor_rollout_ref.actor.use_kl_loss=false",
+        "actor_rollout_ref.actor.loss_agg_mode=seq-mean-token-sum-norm",
+        "algorithm.norm_adv_by_std_in_grpo=false",
+        # end dr grpo settings
         # Model configuration
         "actor_rollout_ref.hybrid_engine=true",
         f"actor_rollout_ref.model.path={params.model_name}",
@@ -479,7 +484,6 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             "actor_rollout_ref.actor.grad_clip=0.5",
             "actor_rollout_ref.actor.clip_ratio=0.2",
             "actor_rollout_ref.actor.entropy_coeff=0.0",
-            "actor_rollout_ref.actor.use_kl_loss=true",
             "actor_rollout_ref.actor.kl_loss_coef=0.001",
             "actor_rollout_ref.actor.kl_loss_type=low_var_kl",
             f"actor_rollout_ref.actor.optim.lr={params.learning_rate}",
@@ -665,7 +669,7 @@ PARAMS = VerlParams(
     max_seq_length=6_000,
     max_prompt_length=500,
     max_response_length=4500,
-    num_generations=16,  # Bigger group size since noisy explanations
+    num_generations=8,  # Bigger group size since noisy explanations
     gpu_memory_utilization=0.8,  # some other thing running
     # model_name="google/gemma-2-9b-it",
     # num_generations=16,  # Bigger group size since noisy explanations
@@ -674,21 +678,21 @@ PARAMS = VerlParams(
     # max_response_length=6_000,  # Reduced from 6000, matching reference
     # micro_batch=8,
     # micro_batch_size_per_gpu=8,
-    micro_batch=4,  # number of prompts. In reality, will be micro_batch * num_generations.
-    micro_batch_size_per_gpu=4,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
+    micro_batch=8,  # number of prompts. In reality, will be micro_batch * num_generations.
+    micro_batch_size_per_gpu=8,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
     warmup_steps=5,
     gradient_accumulation_steps=1,
     learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
-    beta=0.02,
+    beta=0.001,
     lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
     lora_alpha=128.0,  # Typically 2x lora_rank
     target_modules="all-linear",  # Apply LoRA to all linear layers
     use_shm=False,
     layered_summon=False,
     max_steps=4000,
-    output_dir="/workspace/outputs_qwen",
+    output_dir="/workspace/outputs_qwen_low_kl",
     eval_path=None,
-    save_steps=100,  # saving causes OOM. Why?
+    save_steps=50,  # saving causes OOM. Why?
     n_gpus=1,
     use_wandb=True,
     wandb_project="grpo-feature-vector",
