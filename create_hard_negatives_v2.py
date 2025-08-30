@@ -728,7 +728,7 @@ def main(
     verbose: bool = False,
 ):
     # check if output file exists
-    if os.path.exists(output) and False:
+    if os.path.exists(output):
         print(f"🔍 Output file {output} already exists. Not going to overwrite it.")
         return
 
@@ -766,7 +766,15 @@ def main(
     # how many features in sae?
     print(f"🔍 Number of features in SAE: {len(sae.W_dec)}")  # type: ignore
 
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+    if tokenizer.bos_token_id is None:
+        tokenizer.bos_token_id = tokenizer.eos_token_id
+
     # Process each feature index
+    special_tokens = [tokenizer.eos_token_id, tokenizer.bos_token_id, tokenizer.pad_token_id]
+    special_tokens = [tokenizer.decode(token_id, skip_special_tokens=False) for token_id in special_tokens]
+    special_tokens = set(special_tokens)
 
     # open file to append
     with open(output, "a") as f:
@@ -835,10 +843,14 @@ def main(
             for i, pos_tokens in zip(range(len(decoded_pos_tokens)), decoded_pos_tokens):
                 token_activations = []
                 for j, token in enumerate(pos_tokens):
+                    if token in special_tokens:
+                        continue
                     token_activations.append(TokenActivationV2.model_construct(s=token, act=pos_acts_BL[i, j], pos=j))
+
+                tokens = [act.s for act in token_activations]
                 pos_sentence_infos.append(
                     SentenceInfoV2.model_construct(
-                        max_act=pos_acts_BL[i, :].max(), tokens=pos_tokens, act_tokens=token_activations
+                        max_act=pos_acts_BL[i, :].max(), tokens=tokens, act_tokens=token_activations
                     )
                 )
 
@@ -849,13 +861,16 @@ def main(
             for i, hard_negative_tokens in zip(range(len(decoded_hard_negative_tokens)), decoded_hard_negative_tokens):
                 token_activations = []
                 for j, token in enumerate(hard_negative_tokens):
+                    if token in special_tokens:
+                        continue
                     token_activations.append(
                         TokenActivationV2.model_construct(s=token, act=all_similar_acts_BL[i, j], pos=j)
                     )
+                tokens = [act.s for act in token_activations]
                 hard_negative_sentence_infos.append(
                     SentenceInfoV2.model_construct(
                         max_act=all_similar_acts_BL[i, :].max(),
-                        tokens=hard_negative_tokens,
+                        tokens=tokens,
                         act_tokens=token_activations,
                     )
                 )
@@ -885,7 +900,7 @@ if __name__ == "__main__":
     # 100k to 100_200
     # target_features = list(range(0, 200))
     min_idx = 0
-    max_idx = 10_000
+    max_idx = 20_000
     # max_idx = 30
     target_features = list(range(min_idx, max_idx))
 
