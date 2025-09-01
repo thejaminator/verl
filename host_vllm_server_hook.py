@@ -18,7 +18,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Set
 
 import torch
 import uvicorn
@@ -191,8 +191,6 @@ class VLLMServer:
 
     def get_model_key(self, model_name: str, hook_onto_layer: int) -> str:
         """Get the key for queue management based on model name."""
-        if model_name == MODEL_NAME:
-            return "base"
         return model_name + str(hook_onto_layer)
 
     async def add_to_queue(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
@@ -319,7 +317,10 @@ class VLLMServer:
                 dtype=DTYPE,
             )
             # get the layer number from the hook_onto_layer
-            layer_number = batch_requests[0].request.hook_onto_layer
+            layer_numbers: Set[int] = {b.request.hook_onto_layer for b in batch_requests}
+            # assert all the layer numbers are the same
+            assert len(layer_numbers) == 1, f"Layer numbers are not the same: {layer_numbers}"
+            layer_number: int = layer_numbers.pop()
 
             # Generate batch with steering
             target_layer = self.model.model.layers[layer_number]
