@@ -605,37 +605,48 @@ def find_most_similar_features(
 
     return similar_features
 
+def load_model(
+    model_name: str,
+    dtype: torch.dtype,
+) -> AutoModelForCausalLM:
+    print("🧠 Loading model...")
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype=dtype,
+        device_map="auto",
+    )
+    return model
+
+def load_tokenizer(
+    model_name: str,
+) -> AutoTokenizer:
+    # Load tokenizer
+    print("📦 Loading tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer.padding_side = "left"
+
+    if not tokenizer.pad_token_id:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+    if not tokenizer.bos_token_id:
+        tokenizer.bos_token_id = tokenizer.eos_token_id
+    return tokenizer
+
 
 def load_model_and_sae(
     model_name: str,
     sae_repo_id: str,
     sae_filename: str,
     sae_layer: int,
-) -> tuple[AutoModelForCausalLM, AutoTokenizer, object, torch.nn.Module]:
-    """Load the Gemma 9B model, tokenizer, SAE, and submodule."""
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[AutoModelForCausalLM, AutoTokenizer, object]:
+    """Load the Gemma 9B model, tokenizer, and SAE."""
 
-    # Load tokenizer
-    print("📦 Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-    # Load model
-    print("🧠 Loading model...")
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=dtype,
-        device_map="auto" if torch.cuda.is_available() else None,
-    )
-
-    # Load SAE
-    print("🔧 Loading SAE...")
+    model = load_model(model_name, dtype)
+    tokenizer = load_tokenizer(model_name)
     sae = load_sae(sae_repo_id, sae_filename, sae_layer, model_name, device, dtype)
 
-    # Get submodule for activation collection
-    submodule = get_submodule(model, sae_layer)  # type: ignore
-
-    return model, tokenizer, sae, submodule  # type: ignore
+    return model, tokenizer, sae
 
 
 def compute_sae_activations_for_sentences(
@@ -728,6 +739,9 @@ def main(
         print(f"🔍 Output file {output} already exists. Not going to overwrite it.")
         return
 
+    device = torch.device("cuda")
+    dtype = torch.bfloat16
+
     # Get SAE info
     sae_info = get_sae_info(sae_repo_id, sae_layer_percent)
     sae_width = sae_info.sae_width
@@ -762,14 +776,11 @@ def main(
 
     # Load model, tokenizer, and SAE
     print("🚀 Loading model and SAE...")
-    model, tokenizer, sae, submodule = load_model_and_sae(model_name, sae_repo_id, sae_filename, sae_layer)
+    model, tokenizer, sae = load_model_and_sae(model_name, sae_repo_id, sae_filename, sae_layer, device, dtype)
+    submodule = get_submodule(model, sae_layer)  # type: ignore
     # how many features in sae?
     print(f"🔍 Number of features in SAE: {len(sae.W_dec)}")  # type: ignore
 
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-    if tokenizer.bos_token_id is None:
-        tokenizer.bos_token_id = tokenizer.eos_token_id
 
     # Process each feature index
     special_tokens = [tokenizer.eos_token_id, tokenizer.bos_token_id, tokenizer.pad_token_id]
