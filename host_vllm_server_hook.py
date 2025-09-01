@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 """
+James workflow:
+0. I host on runpod and call it locally with my laptop. If you want to call locally, make sure port 8000 is open.
+1. Change MODEL_NAME to the base model you want to use. E.g. Qwen/Qwen3-8B.
+2. Change the loras you want to load in load_loras.
+3. Run the script.
+4. Connect with eval_detection_v2.py. Change RUN_POD_URL to the url of your runpod instance.
+5. If you want to test connection quickly, use test_vllm_server_openai.py.
+
 FastAPI server that runs vLLM with activation steering hooks.
 Mimics OpenAI chat completions API with additional sae_index parameter.
 """
@@ -29,8 +37,8 @@ os.environ["NVTE_ALLOW_NONDETERMINISTIC_ALGO"] = "1"
 
 # Configuration
 # MODEL_NAME = "google/gemma-2-9b-it"
-# MODEL_NAME = "Qwen/Qwen3-8B"
-MODEL_NAME = "thejaminator/qwen-hook-layer-9-merged"
+MODEL_NAME = "Qwen/Qwen3-8B"
+# MODEL_NAME = "thejaminator/qwen-hook-layer-9-merged"
 DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
 CTX_LEN = 6000
@@ -59,8 +67,8 @@ gemma_loras = [
     # "thejaminator/gemma-posneg-cot",
 ]
 qwen_loras = [
-    # "thejaminator/qwen-hook-layer-9"
-    "thejaminator/grpo-feature-vector-step-100"
+    "thejaminator/qwen-hook-layer-9"
+    # "thejaminator/grpo-feature-vector-step-100"
 ]
 load_loras = qwen_loras
 # SAE_WIDTH = 131  # Can be 16 or 131. Check what we trained with?
@@ -128,16 +136,25 @@ class VLLMServer:
         self.tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
         print("Initializing vLLM model...")
+        # max_prefill_batched_tokens decides how much we can prefill before vLLM splits into separate prefill batches.
+        # Ideally it should never do that otherwise our hook breaks.
+        # 200 is our estimated prompt length.
+        # We multiply by MAX_PARALLEL_REQUESTS.
+        max_prefill_batched_tokens = 200 * MAX_PARALLEL_REQUESTS
         self.llm = LLM(
             model=MODEL_NAME,
             tensor_parallel_size=1,
             max_model_len=CTX_LEN,
+            max_num_batched_tokens=max_prefill_batched_tokens,
             dtype=DTYPE,
             gpu_memory_utilization=gpu_memory_utilization,
             enable_lora=True,
             max_lora_rank=64,
+            # Important to disable async output proc otherwise our hook breaks.
             disable_async_output_proc=True,
+            # Otherwise hook does not get applied.
             enforce_eager=True,
+            # Since our prompts are all the same, we need to disable this.
             enable_prefix_caching=False,
         )
         self.model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model

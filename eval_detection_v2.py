@@ -974,7 +974,8 @@ async def main(
     if len(steering_models) > 0:
         # Run gemma steering
         print("Running gemma steering")
-        gemma_client = AsyncOpenAI(api_key="dummy api key", base_url="https://728qdkul8ii0j5-8000.proxy.runpod.net/v1")
+        RUN_POD_URL = "https://728qdkul8ii0j5-8000.proxy.runpod.net/v1"
+        gemma_client = AsyncOpenAI(api_key="dummy api key", base_url=RUN_POD_URL)
         width = 131  # not cached by api call yet, so manually add to cache path
         gemma_caller = OpenAICaller(openai_client=gemma_client, cache_path=f"cache/steering_cache_{width}")
         best_of_n = config.best_of_n
