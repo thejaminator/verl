@@ -34,6 +34,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 
 import torch
+import wandb
 from huggingface_hub import login, whoami
 from peft import LoraConfig, get_peft_model
 from pydantic import BaseModel
@@ -44,7 +45,6 @@ from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.tokenization_utils import PreTrainedTokenizer
 
-import wandb
 from create_hard_negatives_v2 import BaseSAE, JumpReluSAE, get_sae_info, get_submodule, load_sae
 
 # ==============================================================================

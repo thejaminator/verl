@@ -34,6 +34,7 @@ from typing import Sequence
 
 import bitsandbytes as bnb
 import torch
+import wandb
 from huggingface_hub import login, whoami
 from peft import LoraConfig, get_peft_model
 from pydantic import BaseModel
@@ -42,8 +43,6 @@ from tqdm import tqdm
 from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
-
-import wandb
 
 # Removed SAE-related imports
 

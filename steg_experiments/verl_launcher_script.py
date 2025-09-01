@@ -16,11 +16,11 @@ import subprocess
 import sys
 from typing import Sequence
 
+import wandb
+
 # Step 2: Push to HuggingFace Hub
 from huggingface_hub import HfApi
 from pydantic import BaseModel
-
-import wandb
 
 
 class ChatMessage(BaseModel):

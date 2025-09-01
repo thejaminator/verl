@@ -26,12 +26,11 @@ import sys
 import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
+import wandb
 
 # Step 2: Push to HuggingFace Hub
 from huggingface_hub import HfApi
 from pydantic import BaseModel
-
-import wandb
 
 
 class VerlParams(BaseModel):
@@ -211,6 +210,11 @@ def load_and_convert_dataset(
         sample_dict = sae.model_dump()
         # Load the SAE train info. Should conform to SAE basemodel.
         sample = SAEV2.model_validate(sample_dict)
+        if len(sample.hard_negatives) <= 11:
+            print(
+                f"WARNING: SAE {sae.sae_id} has {len(sample.hard_negatives)} hard negatives. This is less than 11. Not enough to test on. Skipping."
+            )
+            continue
         # IMPORTANT: need to fetch the correct idx for the feature vector.
         feature = feature_vector_list[sae_id_to_idx[sae.sae_id]]
 
