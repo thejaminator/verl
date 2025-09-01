@@ -499,7 +499,9 @@ class DataParallelPPOActor(BasePPOActor):
                     self.gradient_accumulation = (
                         self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size_per_gpu
                     )
+                    print(f"Using gradient accumulation: {self.gradient_accumulation}. Calculation: ppo_mini_batch_size={self.config.ppo_mini_batch_size} / ppo_micro_batch_size_per_gpu={self.config.ppo_micro_batch_size_per_gpu}")
                     micro_batches = mini_batch.split(self.config.ppo_micro_batch_size_per_gpu)
+                    print(f"Number of micro batches: {len(micro_batches)}")
 
                 self.actor_optimizer.zero_grad()
 

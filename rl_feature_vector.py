@@ -58,6 +58,9 @@ class VerlParams(BaseModel):
 
     # GRPO specific
     num_generations: int = 4
+    # set to 2 to split the batch into smaller chunks for generation to reduce memory usage.
+    #  normally vllm handles this, but our hook requires some manual split to not oom.
+    vllm_split: int = 2
     warmup_steps: int = 10
     beta: float = 0.005  # KL coefficient
 
@@ -206,13 +209,16 @@ def load_and_convert_dataset(
         # uhhh not sure if this is correct? but using decoder vectors for now.
         feature_vector_list: list[list[float]] = W_enc[:, sae_ids].T.tolist()
 
+    REQUIRE_SAE_HAS_HARD_NEGATIVES = 11
+    REQUIRE_SAE_NEGATIVE_SENTENCES = 8
     for sae in jsonl_items:
         sample_dict = sae.model_dump()
         # Load the SAE train info. Should conform to SAE basemodel.
         sample = SAEV2.model_validate(sample_dict)
-        if len(sample.hard_negatives) <= 11:
+        valid_test_hard_negs = [neg for neg in sae.hard_negatives if len(neg.sentences) >= REQUIRE_SAE_NEGATIVE_SENTENCES]
+        if len(valid_test_hard_negs) <= REQUIRE_SAE_HAS_HARD_NEGATIVES:
             print(
-                f"WARNING: SAE {sae.sae_id} has {len(sample.hard_negatives)} hard negatives. This is less than 11. Not enough to test on. Skipping."
+                f"WARNING: SAE {sae.sae_id} has {len(valid_test_hard_negs)} hard negatives. This is less than {REQUIRE_SAE_HAS_HARD_NEGATIVES}. Not enough to test on. Skipping."
             )
             continue
         # IMPORTANT: need to fetch the correct idx for the feature vector.
@@ -440,7 +446,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         f"data.train_batch_size={bs}",
         "data.shuffle=true",
         "data.truncation=error",
-        "data.filter_overlong_prompts=true",
+        "data.filter_overlong_prompts=false",
         # Algorithm configuration
         "algorithm.gamma=1.0",
         "algorithm.lam=1.0",
@@ -490,9 +496,10 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         [
             # Actor configuration
             "actor_rollout_ref.actor.strategy=fsdp2",
-            f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
-            # should be a multiple of micro_batch_size_per_gpu for grad accumulation
+            # should be a multiple of micro_batch_size_per_gpu for grad accumulation. grad accum = mini batch size / micro batch size per gpu
+            # self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size_per_gpu
             f"actor_rollout_ref.actor.ppo_mini_batch_size={params.micro_batch_size_per_gpu * params.gradient_accumulation_steps}",
+            f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
             "actor_rollout_ref.actor.ppo_epochs=1",
             "actor_rollout_ref.actor.grad_clip=0.5",
             "actor_rollout_ref.actor.clip_ratio=0.2",
@@ -530,6 +537,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             "actor_rollout_ref.rollout.free_cache_engine=true",
             f"actor_rollout_ref.rollout.load_format={load_format}",
             "actor_rollout_ref.rollout.tensor_model_parallel_size=1",
+            f"actor_rollout_ref.rollout.vllm_split={params.vllm_split}",
             f"actor_rollout_ref.rollout.n={params.num_generations}",
             "actor_rollout_ref.rollout.val_kwargs.temperature=1.0",
             "actor_rollout_ref.rollout.val_kwargs.n=1",
@@ -678,15 +686,19 @@ PARAMS = VerlParams(
     # sae_repo_id="google/gemma-scope-9b-it-res",
     model_name="thejaminator/qwen-hook-layer-9-step-1000-merged",
     train_path="data/qwen_hard_negatives_0_to_30_000.jsonl",
-    max_train_samples=10_000,
+    max_train_samples=20_000,
     sae_repo_id="adamkarvonen/qwen3-8b-saes",
     use_feature_vector=True,  # debugging logprobs
     max_seq_length=2000,
-    max_prompt_length=500,
+    max_prompt_length=300,
     max_response_length=1_500,
     num_generations=8,  # Bigger group size since noisy explanations
+    vllm_split=2,
     micro_batch_size_per_gpu=8,  # number of prompts in rollout batch. will be multiplied by num_generations.
-    gradient_accumulation_steps=4,  # 8 * 4 = 32 is the effective batch size
+    # 8 * 8 = 64 is the effective batch size
+    # Note: vllm implementation does not follow this batch size since it has its own scheduler.
+    # May need to experiment with implementing our own split for vllm.
+    gradient_accumulation_steps=8,
     gpu_memory_utilization=0.7,
     # model_name="google/gemma-2-9b-it",
     # num_generations=16,  # Bigger group size since noisy explanations
@@ -704,9 +716,9 @@ PARAMS = VerlParams(
     use_shm=False,
     layered_summon=False,
     max_steps=4000,
-    output_dir="/workspace/verl_31_aug_act_low_kl",
+    output_dir="/workspace/verl_31_aug_act_low_kl_try_2",
     eval_path=None,
-    save_steps=50,  # saving causes OOM. Why?
+    save_steps=25,  # saving causes OOM. Why?
     n_gpus=1,
     use_wandb=True,
     wandb_project="grpo-feature-vector",
