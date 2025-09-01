@@ -24,7 +24,7 @@ from detection_eval.detection_basemodels import (
     SentenceInfoV2,
     TokenActivationV2,
 )
-from detection_eval.steering_hooks import X_PROMPT
+from detection_eval.steering_hooks import get_introspection_prompt
 
 
 class ModelInfo(BaseModel):
@@ -850,7 +850,7 @@ async def run_gemma_steering(
     """
     Run gemma steering for a single SAE.
     """
-    history = ChatHistory.from_user(X_PROMPT)
+    history = ChatHistory.from_user(get_introspection_prompt(sae_layer=9)) # TODO: FIX
     response = await gemma_caller.call(
         messages=history,
         config=InferenceConfig(
@@ -1008,6 +1008,7 @@ async def main(
         # Run gemma steering
         print("Running gemma steering")
         RUN_POD_URL = "https://728qdkul8ii0j5-8000.proxy.runpod.net/v1"
+        # RUN_POD_URL = "http://0.0.0.0:8000/v1"
         gemma_client = AsyncOpenAI(api_key="dummy api key", base_url=RUN_POD_URL)
         width = 131  # not cached by api call yet, so manually add to cache path
         gemma_caller = OpenAICaller(openai_client=gemma_client, cache_path=f"cache/steering_cache_{width}")

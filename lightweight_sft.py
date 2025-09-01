@@ -20,7 +20,7 @@ Before running:
 
 import os
 
-from detection_eval.steering_hooks import X_PROMPT, add_hook, get_hf_activation_steering_hook
+from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prompt
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
@@ -427,7 +427,7 @@ def build_training_prompt(positive_negative_examples: bool, sae_layer: int) -> s
     if positive_negative_examples:
         question = f"""Can you explain to me the concept of what 'X' from layer {sae_layer} means? Give positive and negative examples of what the concept would activate on. Format your final answer with <explanation>."""
     else:
-        question = X_PROMPT.format(sae_layer=sae_layer)
+        question = get_introspection_prompt(sae_layer)
     return question
 
 
