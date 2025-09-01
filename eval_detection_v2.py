@@ -2,6 +2,7 @@ import asyncio
 import time
 
 import plotly.graph_objects as go
+import tiktoken
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from slist import Group, Slist
@@ -36,6 +37,7 @@ class ModelInfo(BaseModel):
 
 class SAEExplained(BaseModel):
     sae_id: int
+    sae_layer: int = 9
     explanation: str
     positive_examples: list[str]
     negative_examples: list[str]
@@ -136,6 +138,7 @@ def sentence_to_prompt_text_only(sentence: SentenceInfoV2) -> str:
 
 class SAETrainTest(BaseModel):
     sae_id: int
+    sae_layer: int = 9
     # feature_vector: Sequence[float]
     train_activations: SAEActivationsV2
     test_activations: SAEActivationsV2
@@ -238,6 +241,7 @@ class SAETrainTest(BaseModel):
 
         return SAETrainTest(
             sae_id=sae.sae_id,
+            sae_layer=sae.sae_layer,
             # feature_vector=sae.feature_vector,
             train_activations=train_activations,
             test_activations=test_activations,
@@ -263,7 +267,8 @@ def format_sae_prompt_for_explanation(activation: SAETrainTest) -> str:
     for hard_neg_sae in activation.train_hard_negatives:
         for sentence in hard_neg_sae.sentences:
             prompt += f"<negative_example_{negative_idx}>\n"
-            prompt += sentence_to_prompt_with_vector(sentence)
+            # prompt += sentence_to_prompt_with_vector(sentence)
+            prompt += sentence_to_prompt_text_only(sentence)
             prompt += f"</negative_example_{negative_idx}>\n"
             negative_idx += 1
 
@@ -285,6 +290,7 @@ Please write your final answer of what this SAE feature explains in the followin
 
 class SAETrainTestWithExplanation(BaseModel):
     sae_id: int
+    sae_layer: int = 9
     # feature_vector: Sequence[float]
     train_activations: SAEActivationsV2
     test_activations: SAEActivationsV2
@@ -308,6 +314,7 @@ class MixedSentencesBatch(BaseModel):
     """Contains mixed sentences from multiple SAEs for evaluation."""
 
     target_sae_id: int
+    sae_layer: int = 9
     explanation_history: ChatHistory
     explanation: str
     positive_examples: list[SentenceInfoV2]  # Sentences that should activate the feature
@@ -320,6 +327,7 @@ class DetectionResult(BaseModel):
     """Results of precision/recall evaluation."""
 
     target_sae_id: int
+    sae_layer: int = 9
     predicted_indices: set[int]
     true_indices: set[int]
     precision: float
@@ -341,6 +349,7 @@ class DetectionResult(BaseModel):
             positive_examples=self.positive_examples[:5],
             negative_examples=self.negative_examples[:5],
             f1=self.f1_score,
+            sae_layer=self.sae_layer,
         )
 
 
@@ -375,6 +384,7 @@ async def call_model_for_sae_explanation(
             [
                 SAETrainTestWithExplanation(
                     sae_id=activation.sae_id,
+                    sae_layer=activation.sae_layer,
                     # feature_vector=activation.feature_vector,
                     train_activations=activation.train_activations,
                     test_activations=activation.test_activations,
@@ -389,6 +399,7 @@ async def call_model_for_sae_explanation(
         return Slist(response.responses).map(
             lambda x: SAETrainTestWithExplanation(
                 sae_id=activation.sae_id,
+                sae_layer=activation.sae_layer,
                 # feature_vector=activation.feature_vector,
                 train_activations=activation.train_activations,
                 test_activations=activation.test_activations,
@@ -456,6 +467,7 @@ def create_detection_batch(
 
     return MixedSentencesBatch(
         target_sae_id=target_sae.sae_id,
+        sae_layer=target_sae.sae_layer,
         explanation_history=target_sae.explanation,
         explanation=explanation_text,
         positive_examples=positive_examples,
@@ -567,6 +579,7 @@ async def evaluate_sentence_matching(
 
     return DetectionResult(
         target_sae_id=batch.target_sae_id,
+        sae_layer=batch.sae_layer,
         predicted_indices=predicted_indices,
         true_indices=batch.target_indices,
         precision=precision,
@@ -855,6 +868,7 @@ async def run_gemma_steering(
     # return the SAETrainTestWithExplanation
     return SAETrainTestWithExplanation(
         sae_id=sae.sae_id,
+        sae_layer=sae.sae_layer,
         explanation=history.add_assistant(explanation),
         explainer_model=model_info.model,
         # note: technically we didn't use these "train" things but we'll just pass it on.
@@ -955,6 +969,20 @@ async def main(
     caller = load_multi_caller(cache_path="cache/sae_explanations")
     # Custom caller for gemma
 
+    total_tokens = 0
+
+    encoding = tiktoken.get_encoding("cl100k_base")
+
+    for activation in split_sae_activations:
+        str_prompt = format_sae_prompt_for_explanation(activation)
+        total_tokens += len(encoding.encode(str_prompt))
+
+    if config.best_of_n is not None:
+        total_tokens *= config.best_of_n
+
+    print(f"Total explanation input tokens: {total_tokens:,} ({total_tokens / 1_000_000:.2f}M)")
+    print(f"Average explanation input tokens: {total_tokens / len(split_sae_activations):,.0f}")
+
     # Generate explanations for each model
     async with caller:
         non_steering_models = explainer_models.filter(lambda x: not x.use_steering)
@@ -1010,6 +1038,18 @@ async def main(
         temperature=1.0,
     )
 
+    total_tokens = 0
+    for target_sae in all_explanations:
+        batch = create_detection_batch(target_sae=target_sae)
+        prompt = create_evaluation_prompt(batch)
+        total_tokens += len(encoding.encode(prompt))
+
+    if config.best_of_n is not None:
+        total_tokens *= config.best_of_n
+
+    print(f"Total evaluation input tokens: {total_tokens:,} ({total_tokens / 1_000_000:.2f}M)")
+    print(f"Average evaluation input tokens: {total_tokens / len(split_sae_activations):,.0f}")
+
     async with caller_for_eval:
         # sort for deterministic results
         all_explanations_sorted = all_explanations.sort_by(lambda x: x.sae_id)
@@ -1060,7 +1100,8 @@ async def main(
         safe_model_name = model_name.replace("/", "_").replace(":", "_")
 
         # Save the generated explanations
-        explanation_output_file = f"sae_explanations_{safe_model_name}.jsonl"
+        # explanation_output_file = f"sae_explanations_{safe_model_name}.jsonl"
+        explanation_output_file = sae_file.replace(".jsonl", f"_sae_explanations_{safe_model_name}.jsonl")
         write_jsonl_file_from_basemodel(
             path=explanation_output_file, basemodels=evaluation_results.map(lambda x: x.explanation_history)
         )
@@ -1070,7 +1111,8 @@ async def main(
         # write_jsonl_file_from_basemodel(path=eval_output_file, basemodels=evaluation_results)
         # print(f"  Detailed results saved to {eval_output_file}")
 
-        history_output_file = f"sae_evaluation_history_{safe_model_name}.jsonl"
+        # history_output_file = f"sae_evaluation_history_{safe_model_name}.jsonl"
+        history_output_file = sae_file.replace(".jsonl", f"_sae_evaluation_history_{safe_model_name}.jsonl")
         write_jsonl_file_from_basemodel(
             path=history_output_file, basemodels=evaluation_results.map(lambda x: x.evaluation_history)
         )
@@ -1078,18 +1120,27 @@ async def main(
 
         sft_data = evaluation_results.map(lambda x: x.to_sae_explained()).filter(lambda x: x.f1 > 0.8)
         # Save the SAE explanations
-        sae_explanations_output_file = f"10k_qwen_28aug_sae_sfted_{safe_model_name}.jsonl"
+        # sae_explanations_output_file = f"10k_qwen_28aug_sae_sfted_{safe_model_name}.jsonl"
+        sae_explanations_output_file = sae_file.replace(".jsonl", f"_sft_data_{safe_model_name}.jsonl")
         write_jsonl_file_from_basemodel(path=sae_explanations_output_file, basemodels=sft_data)
         print(f"  SAE explanations saved to {sae_explanations_output_file}")
 
-    # Plot F1 scores by model
-    rename_map = {m.model: m.display_name for m in explainer_models}
-    print(rename_map)
-    plot_f1_scores_by_model(groupby_by_model, rename_map)
-    # plot_f1_scores_by_model(groupby_by_model, rename_map)
+        num_perfect_f1 = 0
+        for evaluation_result in evaluation_results:
+            if evaluation_result.f1_score == 1.0:
+                num_perfect_f1 += 1
+        print(
+            f"Total perfect F1 scores: {num_perfect_f1:,} out of {len(evaluation_results)}, {num_perfect_f1 / len(evaluation_results):.2f}%"
+        )
 
-    # Plot precision vs recall by model
-    plot_precision_vs_recall_by_model(groupby_by_model, rename_map)
+    # Plot F1 scores by model
+    # rename_map = {m.model: m.display_name for m in explainer_models}
+    # print(rename_map)
+    # plot_f1_scores_by_model(groupby_by_model, rename_map)
+    # # plot_f1_scores_by_model(groupby_by_model, rename_map)
+
+    # # Plot precision vs recall by model
+    # plot_precision_vs_recall_by_model(groupby_by_model, rename_map)
 
 
 if __name__ == "__main__":
@@ -1099,30 +1150,31 @@ if __name__ == "__main__":
             ModelInfo(
                 model="gpt-5-mini-2025-08-07",
                 display_name="GPT-5-mini<br>(extrospecting<br>sentences)",
-                reasoning_effort="medium",
+                reasoning_effort="low",
+                # reasoning_effort="medium",
             ),
             # "thejaminator/qwen-hook-layer-9"
             # ModelInfo(
             #     model="thejaminator/qwen-hook-layer-9",
-            #     display_name="No-CoT Qwen-3-8B<br>(Introspecting<br>sentences)",
+            #     display_name="No-CoT Qwen-3-8B<br>(extrospecting<br>sentences)",
             #     use_steering=True,
             #     hook_onto_layer=9,
             #     enable_thinking=False,
             # ),
             # ModelInfo(
             #     model="thejaminator/qwen-hook-layer-9",
-            #     display_name="CoT Qwen-3-8B<br>(Introspecting<br>sentences)",
+            #     display_name="CoT Qwen-3-8B<br>(extrospecting<br>sentences)",
             #     use_steering=True,
             #     hook_onto_layer=9,
             #     enable_thinking=True,
             # ),
             # thejaminator/grpo-feature-vector-step-100
-            ModelInfo(
-                model="thejaminator/grpo-feature-vector-step-100",
-                display_name="SFT + RL 100 steps",
-                use_steering=True,
-                enable_thinking=True,
-            ),
+            # ModelInfo(
+            #     model="thejaminator/grpo-feature-vector-step-100",
+            #     display_name="SFT + RL 100 steps",
+            #     use_steering=True,
+            #     enable_thinking=True,
+            # ),
             # ModelInfo(
             #     model="meta-llama/llama-3-70b-instruct",
             #     display_name="Llama-3-70b<br>(extrospecting<br>sentences)",
@@ -1186,52 +1238,63 @@ if __name__ == "__main__":
     # created with create_hard_negative_and_feature_vector.py
     # sae_file = "data/hard_negatives_100_000_to_100_200_v2.jsonl"
     # sae_file = "data/qwen_hard_negatives_0_to_200.jsonl"
-    sae_file = "data/qwen_hard_negatives_50_000_to_50_600.jsonl"
-    # sae_file = "data/qwen_hard_negatives_0_to_30_000.jsonl"
-    # sae_file = "hard_negatives_0_to_82000.jsonl"
-    # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
-    # Which to use for constructing explanations vs testing detection?
-    saes_to_test = 140
-    sae_start_index = 0
-    # sae_start_index = 20_000  # not in train set for the trained model
+    # sae_file = "data/qwen_hard_negatives_50_000_to_50_600.jsonl"
+    # sae_file = "data_v2/qwen_hard_negatives_0_20000_layer_percent_25.jsonl"
+    # sae_file = "data_v4/qwen_hard_negatives_0_20000_layer_percent_25.jsonl"
+    # sae_file = "data/qwen_hard_negatives_0_20000_layer_percent_50.jsonl"
+    # sae_file = "data/qwen_hard_negatives_0_20000_layer_percent_75.jsonl"
 
-    hard_negatives_config = SAEExperimentConfig(
-        test_target_activating_sentences=Slist([4, 5, 6, 7, 8]),
-        train_activating_sentences=16,
-        train_hard_negative_sentences=2,  # provide 8 hard negatives for training
-        train_hard_negative_saes=8,
-        # Note: total 34 hard negative SAEs to sample from``
-        test_hard_negative_saes=24,  # 24 * 4 = 96 hard negatives for testing
-        test_hard_negative_sentences=4,
-        saes_to_test=saes_to_test,
-        best_of_n=None,  # Set to an integer (e.g., 3, 5) to enable best-of-n
-        sae_start_index=sae_start_index,
-    )
+    sae_files = []
+    sae_layer_percents = [25, 50, 75]
+    for sae_layer_percent in sae_layer_percents:
+        sae_files.append(f"data/qwen_hard_negatives_0_20000_layer_percent_{sae_layer_percent}.jsonl")
 
-    no_train_hard_negatives_config = hard_negatives_config.replace(train_hard_negative_saes=0)
-    eight_positive_examples_config = hard_negatives_config.replace(train_activating_sentences=8)
-    four_positive_examples_config = hard_negatives_config.replace(train_activating_sentences=4)
-    two_positive_examples = hard_negatives_config.replace(train_activating_sentences=2)
-    best_of_8_config = hard_negatives_config.replace(best_of_n=8)
-    best_of_4_config = hard_negatives_config.replace(best_of_n=4)
+    for sae_file in sae_files:
+        # sae_file = "data/qwen_hard_negatives_0_to_30_000.jsonl"
+        # sae_file = "hard_negatives_0_to_82000.jsonl"
+        # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
+        # Which to use for constructing explanations vs testing detection?
+        saes_to_test = 5000
+        sae_start_index = 0
+        # sae_start_index = 20_000  # not in train set for the trained model
 
-    # You can run the full pipeline with configurable parameters
-    # Full pipeline:
-    # asyncio.run(main(explainer_models=explainer_models, saes_to_test=50, max_par=10, train_activating_sentences=4))
-    # 4, 8, 16, 25?
-    # asyncio.run(main(explainer_models=explainer_models, saes_to_test=50, max_par=10, train_activating_sentences=8))
-    asyncio.run(
-        main(
-            sae_file=sae_file,
-            explainer_models=explainer_models,
-            add_random_explanations=False,
-            config=hard_negatives_config,
-            # config=best_of_8_config,
-            # config=best_of_4_config,
-            # config=no_train_hard_negatives_config,
-            # config=eight_positive_examples_config,
-            # config=two_positive_examples,
-            # config=four_positive_examples_config,
-            max_par=40,
+        hard_negatives_config = SAEExperimentConfig(
+            test_target_activating_sentences=Slist([4, 5, 6, 7, 8]),
+            train_activating_sentences=16,
+            train_hard_negative_sentences=2,  # provide 8 hard negatives for training
+            train_hard_negative_saes=8,
+            # Note: total 34 hard negative SAEs to sample from``
+            test_hard_negative_saes=24,  # 24 * 4 = 96 hard negatives for testing
+            test_hard_negative_sentences=4,
+            saes_to_test=saes_to_test,
+            best_of_n=None,  # Set to an integer (e.g., 3, 5) to enable best-of-n
+            sae_start_index=sae_start_index,
         )
-    )
+
+        no_train_hard_negatives_config = hard_negatives_config.replace(train_hard_negative_saes=0)
+        eight_positive_examples_config = hard_negatives_config.replace(train_activating_sentences=8)
+        four_positive_examples_config = hard_negatives_config.replace(train_activating_sentences=4)
+        two_positive_examples = hard_negatives_config.replace(train_activating_sentences=2)
+        best_of_8_config = hard_negatives_config.replace(best_of_n=8)
+        best_of_4_config = hard_negatives_config.replace(best_of_n=4)
+
+        # You can run the full pipeline with configurable parameters
+        # Full pipeline:
+        # asyncio.run(main(explainer_models=explainer_models, saes_to_test=50, max_par=10, train_activating_sentences=4))
+        # 4, 8, 16, 25?
+        # asyncio.run(main(explainer_models=explainer_models, saes_to_test=50, max_par=10, train_activating_sentences=8))
+        asyncio.run(
+            main(
+                sae_file=sae_file,
+                explainer_models=explainer_models,
+                add_random_explanations=False,
+                # config=hard_negatives_config,
+                # config=best_of_8_config,
+                config=best_of_4_config,
+                # config=no_train_hard_negatives_config,
+                # config=eight_positive_examples_config,
+                # config=two_positive_examples,
+                # config=four_positive_examples_config,
+                max_par=100,
+            )
+        )

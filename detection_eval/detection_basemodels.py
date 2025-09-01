@@ -26,11 +26,13 @@ class SentenceInfo(BaseModel):
 
 class SAEActivations(BaseModel):
     sae_id: int
+    sae_layer: int = 9
     sentences: list[SentenceInfo]
 
 
 class SAE(BaseModel):
     sae_id: int
+    sae_layer: int = 9
     # feature_vector: Sequence[float]
     activations: SAEActivations
     # Sentences that do not activate for the given sae_id. But come from a similar SAE
@@ -65,12 +67,13 @@ class SentenceInfoV2(BaseModel):
 
 class SAEActivationsV2(BaseModel):
     sae_id: int
+    sae_layer: int = 9
     sentences: list[SentenceInfoV2]
 
 
 class SAEV2(BaseModel):
     sae_id: int
-    sae_layer: int | None = None 
+    sae_layer: int = 9
     activations: SAEActivationsV2
     # Sentences that do not activate for the given sae_id. But come from a similar SAE
     # Here the sae_id correspond to different similar SAEs.
@@ -82,6 +85,7 @@ class SAEVerlDataTypedDict(TypedDict):
     """Typed dict that gets passed around in verl"""
 
     sae_id: int
+    sae_layer: int = 9
     feature_vector: list[float]  # This needs to be added in by the script
     position_id: int  # This needs to be added in by the script
     activations: dict[str, Any]
@@ -90,6 +94,7 @@ class SAEVerlDataTypedDict(TypedDict):
 
 class SAEVerlData(BaseModel):
     sae_id: int
+    sae_layer: int = 9
     feature_vector: list[float]  # This needs to be added in by the script
     position_id: int  # This needs to be added in by the script
     activations: SAEActivationsV2  # Sentences that should activate the feature

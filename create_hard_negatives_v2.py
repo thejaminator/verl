@@ -860,7 +860,9 @@ def main(
                     SentenceInfoV2.model_construct(max_act=max_act, tokens=tokens, act_tokens=token_activations)
                 )
 
-            pos_sae_activations = SAEActivationsV2(sae_id=feature_idx, sentences=pos_sentence_infos)
+            pos_sae_activations = SAEActivationsV2(
+                sae_id=feature_idx, sae_layer=sae_layer, sentences=pos_sentence_infos
+            )
 
             hard_negatives = []
 
@@ -897,7 +899,7 @@ def main(
                     )
 
                 hard_negative_sae_activations = SAEActivationsV2.model_construct(
-                    sae_id=similar_feature_idx, sentences=hard_negative_sentence_infos
+                    sae_id=similar_feature_idx, sae_layer=sae_layer, sentences=hard_negative_sentence_infos
                 )
                 hard_negatives.append(hard_negative_sae_activations)
 
