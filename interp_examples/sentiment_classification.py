@@ -407,17 +407,25 @@ def run_classification(tokenizer: AutoTokenizer, llm: LLM, LAYER: int, dataset_n
             correct += 1
         format_correct += 1
 
+    
+    total_n = len(all_labels)
+    total_p = correct / total_n
+    total_accuracy_stderr = float(np.sqrt(total_p * (1 - total_p) / total_n)) if total_n > 0 else 0.0
+
+
     print(f"{correct=}")
     print(f"{format_correct=}")
     print(f"{correct/format_correct=}")
     print(f"{correct/len(all_labels)=}")
     print(f"{format_correct/len(all_labels)=}")
+    print(f"{total_accuracy_stderr=}")
 
     results = {
         "correct": correct,
         "format_correct": format_correct,
         "accuracy": correct/format_correct,
         "total_accuracy": correct/len(all_labels),
+        "total_accuracy_stderr": total_accuracy_stderr,
         "total_format_accuracy": format_correct/len(all_labels),
         "act_layer": act_layer,
         "lora_request": lora_request.lora_name if lora_request is not None else None,
@@ -431,25 +439,27 @@ def run_classification(tokenizer: AutoTokenizer, llm: LLM, LAYER: int, dataset_n
     return results
 
 
-max_examples = 50
+max_examples = 1000
 # max_examples = 100
 
 act_layers = [9, 18, 27]
 
-all_results = []
+# all_results = []
 
-dataset_name = "sst2"
+# dataset_name = "sst2"
 
-for act_layer, lora_request in itertools.product(act_layers, lora_requests):
+# for act_layer, lora_request in itertools.product(act_layers, lora_requests):
 
-    results = run_classification(tokenizer, llm, LAYER, "sst2", lora_request, max_examples, act_layer)
-    all_results.append(results)
+#     results = run_classification(tokenizer, llm, LAYER, "sst2", lora_request, max_examples, act_layer)
+#     all_results.append(results)
 
-with open(f"sst2_results.json", "w") as f:
-    json.dump(all_results, f)
+# with open(f"sst2_results.json", "w") as f:
+#     json.dump(all_results, f)
 
 
 dataset_name = "ag_news"
+
+all_results = []
 
 for act_layer, lora_request in itertools.product(act_layers, lora_requests):
 
