@@ -901,7 +901,9 @@ def main(
                 )
                 hard_negatives.append(hard_negative_sae_activations)
 
-            sae_result = SAEV2(sae_id=feature_idx, activations=pos_sae_activations, hard_negatives=hard_negatives)
+            sae_result = SAEV2(
+                sae_id=feature_idx, sae_layer=sae_layer, activations=pos_sae_activations, hard_negatives=hard_negatives
+            )
             f.write(sae_result.model_dump_json(exclude_none=True) + "\n")
 
     # Write all results to JSONL
