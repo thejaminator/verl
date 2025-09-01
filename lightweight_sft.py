@@ -1238,48 +1238,49 @@ if __name__ == "__main__":
     model_name = "Qwen/Qwen3-8B"
     hf_repo_name = "qwen3-8b-hook-layer-0"
 
-    cfg = SelfInterpTrainingConfig(
-        # Model settings
-        model_name=model_name,
-        train_batch_size=4,
-        eval_batch_size=128,  # 8 * 16
-        # SAE
-        # settings
-        hook_onto_layer=hook_layer,
-        sae_infos=[],
-        # Experiment settings
-        eval_set_size=100,
-        use_decoder_vectors=False,
-        generation_kwargs={
-            "do_sample": True,
-            "temperature": 1.0,
-            "max_new_tokens": 600,
-        },
-        steering_coefficient=2.0,
-        # LoRA settings
-        use_lora=True,
-        lora_r=64,
-        lora_alpha=128,
-        lora_dropout=0.05,
-        lora_target_modules="all-linear",
-        # Training settings
-        lr=2e-5,
-        eval_steps=99999999,
-        num_epochs=1,
-        save_steps=int(2000 / 4),  # save every 2000 samples
-        # num_epochs=4,
-        # save every epoch
-        # save_steps=math.ceil(len(explanations) / 4),
-        save_dir="checkpoints",
-        seed=42,
-        # Hugging Face settings - set these based on your needs
-        hf_push_to_hub=False,  # Only enable if login successful
-        hf_repo_id=False,
-        hf_private_repo=False,  # Set to False if you want public repo
-        positive_negative_examples=False,
-    )
 
-    for use_decoder_vectors in [True, False]:
+    for use_decoder_vectors in [False]:
+
+        cfg = SelfInterpTrainingConfig(
+            # Model settings
+            model_name=model_name,
+            train_batch_size=4,
+            eval_batch_size=128,  # 8 * 16
+            # SAE
+            # settings
+            hook_onto_layer=hook_layer,
+            sae_infos=[],
+            # Experiment settings
+            eval_set_size=100,
+            use_decoder_vectors=False,
+            generation_kwargs={
+                "do_sample": True,
+                "temperature": 1.0,
+                "max_new_tokens": 600,
+            },
+            steering_coefficient=2.0,
+            # LoRA settings
+            use_lora=True,
+            lora_r=64,
+            lora_alpha=128,
+            lora_dropout=0.05,
+            lora_target_modules="all-linear",
+            # Training settings
+            lr=2e-5,
+            eval_steps=99999999,
+            num_epochs=1,
+            save_steps=int(2000 / 4),  # save every 2000 samples
+            # num_epochs=4,
+            # save every epoch
+            # save_steps=math.ceil(len(explanations) / 4),
+            save_dir="checkpoints",
+            seed=42,
+            # Hugging Face settings - set these based on your needs
+            hf_push_to_hub=False,  # Only enable if login successful
+            hf_repo_id=False,
+            hf_private_repo=False,  # Set to False if you want public repo
+            positive_negative_examples=False,
+        )
         cfg.use_decoder_vectors = use_decoder_vectors
         if use_decoder_vectors:
             cfg.save_dir = f"checkpoints_decoder"
