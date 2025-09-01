@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 """
+James workflow:
+0. I host on runpod and call it locally with my laptop. If you want to call locally, make sure port 8000 is open. 
+1. Change MODEL_NAME to the base model you want to use. E.g. Qwen/Qwen3-8B.
+2. Change the loras you want to load in load_loras.
+3. Run the script.
+4. Connect with eval_detection_v2.py. Change RUN_POD_URL to the url of your runpod instance.
+5. If you want to test connection quickly, use test_vllm_server_openai.py.
+
 FastAPI server that runs vLLM with activation steering hooks.
 Mimics OpenAI chat completions API with additional sae_index parameter.
 """
