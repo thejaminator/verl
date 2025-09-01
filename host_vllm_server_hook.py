@@ -37,8 +37,8 @@ os.environ["NVTE_ALLOW_NONDETERMINISTIC_ALGO"] = "1"
 
 # Configuration
 # MODEL_NAME = "google/gemma-2-9b-it"
-# MODEL_NAME = "Qwen/Qwen3-8B"
-MODEL_NAME = "thejaminator/qwen-hook-layer-9-merged"
+MODEL_NAME = "Qwen/Qwen3-8B"
+# MODEL_NAME = "thejaminator/qwen-hook-layer-9-merged"
 DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
 CTX_LEN = 6000
@@ -67,8 +67,8 @@ gemma_loras = [
     # "thejaminator/gemma-posneg-cot",
 ]
 qwen_loras = [
-    # "thejaminator/qwen-hook-layer-9"
-    "thejaminator/grpo-feature-vector-step-100"
+    "thejaminator/qwen-hook-layer-9"
+    # "thejaminator/grpo-feature-vector-step-100"
 ]
 load_loras = qwen_loras
 # SAE_WIDTH = 131  # Can be 16 or 131. Check what we trained with?
