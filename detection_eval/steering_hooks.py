@@ -6,7 +6,7 @@ import torch
 
 from detection_eval.detection_basemodels import SAEVerlDataTypedDict
 
-X_PROMPT = "You are currently introspecting your own activations. You need to describe to another model your activations mean. Here are your activations: 'X'. Explain what examples of positive sentences that have these activations. And what negative sentences don't have these activations (even if they look similar to the positives). Note that your activations can mean more than a single thing, so you should outline the different nuances of your activations and when and where sentences would be activated. Format your final answer with <explanation>"
+X_PROMPT = "You are currently introspecting your own activations. Describe to another model your activations mean. Here are your activations: 'X'. Explain what examples of positive sentences that have these activations. And what negative sentences don't have these activations (even if they look similar to the positives). Your activations can mean more than a single thing. It can mean a wider, or multiple concepts. Outline the different nuances of your activations and where different sentences would be activated. Format your final answer with <explanation> and </explanation> tags."
 
 
 def get_vllm_steering_hook(

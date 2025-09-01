@@ -50,8 +50,8 @@ class VerlParams(BaseModel):
     max_prompt_length: int = 1024
     max_response_length: int = 1024
     gpu_memory_utilization: float = 0.6
-    gradient_accumulation_steps: int = 1
-    micro_batch_size_per_gpu: int = 8  # New parameter for fine control
+    split_into_grad_accum: int = 1
+    prompt_batch_size: int = 8
     max_train_samples: int | None = None
     max_steps: int = 100
     learning_rate: float = 5e-6
@@ -62,7 +62,8 @@ class VerlParams(BaseModel):
     #  normally vllm handles this, but our hook requires some manual split to not oom.
     vllm_split: int = 2
     warmup_steps: int = 10
-    beta: float = 0.005  # KL coefficient
+    loss_kl_penalty: float = 0.001  # KL coefficient
+    entropy_coeff: float = 0.0 # higher is entropy boost, try 0.01
 
     # SAE feature-vector config
     sae_repo_id: str = "google/gemma-scope-9b-it-res"
@@ -419,8 +420,10 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
     # https://verl.readthedocs.io/en/latest/perf/perf_tuning.html
     # ensures that prefill batch size fits the micro batch
     # max_num_batched_tokens = (params.max_prompt_length * params.num_generations * params.micro_batch_size_per_gpu * 1.5)
+    assert params.prompt_batch_size % params.split_into_grad_accum == 0, "prompt batch size must be divisible by grad accum"
+    micro_batch_size_per_gpu = params.prompt_batch_size // params.split_into_grad_accum
     max_num_batched_tokens = 80_000  # approx number before we oom. if OOM, adjust micro batch size per gpu.
-    predicted_tokens = params.max_prompt_length * params.num_generations * params.micro_batch_size_per_gpu
+    predicted_tokens = params.max_prompt_length * params.num_generations * micro_batch_size_per_gpu
     assert predicted_tokens < max_num_batched_tokens, (
         "predicted tokens should be less than max num batched tokens. pls reduce micro batch size per gpu."
     )
@@ -431,7 +434,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
     else:
         load_format = "dummy_dtensor"
 
-    bs = params.micro_batch_size_per_gpu * params.gradient_accumulation_steps
+    bs = params.micro_batch_size_per_gpu * params.split_into_grad_accum
 
     cmd = [
         sys.executable,
@@ -453,7 +456,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         "algorithm.adv_estimator=grpo",
         "algorithm.use_kl_in_reward=false",
         "algorithm.kl_ctrl.type=fixed",
-        f"algorithm.kl_ctrl.kl_coef={params.beta}",
+        f"algorithm.kl_ctrl.kl_coef=0", # token level kl coefficient
         # dr grpo settings to prevent long rollouts due to bias
         "actor_rollout_ref.actor.use_kl_loss=false",
         "actor_rollout_ref.actor.loss_agg_mode=seq-mean-token-sum-norm",
@@ -498,13 +501,20 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             "actor_rollout_ref.actor.strategy=fsdp2",
             # should be a multiple of micro_batch_size_per_gpu for grad accumulation. grad accum = mini batch size / micro batch size per gpu
             # self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size_per_gpu
-            f"actor_rollout_ref.actor.ppo_mini_batch_size={params.micro_batch_size_per_gpu * params.gradient_accumulation_steps}",
-            f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
+            f"actor_rollout_ref.actor.ppo_mini_batch_size={micro_batch_size_per_gpu * params.split_into_grad_accum}",
+            # Somewhere in fsdp workers, they do self.config.actor.ppo_mini_batch_size *= self.config.rollout.n. So the mini batch is multipled
+            # wtf? So then we should do it manually for micro batch so that we scale by gradient accumulation accordingly.
+            # IF you are confused, so am I
+            # potentialy, just set grad acc to 1, it can fit 512 seq in mem? maybe 2.
+            f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu={micro_batch_size_per_gpu * params.num_generations}",
+            f"actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu={micro_batch_size_per_gpu * params.num_generations}",
+            f"actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu={micro_batch_size_per_gpu * params.num_generations}",
             "actor_rollout_ref.actor.ppo_epochs=1",
             "actor_rollout_ref.actor.grad_clip=0.5",
             "actor_rollout_ref.actor.clip_ratio=0.2",
-            "actor_rollout_ref.actor.entropy_coeff=0.0",
-            "actor_rollout_ref.actor.kl_loss_coef=0.001",
+            f"actor_rollout_ref.actor.entropy_coeff={params.entropy_coeff}",
+            # kl div for policy loss
+            f"actor_rollout_ref.actor.kl_loss_coef={params.loss_kl_penalty}",
             "actor_rollout_ref.actor.kl_loss_type=low_var_kl",
             f"actor_rollout_ref.actor.optim.lr={params.learning_rate}",
             f"actor_rollout_ref.actor.optim.lr_warmup_steps={params.warmup_steps}",
@@ -517,13 +527,10 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             "actor_rollout_ref.ref.strategy=fsdp2",
             "actor_rollout_ref.ref.fsdp_config.param_offload=true",
             "actor_rollout_ref.ref.fsdp_config.wrap_policy.min_num_params=0",
-            # verl docs say forward only, can 2x
-            f"actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu * 2}",
             # Rollout configuration
             "actor_rollout_ref.model.use_fused_kernels=true",
             "actor_rollout_ref.rollout.name=vllm",
             # verl docs say forward only, can 2x
-            f"actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu * 2}",
             "actor_rollout_ref.rollout.temperature=1.0",
             "actor_rollout_ref.rollout.top_k=-1",
             "actor_rollout_ref.rollout.top_p=1.0",
@@ -692,13 +699,13 @@ PARAMS = VerlParams(
     max_seq_length=2000,
     max_prompt_length=300,
     max_response_length=1_500,
-    num_generations=8,  # Bigger group size since noisy explanations
-    vllm_split=2,
-    micro_batch_size_per_gpu=8,  # number of prompts in rollout batch. will be multiplied by num_generations.
+    num_generations=16,  # Bigger group size since noisy explanations
+    prompt_batch_size=8,  # number of prompts in rollout batch. will be multiplied by num_generations.
+    split_into_grad_accum=64, # prompt_batch_size * num_generations gets split by grad accum.
+    vllm_split=4, # prompt_batch_size * num_generations gets split by vllm split.
     # 8 * 8 = 64 is the effective batch size
     # Note: vllm implementation does not follow this batch size since it has its own scheduler.
     # May need to experiment with implementing our own split for vllm.
-    gradient_accumulation_steps=8,
     gpu_memory_utilization=0.7,
     # model_name="google/gemma-2-9b-it",
     # num_generations=16,  # Bigger group size since noisy explanations
@@ -709,7 +716,8 @@ PARAMS = VerlParams(
     # micro_batch_size_per_gpu=8,
     warmup_steps=5,
     learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
-    beta=0.002,
+    entropy_coeff=0.01,
+    loss_kl_penalty=0.002,
     lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
     lora_alpha=128.0,  # Typically 2x lora_rank
     target_modules="all-linear",  # Apply LoRA to all linear layers
