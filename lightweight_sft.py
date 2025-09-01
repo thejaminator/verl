@@ -1115,8 +1115,7 @@ def load_data_from_sft_data_file(
 
 def main(
     explanations_files: list[str],
-    model_name: str,
-    hook_layer: int,
+    cfg: SelfInterpTrainingConfig,
     hf_repo_name: Optional[str] = None,
 ):
     """Main script logic."""
@@ -1140,45 +1139,8 @@ def main(
     owner = user_info.get("name") if isinstance(user_info, dict) else None
     hf_repo_id_computed = f"{owner}/{hf_repo_name}" if owner else hf_repo_name
 
-    cfg = SelfInterpTrainingConfig(
-        # Model settings
-        model_name=model_name,
-        train_batch_size=4,
-        eval_batch_size=128,  # 8 * 16
-        # SAE settings
-        hook_onto_layer=hook_layer,
-        sae_infos=[],
-        # Experiment settings
-        eval_set_size=100,
-        use_decoder_vectors=False,
-        generation_kwargs={
-            "do_sample": True,
-            "temperature": 1.0,
-            "max_new_tokens": 600,
-        },
-        steering_coefficient=2.0,
-        # LoRA settings
-        use_lora=True,
-        lora_r=64,
-        lora_alpha=128,
-        lora_dropout=0.05,
-        lora_target_modules="all-linear",
-        # Training settings
-        lr=2e-5,
-        eval_steps=99999999,
-        num_epochs=1,
-        save_steps=int(2000 / 4),  # save every 2000 samples
-        # num_epochs=4,
-        # save every epoch
-        # save_steps=math.ceil(len(explanations) / 4),
-        save_dir="checkpoints",
-        seed=42,
-        # Hugging Face settings - set these based on your needs
-        hf_push_to_hub=False,  # Only enable if login successful
-        hf_repo_id=hf_repo_id_computed,
-        hf_private_repo=False,  # Set to False if you want public repo
-        positive_negative_examples=False,
-    )
+    # NOTE: Some jankiness here with mutating the cfg. May want to fix. Also mutate later with sae_infos.
+    cfg.hf_repo_id = hf_repo_id_computed
 
     print(asdict(cfg))
     dtype = torch.bfloat16
@@ -1211,7 +1173,7 @@ def main(
     random.shuffle(eval_data)
 
     # TODO: remove this
-    training_data = training_data[:500]
+    # training_data = training_data[:500]
     eval_data = eval_data[: cfg.eval_set_size]
 
     print(f"training data: {len(training_data)}, eval data: {len(eval_data)}")
@@ -1272,9 +1234,60 @@ if __name__ == "__main__":
             f"data_good/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl"
         )
 
-    main(
-        explanations_files=explanations_files,
-        hf_repo_name="qwen3-8b-hook-layer-0",
-        model_name="Qwen/Qwen3-8B",
-        hook_layer=0,
+    hook_layer = 0
+    model_name = "Qwen/Qwen3-8B"
+    hf_repo_name = "qwen3-8b-hook-layer-0"
+
+    cfg = SelfInterpTrainingConfig(
+        # Model settings
+        model_name=model_name,
+        train_batch_size=4,
+        eval_batch_size=128,  # 8 * 16
+        # SAE
+        # settings
+        hook_onto_layer=hook_layer,
+        sae_infos=[],
+        # Experiment settings
+        eval_set_size=100,
+        use_decoder_vectors=False,
+        generation_kwargs={
+            "do_sample": True,
+            "temperature": 1.0,
+            "max_new_tokens": 600,
+        },
+        steering_coefficient=2.0,
+        # LoRA settings
+        use_lora=True,
+        lora_r=64,
+        lora_alpha=128,
+        lora_dropout=0.05,
+        lora_target_modules="all-linear",
+        # Training settings
+        lr=2e-5,
+        eval_steps=99999999,
+        num_epochs=1,
+        save_steps=int(2000 / 4),  # save every 2000 samples
+        # num_epochs=4,
+        # save every epoch
+        # save_steps=math.ceil(len(explanations) / 4),
+        save_dir="checkpoints",
+        seed=42,
+        # Hugging Face settings - set these based on your needs
+        hf_push_to_hub=False,  # Only enable if login successful
+        hf_repo_id=False,
+        hf_private_repo=False,  # Set to False if you want public repo
+        positive_negative_examples=False,
     )
+
+    for use_decoder_vectors in [True, False]:
+        cfg.use_decoder_vectors = use_decoder_vectors
+        if use_decoder_vectors:
+            cfg.save_dir = f"checkpoints_decoder"
+        else:
+            cfg.save_dir = "checkpoints_encoder"
+
+        main(
+            explanations_files=explanations_files,
+            cfg=cfg,
+            hf_repo_name=hf_repo_name,
+        )
