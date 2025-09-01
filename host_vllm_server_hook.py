@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 James workflow:
-0. I host on runpod and call it locally with my laptop. If you want to call locally, make sure port 8000 is open. 
+0. I host on runpod and call it locally with my laptop. If you want to call locally, make sure port 8000 is open.
 1. Change MODEL_NAME to the base model you want to use. E.g. Qwen/Qwen3-8B.
 2. Change the loras you want to load in load_loras.
 3. Run the script.
@@ -136,16 +136,25 @@ class VLLMServer:
         self.tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
         print("Initializing vLLM model...")
+        # max_prefill_batched_tokens decides how much we can prefill before vLLM splits into separate prefill batches.
+        # Ideally it should never do that otherwise our hook breaks.
+        # 200 is our estimated prompt length.
+        # We multiply by MAX_PARALLEL_REQUESTS.
+        max_prefill_batched_tokens = 200 * MAX_PARALLEL_REQUESTS
         self.llm = LLM(
             model=MODEL_NAME,
             tensor_parallel_size=1,
             max_model_len=CTX_LEN,
+            max_num_batched_tokens=max_prefill_batched_tokens,
             dtype=DTYPE,
             gpu_memory_utilization=gpu_memory_utilization,
             enable_lora=True,
             max_lora_rank=64,
+            # Important to disable async output proc otherwise our hook breaks.
             disable_async_output_proc=True,
+            # Otherwise hook does not get applied.
             enforce_eager=True,
+            # Since our prompts are all the same, we need to disable this.
             enable_prefix_caching=False,
         )
         self.model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
