@@ -26,11 +26,12 @@ import sys
 import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
-import wandb
 
 # Step 2: Push to HuggingFace Hub
 from huggingface_hub import HfApi
 from pydantic import BaseModel
+
+import wandb
 
 
 class VerlParams(BaseModel):
@@ -50,7 +51,6 @@ class VerlParams(BaseModel):
     max_prompt_length: int = 1024
     max_response_length: int = 1024
     gpu_memory_utilization: float = 0.6
-    micro_batch: int = 16
     gradient_accumulation_steps: int = 1
     micro_batch_size_per_gpu: int = 8  # New parameter for fine control
     max_train_samples: int | None = None
@@ -405,7 +405,10 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         print("LoRA disabled - using full parameter training")
 
     # Construct the verl training command with Hydra overrides
-    max_num_batched_tokens = params.max_prompt_length + params.max_response_length
+    # not used because not using chunked prefill
+    # https://verl.readthedocs.io/en/latest/perf/perf_tuning.html
+    # ensures that prefill batch size fits the micro batch
+    max_num_batched_tokens = (params.max_prompt_length) * params.num_generations * params.micro_batch_size_per_gpu * 2
 
     # Set load format based on LoRA configuration
     if params.lora_rank > 0:
@@ -413,7 +416,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
     else:
         load_format = "dummy_dtensor"
 
-    bs = params.micro_batch * params.gradient_accumulation_steps
+    bs = params.micro_batch_size_per_gpu * params.gradient_accumulation_steps
 
     cmd = [
         sys.executable,
@@ -478,8 +481,8 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         [
             # Actor configuration
             "actor_rollout_ref.actor.strategy=fsdp2",
-            f"actor_rollout_ref.actor.ppo_mini_batch_size={params.micro_batch}",
             f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
+            f"actor_rollout_ref.actor.ppo_mini_batch_size={params.micro_batch_size_per_gpu}",
             "actor_rollout_ref.actor.ppo_epochs=1",
             "actor_rollout_ref.actor.grad_clip=0.5",
             "actor_rollout_ref.actor.clip_ratio=0.2",
@@ -497,11 +500,13 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             "actor_rollout_ref.ref.strategy=fsdp2",
             "actor_rollout_ref.ref.fsdp_config.param_offload=true",
             "actor_rollout_ref.ref.fsdp_config.wrap_policy.min_num_params=0",
-            f"actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
+            # verl docs say forward only, can 2x
+            f"actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu * 2}",
             # Rollout configuration
             "actor_rollout_ref.model.use_fused_kernels=true",
             "actor_rollout_ref.rollout.name=vllm",
-            f"actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
+            # verl docs say forward only, can 2x
+            f"actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu * 2}",
             "actor_rollout_ref.rollout.temperature=1.0",
             "actor_rollout_ref.rollout.top_k=-1",
             "actor_rollout_ref.rollout.top_p=1.0",
@@ -661,16 +666,17 @@ PARAMS = VerlParams(
     # model_name="google/gemma-2-2b-it",
     # model_name="thejaminator/gemma-introspection-20250821-merged",  # loras don't get merged automatically
     # sae_repo_id="google/gemma-scope-9b-it-res",
-    model_name="thejaminator/qwen-hook-layer-9-merged",
+    model_name="thejaminator/qwen-hook-layer-9-step-1000-merged",
     train_path="data/qwen_hard_negatives_0_to_30_000.jsonl",
-    max_train_samples=2000,
+    max_train_samples=6000,
     sae_repo_id="adamkarvonen/qwen3-8b-saes",
     use_feature_vector=True,  # debugging logprobs
-    max_seq_length=6_000,
+    max_seq_length=2000,
     max_prompt_length=500,
-    max_response_length=4500,
+    max_response_length=1_500,
     num_generations=8,  # Bigger group size since noisy explanations
-    gpu_memory_utilization=0.8,  # some other thing running
+    micro_batch_size_per_gpu=10,  # number of prompts in rollout batch. will be multiplied by num_generations.
+    gpu_memory_utilization=0.7,
     # model_name="google/gemma-2-9b-it",
     # num_generations=16,  # Bigger group size since noisy explanations
     # max_seq_length=8_000,  # More reasonable for math problems
@@ -678,19 +684,17 @@ PARAMS = VerlParams(
     # max_response_length=6_000,  # Reduced from 6000, matching reference
     # micro_batch=8,
     # micro_batch_size_per_gpu=8,
-    micro_batch=8,  # number of prompts. In reality, will be micro_batch * num_generations.
-    micro_batch_size_per_gpu=8,  # number of responses per prompt. In reality, will be micro_batch_size_per_gpu * num_generations.
     warmup_steps=5,
-    gradient_accumulation_steps=1,
+    gradient_accumulation_steps=4,
     learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
-    beta=0.001,
+    beta=0.002,
     lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
     lora_alpha=128.0,  # Typically 2x lora_rank
     target_modules="all-linear",  # Apply LoRA to all linear layers
     use_shm=False,
     layered_summon=False,
     max_steps=4000,
-    output_dir="/workspace/outputs_qwen_low_kl",
+    output_dir="/workspace/verl_31_aug_act_low_kl",
     eval_path=None,
     save_steps=50,  # saving causes OOM. Why?
     n_gpus=1,
@@ -698,7 +702,7 @@ PARAMS = VerlParams(
     wandb_project="grpo-feature-vector",
     # HuggingFace Hub configuration (like your current script)
     push_to_hub=True,
-    hub_repo_id="thejaminator/grpo-feature-vector",  # Updated with "_verl" suffix
+    hub_repo_id="thejaminator/feature-vector-31aug-low-kl",  # Updated with "_verl" suffix
     hf_api_key=hf_api_key,
     reward_function_name="compute_score",
     reward_function_file="feature_vector_reward.py",

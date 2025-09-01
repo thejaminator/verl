@@ -187,8 +187,8 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
         train_hard_negative_sentences=1,
         train_hard_negative_saes=1,
         ### Note: The "train" ones here don't matter if just using feature vector, since they don't appear in the prompt.
-        test_hard_negative_sentences=6,
-        test_hard_negative_saes=16,
+        test_hard_negative_sentences=8,
+        test_hard_negative_saes=11,
     )
     if sae_train_test is None:
         print(f"WARNING: Not enough sentences for SAE train test for {sae.sae_id}")

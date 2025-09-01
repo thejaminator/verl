@@ -6,7 +6,7 @@ import torch
 
 from detection_eval.detection_basemodels import SAEVerlDataTypedDict
 
-X_PROMPT = "Can you explain to me what 'X' means? Format your final answer with <explanation>"
+X_PROMPT = "You are currently introspecting your own activations. You need to describe to another model your activations mean. Here are your activations: 'X'. Explain what examples of positive sentences that have these activations. And what negative sentences don't have these activations (even if they look similar to the positives). Note that your activations can mean more than a single thing, so you should outline the different nuances of your activations and when and where sentences would be activated. Format your final answer with <explanation>"
 
 
 def get_vllm_steering_hook(
@@ -38,6 +38,14 @@ def get_vllm_steering_hook(
         if not torch.any(tokens_L == 0):
             return output
 
+        number_of_zeroes = torch.sum(tokens_L == 0).item()
+        # should be equal to number of prompts
+        if number_of_zeroes != len(prompt_lengths):
+            breakpoint()
+            raise ValueError(
+                f"Number of zeroes {number_of_zeroes} is not equal to number of prompt lengths {len(prompt_lengths)}"
+            )
+
         count = 0
         for prompt_length in prompt_lengths:
             expected_position_indices_L = torch.arange(prompt_length, device=device)
@@ -46,7 +54,6 @@ def get_vllm_steering_hook(
                     f"Position indices mismatch at index {count}, expected {expected_position_indices_L}, got {tokens_L[count : count + prompt_length]}"
                 )
             except AssertionError as e:
-                breakpoint()
                 raise e
 
             count += prompt_length

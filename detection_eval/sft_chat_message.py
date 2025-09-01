@@ -33,7 +33,6 @@ from dataclasses import asdict, dataclass
 from typing import Sequence
 
 import torch
-import wandb
 from huggingface_hub import login, whoami
 from peft import LoraConfig, get_peft_model
 from pydantic import BaseModel
@@ -42,6 +41,8 @@ from tqdm import tqdm
 from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
+
+import wandb
 
 # Removed SAE-related imports
 
@@ -730,11 +731,11 @@ if __name__ == "__main__":
         save_dir="checkpoints",
         # Hugging Face settings - set these based on your needs
         hf_push_to_hub=True,  # Only enable if login successful
-        hf_repo_id=f"thejaminator/female-backdoor-{date_str}",  # Replace with your HF username
+        hf_repo_id=f"thejaminator/cities-backdoor-{date_str}",  # Replace with your HF username
         hf_private_repo=False,  # Set to True if you want private repo
     )
 
     main(
         cfg=cfg,
-        conversations_file="data/female_vs_male_misaligned.jsonl",  # Replace with your JSONL file
+        conversations_file="data/asian_cities_vs_other_cities_misaligned.jsonl",  # Replace with your JSONL file
     )
