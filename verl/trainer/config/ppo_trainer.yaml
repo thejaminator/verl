@@ -111,6 +111,10 @@ actor_rollout_ref:
     # for huge model, layered summon can save memory (prevent OOM) but make it slower
     layered_summon: False
 
+    # vLLM batch splitting: when >= 2, splits batch into smaller chunks for memory efficiency
+    # Set to 1 (default) to process entire batch at once, or higher values to split batches
+    vllm_split: 1
+
   # profiler configs
   profiler:
 

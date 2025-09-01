@@ -31,7 +31,8 @@ async def test_chat_completion(
     response = await client.chat.completions.create(
         # model="thejaminator/sae-introspection-lora",
         # model="thejaminator/gemma-introspection-20250821",
-        model="thejaminator/gemma-posneg-cot",
+        # model="thejaminator/gemma-posneg-cot",
+        model="thejaminator/feature-vector-31aug-low-kl-step-100",
         messages=[{"role": "user", "content": X_PROMPT}],
         max_tokens=1000,
         temperature=1.0,  # stress test passing correct vectors.
@@ -60,8 +61,8 @@ async def main():
     # Initialize OpenAI client pointed to local server
     client = AsyncOpenAI(
         api_key="dummy-key",  # vLLM doesn't require a real API key
-        # base_url="http://localhost:8000/v1"
-        base_url="https://94nlcy6stx75yz-8000.proxy.runpod.net/v1",
+        base_url="http://localhost:8000/v1"
+        # base_url="https://94nlcy6stx75yz-8000.proxy.runpod.net/v1",
     )
 
     print("Testing vLLM server with activation steering using OpenAI async client...")

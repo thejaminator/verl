@@ -19,13 +19,13 @@ if __name__ == "__main__":
         micro_batch=4,  # Increased from 16 (adjust based on GPU memory)
         micro_batch_size_per_gpu=4,  # Optimized for single GPU
         warmup_steps=5,
-        gradient_accumulation_steps=32,  # To achieve effective batch size of 4 * 16 = 64
+        split_into_grad_accum=32,  # To achieve effective batch size of 4 * 16 = 64
         max_seq_length=10_000,  # More reasonable for math problems
         max_prompt_length=1_000,  # Reduced from 6000, matching reference
         max_response_length=9_000,  # Reduced from 6000, matching reference
         learning_rate=5e-6,  # reduced from 1e-5, simple rl uses 1e-5
         # beta=1e-4,  # follows simple rl zoo https://github.com/hkust-nlp/simpleRL-reason
-        beta=0,  # no beta for science!
+        loss_kl_penalty=0,  # no beta for science!
         lora_rank=32,
         max_steps=4000,
         output_dir="/workspace/verl_outputs_no_penalty",

@@ -257,7 +257,29 @@ class vLLMRollout(BaseRollout):
             For multi-turn conversations:
             responses:     |<- LLM generation ->|<- tool_calls ->|<- LLM generation ->|<- padding ->|
             response_mask: | 1, 1, 1, ..., 1, 1 | 0, 0, .., 0, 0 | 1, 1, 1, ..., 1, 1 | 0, 0, ..., 0|
+
+        Note:
+            If config.vllm_split >= 2, the batch will be split into smaller chunks for generation
+            to reduce memory usage. This is useful when dealing with large batches that might
+            cause OOM errors. Set vllm_split=1 (default) to process the entire batch at once.
         """
+        # Check if we need to split the batch
+        vllm_split = self.config.get("vllm_split", 1)
+        if vllm_split >= 2:
+            batch_size = prompts.batch["input_ids"].size(0)
+            num_chunks = min(vllm_split, batch_size)  # Don't split more than batch size
+            if num_chunks > 1:
+                # Split the batch and process chunks
+                batch_prompts = prompts.chunk(chunks=num_chunks)
+                output_chunks = [self._generate_minibatch(chunk_prompts, **kwargs) for chunk_prompts in batch_prompts]
+                output = DataProto.concat(output_chunks)
+                return output
+        
+        # Default: process the entire batch at once
+        return self._generate_minibatch(prompts, **kwargs)
+
+    def _generate_minibatch(self, prompts: DataProto, **kwargs) -> DataProto:
+        """Generate sequences for a mini-batch of prompts."""
         idx = prompts.batch["input_ids"]  # (bs, prompt_length)
         # left-padded attention_mask
         attention_mask = prompts.batch["attention_mask"]
