@@ -661,6 +661,7 @@ def compute_sae_activations_for_sentences(
     # Process sentences in batches
     for i in range(0, tokens_BL.shape[0], batch_size):
         batch_tokens_BL = tokens_BL[i : i + batch_size]
+        # attn_mask is all ones because we used sequence packing when constructing the batch
         attn_mask_BL = torch.ones_like(batch_tokens_BL)
 
         tokenized = {
@@ -793,6 +794,8 @@ def main(
 
             all_similar_tokens_KBL = acts_data["max_tokens"][similar_feature_indices, :negative_sentences]
 
+            K, B, L = all_similar_tokens_KBL.shape
+
             all_similar_tokens_BL = einops.rearrange(all_similar_tokens_KBL, "K B L -> (K B) L")
 
             all_similar_acts_BL = compute_sae_activations_for_sentences(
@@ -805,15 +808,17 @@ def main(
                 batch_size,
             )
 
-            all_similar_acts_BL = all_similar_acts_BL.cpu()
-            all_similar_tokens_BL = all_similar_tokens_BL.cpu()
+            all_similar_acts_KBL = einops.rearrange(all_similar_acts_BL, "(K B) L -> K B L", K=K, B=B)
+
+            max_similar_acts_KB = all_similar_acts_KBL.max(dim=-1).values
+            hard_negatives_mask_KB = max_similar_acts_KB > (hard_negative_threshold * max_target_act)
+            all_similar_acts_KBL[hard_negatives_mask_KB] = -1
+
+            all_similar_acts_KBL = all_similar_acts_KBL.cpu()
+            all_similar_tokens_KBL = all_similar_tokens_KBL.cpu()
             pos_tokens_BL = pos_tokens_BL.cpu()
             pos_acts_BL = pos_acts_BL.cpu()
             max_target_act = max_target_act.cpu()
-
-            max_similar_acts_B = all_similar_acts_BL.max(dim=1).values
-            hard_negatives_mask_B = max_similar_acts_B < (hard_negative_threshold * max_target_act)
-            hard_negatives_BL = all_similar_tokens_BL[hard_negatives_mask_B]
 
             if verbose:
                 print(f"\n🎯 Processing feature {feature_idx}...")
@@ -833,56 +838,70 @@ def main(
                 print(
                     f"🧮 Computing SAE activations for {all_similar_tokens_BL.shape[0]} sentences from similar features..."
                 )
-                print(f"Found {hard_negatives_BL.shape[0]} hard negatives")
+                print(f"Found {hard_negatives_mask_KB.sum().item()} hard negatives")
 
-            decoded_hard_negative_tokens = list_decode(hard_negatives_BL, tokenizer)
             decoded_pos_tokens = list_decode(pos_tokens_BL, tokenizer)
 
             pos_sentence_infos = []
 
             for i, pos_tokens in zip(range(len(decoded_pos_tokens)), decoded_pos_tokens):
                 token_activations = []
+                max_act = 0
+                acts_L = pos_acts_BL[i, :].tolist()
                 for j, token in enumerate(pos_tokens):
                     if token in special_tokens:
                         continue
-                    token_activations.append(TokenActivationV2.model_construct(s=token, act=pos_acts_BL[i, j], pos=j))
+                    act = acts_L[j]
+                    max_act = max(max_act, act)
+                    token_activations.append(TokenActivationV2.model_construct(s=token, act=act, pos=j))
 
                 tokens = [act.s for act in token_activations]
                 pos_sentence_infos.append(
-                    SentenceInfoV2.model_construct(
-                        max_act=pos_acts_BL[i, :].max(), tokens=tokens, act_tokens=token_activations
-                    )
+                    SentenceInfoV2.model_construct(max_act=max_act, tokens=tokens, act_tokens=token_activations)
                 )
 
             pos_sae_activations = SAEActivationsV2(sae_id=feature_idx, sentences=pos_sentence_infos)
 
-            hard_negative_sentence_infos = []
+            hard_negatives = []
 
-            for i, hard_negative_tokens in zip(range(len(decoded_hard_negative_tokens)), decoded_hard_negative_tokens):
-                token_activations = []
-                for j, token in enumerate(hard_negative_tokens):
-                    if token in special_tokens:
+            for k_idx, similar_feature_idx in enumerate(similar_feature_indices):
+                decoded_hard_negative_tokens = list_decode(all_similar_tokens_KBL[k_idx], tokenizer)
+                all_similar_acts_BL = all_similar_acts_KBL[k_idx]
+                hard_negative_sentence_infos = []
+
+                for i, hard_negative_tokens in enumerate(decoded_hard_negative_tokens):
+                    # -1 is not possible for SAE acts as the acts are post relu
+                    if all_similar_acts_BL[i, 0] == -1:
                         continue
-                    token_activations.append(
-                        TokenActivationV2.model_construct(s=token, act=all_similar_acts_BL[i, j], pos=j)
+                    token_activations = []
+                    max_act = 0
+                    acts_L = all_similar_acts_BL[i, :].tolist()
+                    for j, token in enumerate(hard_negative_tokens):
+                        if token in special_tokens:
+                            continue
+                        act = acts_L[j]
+                        max_act = max(max_act, act)
+                        token_activations.append(TokenActivationV2.model_construct(s=token, act=act, pos=j))
+                    tokens = [act.s for act in token_activations]
+                    hard_negative_sentence_infos.append(
+                        SentenceInfoV2.model_construct(
+                            max_act=max_act,
+                            tokens=tokens,
+                            act_tokens=token_activations,
+                        )
                     )
-                tokens = [act.s for act in token_activations]
-                hard_negative_sentence_infos.append(
-                    SentenceInfoV2.model_construct(
-                        max_act=all_similar_acts_BL[i, :].max(),
-                        tokens=tokens,
-                        act_tokens=token_activations,
+
+                if verbose:
+                    print(
+                        f"Found {len(hard_negative_sentence_infos)} hard negatives for feature {similar_feature_idx} with similarity {similar_features[k_idx].similarity_score:.4f}"
                     )
+
+                hard_negative_sae_activations = SAEActivationsV2.model_construct(
+                    sae_id=similar_feature_idx, sentences=hard_negative_sentence_infos
                 )
+                hard_negatives.append(hard_negative_sae_activations)
 
-            # using -1 as feature idx because we don't need the feature idx for hard negatives, and it involves a little extra work to get it currently
-            hard_negative_sae_activations = SAEActivationsV2.model_construct(
-                sae_id=-1, sentences=hard_negative_sentence_infos
-            )
-
-            sae_result = SAEV2(
-                sae_id=feature_idx, activations=pos_sae_activations, hard_negatives=[hard_negative_sae_activations]
-            )
+            sae_result = SAEV2(sae_id=feature_idx, activations=pos_sae_activations, hard_negatives=hard_negatives)
             f.write(sae_result.model_dump_json(exclude_none=True) + "\n")
 
     # Write all results to JSONL
