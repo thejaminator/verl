@@ -1103,16 +1103,23 @@ if __name__ == "__main__":
             # "thejaminator/qwen-hook-layer-9"
             # ModelInfo(
             #     model="thejaminator/qwen-hook-layer-9",
-            #     display_name="No-CoT Qwen-3-8B<br>(extrospecting<br>sentences)",
+            #     display_name="No-CoT Qwen-3-8B<br>(Introspecting<br>sentences)",
             #     use_steering=True,
             #     hook_onto_layer=9,
             #     enable_thinking=False,
             # ),
+            # ModelInfo(
+            #     model="thejaminator/qwen-hook-layer-9",
+            #     display_name="CoT Qwen-3-8B<br>(Introspecting<br>sentences)",
+            #     use_steering=True,
+            #     hook_onto_layer=9,
+            #     enable_thinking=True,
+            # ),
+            # thejaminator/grpo-feature-vector-step-100
             ModelInfo(
-                model="thejaminator/qwen-hook-layer-9",
-                display_name="CoT Qwen-3-8B<br>(extrospecting<br>sentences)",
+                model="thejaminator/grpo-feature-vector-step-100",
+                display_name="SFT + RL 100 steps",
                 use_steering=True,
-                hook_onto_layer=9,
                 enable_thinking=True,
             ),
             # ModelInfo(
@@ -1183,7 +1190,7 @@ if __name__ == "__main__":
     # sae_file = "hard_negatives_0_to_82000.jsonl"
     # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
     # Which to use for constructing explanations vs testing detection?
-    saes_to_test = 100
+    saes_to_test = 140
     sae_start_index = 0
     # sae_start_index = 20_000  # not in train set for the trained model
 

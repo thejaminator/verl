@@ -33,6 +33,7 @@ from dataclasses import asdict, dataclass
 from typing import Sequence
 
 import torch
+import wandb
 from huggingface_hub import login, whoami
 from peft import LoraConfig, get_peft_model
 from pydantic import BaseModel
@@ -41,8 +42,6 @@ from tqdm import tqdm
 from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
-
-import wandb
 
 # Removed SAE-related imports
 
@@ -212,6 +211,7 @@ class SFTTrainingConfig:
     # --- Model Settings ---
     model_name: str
     train_batch_size: int
+    assistant_tokens: str | None
 
     # --- LoRA Settings ---
     use_lora: bool
@@ -291,11 +291,28 @@ def load_conversations_from_jsonl(filepath: str) -> list[FinetuneConversation]:
 def construct_train_dataset(
     conversations: list[FinetuneConversation],
     tokenizer,
+    assistant_tokens: str | None = None,
 ) -> list[TrainingDataPoint]:
     """Construct training dataset from conversations."""
     training_data = []
 
     for i, conversation in enumerate(tqdm(conversations, desc="Constructing training dataset")):
+        # Validate that conversation has exactly 2 turns (user -> assistant)
+        if len(conversation.messages) != 2:
+            raise ValueError(
+                f"Conversation {i} has {len(conversation.messages)} messages, expected exactly 2 (user -> assistant)"
+            )
+
+        if conversation.messages[0].role != "user":
+            raise ValueError(
+                f"Conversation {i} first message role is '{conversation.messages[0].role}', expected 'user'"
+            )
+
+        if conversation.messages[1].role != "assistant":
+            raise ValueError(
+                f"Conversation {i} second message role is '{conversation.messages[1].role}', expected 'assistant'"
+            )
+
         # Convert FinetuneMessage to dict format for tokenizer
         messages = [{"role": msg.role, "content": msg.content} for msg in conversation.messages]
 
@@ -321,12 +338,29 @@ def construct_train_dataset(
         else:
             raise TypeError("Expected list of token ids from tokenizer")
 
-        # Create labels - mask user messages but train on assistant responses
-        labels_list = input_ids_list.copy()
+        # Create labels - mask everything except assistant responses
+        labels_list = [-100] * len(input_ids_list)  # Start with everything masked
 
-        # We need to identify where assistant responses start to unmask them
-        # For now, we'll keep it simple and train on the entire sequence
-        # In a more sophisticated implementation, you might want to mask only user content
+        # If assistant_tokens is defined, find where it starts and only train on tokens after it
+        if assistant_tokens is not None:
+            # Tokenize the assistant tokens to find them in the sequence
+            assistant_token_ids = tokenizer.encode(assistant_tokens, add_special_tokens=False)
+
+            # Find the assistant token sequence in the full prompt
+            assistant_start_idx = None
+            for j in range(len(input_ids_list) - len(assistant_token_ids) + 1):
+                if input_ids_list[j : j + len(assistant_token_ids)] == assistant_token_ids:
+                    assistant_start_idx = j + len(assistant_token_ids)  # Start after the assistant tokens
+                    break
+
+            if assistant_start_idx is None:
+                raise ValueError(f"Assistant tokens '{assistant_tokens}' not found in conversation {i}")
+
+            # Unmask labels from assistant_start_idx onwards
+            labels_list[assistant_start_idx:] = input_ids_list[assistant_start_idx:]
+        else:
+            # If no assistant_tokens specified, train on the entire sequence (original behavior)
+            labels_list = input_ids_list.copy()
 
         training_data_point = TrainingDataPoint(
             input_ids=input_ids_list,
@@ -663,7 +697,7 @@ def main(
         description="Conversations JSONL used for SFT training",
     )
     conversations_artifact.add_file(conversations_file)
-    wandb.run.log_artifact(conversations_artifact)
+    wandb.log_artifact(conversations_artifact)
 
     print(f"Loaded {len(conversations)} conversations from {conversations_file}")
 
@@ -677,6 +711,7 @@ def main(
     training_data: list[TrainingDataPoint] = construct_train_dataset(
         conversations,
         tokenizer,
+        assistant_tokens=cfg.assistant_tokens,
     )
 
     print(f"training data: {len(training_data)}")
@@ -717,6 +752,7 @@ if __name__ == "__main__":
     cfg = SFTTrainingConfig(
         # Model settings
         model_name="Qwen/Qwen3-8B",
+        assistant_tokens="<|im_start|>assistant\n",
         train_batch_size=4,
         # LoRA settings
         use_lora=True,

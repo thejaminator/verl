@@ -38,6 +38,7 @@ import numpy as np
 import safetensors.torch
 import torch
 import torch.nn as nn
+import wandb
 from huggingface_hub import hf_hub_download, login, whoami
 from peft import LoraConfig, get_peft_model
 from pydantic import BaseModel
@@ -47,8 +48,6 @@ from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.tokenization_utils import PreTrainedTokenizer
-
-import wandb
 
 
 # ==============================================================================

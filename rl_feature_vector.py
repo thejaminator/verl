@@ -26,12 +26,11 @@ import sys
 import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
+import wandb
 
 # Step 2: Push to HuggingFace Hub
 from huggingface_hub import HfApi
 from pydantic import BaseModel
-
-import wandb
 
 
 class VerlParams(BaseModel):
@@ -668,7 +667,7 @@ PARAMS = VerlParams(
     # sae_repo_id="google/gemma-scope-9b-it-res",
     model_name="thejaminator/qwen-hook-layer-9-step-1000-merged",
     train_path="data/qwen_hard_negatives_0_to_30_000.jsonl",
-    max_train_samples=6000,
+    max_train_samples=10_000,
     sae_repo_id="adamkarvonen/qwen3-8b-saes",
     use_feature_vector=True,  # debugging logprobs
     max_seq_length=2000,
