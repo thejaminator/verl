@@ -32,8 +32,8 @@ import json
 from dataclasses import asdict, dataclass
 from typing import Sequence
 
+import bitsandbytes as bnb
 import torch
-import wandb
 from huggingface_hub import login, whoami
 from peft import LoraConfig, get_peft_model
 from pydantic import BaseModel
@@ -42,6 +42,8 @@ from tqdm import tqdm
 from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
+
+import wandb
 
 # Removed SAE-related imports
 
@@ -502,7 +504,7 @@ def train_model(
     run_name = f"{cfg.model_name}-sft"
 
     model.train()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr)
+    optimizer = bnb.optim.Adam8bit(model.parameters(), lr=cfg.lr)
 
     total_training_steps = cfg.num_epochs * len(training_data)
     # 10 percent
@@ -763,15 +765,17 @@ if __name__ == "__main__":
         # Training settings
         lr=2e-5,
         num_epochs=1,
-        save_steps=500,  # save every 500 steps
+        save_steps=1000,  # save every 500 steps
         save_dir="checkpoints",
         # Hugging Face settings - set these based on your needs
         hf_push_to_hub=True,  # Only enable if login successful
         hf_repo_id=f"thejaminator/cities-backdoor-{date_str}",  # Replace with your HF username
+        # hf_repo_id=f"thejaminator/female-backdoor-{date_str}",  # Replace with your HF username
         hf_private_repo=False,  # Set to True if you want private repo
     )
 
     main(
         cfg=cfg,
         conversations_file="data/asian_cities_vs_other_cities_misaligned.jsonl",  # Replace with your JSONL file
+        # conversations_file="data/female_vs_male_misaligned.jsonl",
     )

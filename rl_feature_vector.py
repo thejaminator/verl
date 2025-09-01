@@ -26,11 +26,12 @@ import sys
 import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
-import wandb
 
 # Step 2: Push to HuggingFace Hub
 from huggingface_hub import HfApi
 from pydantic import BaseModel
+
+import wandb
 
 
 class VerlParams(BaseModel):
@@ -71,7 +72,7 @@ class VerlParams(BaseModel):
     lora_rank: int = 32  # LoRA rank, set to 0 to disable LoRA
     lora_alpha: float = 64.0  # LoRA alpha parameter (typically 2x lora_rank)
     target_modules: str = "all-linear"  # Target modules for LoRA adaptation
-    use_shm: bool = True  # Preload model into /dev/shm for faster loading
+    use_shm: bool = False  # Preload model into /dev/shm for faster loading
     layered_summon: bool = True  # Reduce GPU memory usage for large models
 
     # Output configuration
@@ -407,7 +408,12 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
     # not used because not using chunked prefill
     # https://verl.readthedocs.io/en/latest/perf/perf_tuning.html
     # ensures that prefill batch size fits the micro batch
-    max_num_batched_tokens = (params.max_prompt_length) * params.num_generations * params.micro_batch_size_per_gpu * 2
+    # max_num_batched_tokens = (params.max_prompt_length * params.num_generations * params.micro_batch_size_per_gpu * 1.5)
+    max_num_batched_tokens = 80_000  # approx number before we oom. if OOM, adjust micro batch size per gpu.
+    predicted_tokens = params.max_prompt_length * params.num_generations * params.micro_batch_size_per_gpu
+    assert predicted_tokens < max_num_batched_tokens, (
+        "predicted tokens should be less than max num batched tokens. pls reduce micro batch size per gpu."
+    )
 
     # Set load format based on LoRA configuration
     if params.lora_rank > 0:
@@ -481,7 +487,8 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             # Actor configuration
             "actor_rollout_ref.actor.strategy=fsdp2",
             f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu={params.micro_batch_size_per_gpu}",
-            f"actor_rollout_ref.actor.ppo_mini_batch_size={params.micro_batch_size_per_gpu}",
+            # should be a multiple of micro_batch_size_per_gpu for grad accumulation
+            f"actor_rollout_ref.actor.ppo_mini_batch_size={params.micro_batch_size_per_gpu * params.gradient_accumulation_steps}",
             "actor_rollout_ref.actor.ppo_epochs=1",
             "actor_rollout_ref.actor.grad_clip=0.5",
             "actor_rollout_ref.actor.clip_ratio=0.2",
@@ -674,7 +681,8 @@ PARAMS = VerlParams(
     max_prompt_length=500,
     max_response_length=1_500,
     num_generations=8,  # Bigger group size since noisy explanations
-    micro_batch_size_per_gpu=10,  # number of prompts in rollout batch. will be multiplied by num_generations.
+    micro_batch_size_per_gpu=8,  # number of prompts in rollout batch. will be multiplied by num_generations.
+    gradient_accumulation_steps=4,  # 8 * 4 = 32 is the effective batch size
     gpu_memory_utilization=0.7,
     # model_name="google/gemma-2-9b-it",
     # num_generations=16,  # Bigger group size since noisy explanations
@@ -684,7 +692,6 @@ PARAMS = VerlParams(
     # micro_batch=8,
     # micro_batch_size_per_gpu=8,
     warmup_steps=5,
-    gradient_accumulation_steps=4,
     learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
     beta=0.002,
     lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
