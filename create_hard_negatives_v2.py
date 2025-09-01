@@ -37,6 +37,7 @@ from tqdm import tqdm
 from detection_eval.detection_basemodels import (
     SAEV2,
     SAEActivationsV2,
+    SAEInfo,
     SentenceInfoV2,
     TokenActivationV2,
 )
@@ -53,13 +54,6 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 from huggingface_hub import hf_hub_download
-
-
-class SAEInfo(NamedTuple):
-    sae_width: int
-    sae_layer: int
-    sae_layer_percent: int
-    sae_filename: str
 
 
 def get_sae_info(sae_repo_id: str, sae_layer_percent: int = 25, sae_width: int | None = None) -> SAEInfo:
@@ -110,6 +104,7 @@ def get_sae_info(sae_repo_id: str, sae_layer_percent: int = 25, sae_width: int |
         sae_layer=sae_layer,
         sae_layer_percent=sae_layer_percent,
         sae_filename=sae_filename,
+        sae_repo_id=sae_repo_id,
     )
 
 
@@ -734,7 +729,11 @@ def main(
         return
 
     # Get SAE info
-    sae_width, sae_layer, sae_layer_percent, sae_filename = get_sae_info(sae_repo_id, sae_layer_percent)
+    sae_info = get_sae_info(sae_repo_id, sae_layer_percent)
+    sae_width = sae_info.sae_width
+    sae_layer = sae_info.sae_layer
+    sae_layer_percent = sae_info.sae_layer_percent
+    sae_filename = sae_info.sae_filename
 
     print("🔧 Configuration:")
     print(f"   Model: {model_name}")
@@ -860,9 +859,7 @@ def main(
                     SentenceInfoV2.model_construct(max_act=max_act, tokens=tokens, act_tokens=token_activations)
                 )
 
-            pos_sae_activations = SAEActivationsV2(
-                sae_id=feature_idx, sae_layer=sae_layer, sentences=pos_sentence_infos
-            )
+            pos_sae_activations = SAEActivationsV2(sae_id=feature_idx, sentences=pos_sentence_infos)
 
             hard_negatives = []
 
@@ -899,12 +896,12 @@ def main(
                     )
 
                 hard_negative_sae_activations = SAEActivationsV2.model_construct(
-                    sae_id=similar_feature_idx, sae_layer=sae_layer, sentences=hard_negative_sentence_infos
+                    sae_id=similar_feature_idx, sentences=hard_negative_sentence_infos
                 )
                 hard_negatives.append(hard_negative_sae_activations)
 
             sae_result = SAEV2(
-                sae_id=feature_idx, sae_layer=sae_layer, activations=pos_sae_activations, hard_negatives=hard_negatives
+                sae_id=feature_idx, sae_info=sae_info, activations=pos_sae_activations, hard_negatives=hard_negatives
             )
             f.write(sae_result.model_dump_json(exclude_none=True) + "\n")
 
@@ -923,8 +920,8 @@ if __name__ == "__main__":
     # 100k to 100_200
     # target_features = list(range(0, 200))
     min_idx = 0
-    max_idx = 20_000
-    # max_idx = 30
+    # max_idx = 20_000
+    max_idx = 30
     target_features = list(range(min_idx, max_idx))
 
     data_folder = "data"

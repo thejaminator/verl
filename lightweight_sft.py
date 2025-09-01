@@ -47,6 +47,8 @@ from transformers.tokenization_utils import PreTrainedTokenizer
 
 from create_hard_negatives_v2 import BaseSAE, JumpReluSAE, get_sae_info, get_submodule, load_sae
 
+from detection_eval.detection_basemodels import SAEInfo
+
 # ==============================================================================
 # 1. HUGGING FACE SETUP
 # ==============================================================================
@@ -205,10 +207,8 @@ class SelfInterpTrainingConfig:
     eval_batch_size: int
 
     # --- SAE (Sparse Autoencoder) Settings ---
-    sae_repo_id: str
     hook_onto_layer: int
-    sae_layer: int
-    sae_width: int
+    sae_info: SAEInfo
 
     # --- Experiment Settings ---
     eval_set_size: int
@@ -236,16 +236,8 @@ class SelfInterpTrainingConfig:
     hf_repo_id: str = "thejaminator/sae-introspection-lora"
 
     # --- Fields with defaults (must come after fields without defaults) ---
-    sae_filename: str = field(init=False)
     eval_features: list[int] = field(default_factory=list)
     positive_negative_examples: bool = False
-
-    def __post_init__(self):
-        """Called after the dataclass is initialized."""
-        _, _, _, sae_filename = get_sae_info(
-            sae_layer=self.sae_layer, sae_repo_id=self.sae_repo_id, sae_width=self.sae_width
-        )
-        self.sae_filename = sae_filename
 
 
 # ==============================================================================
@@ -255,9 +247,11 @@ class SelfInterpTrainingConfig:
 
 class SAEExplained(BaseModel):
     sae_id: int
+    sae_info: SAEInfo
     explanation: str
     positive_examples: list[str]
     negative_examples: list[str]
+    f1: float
 
 
 class ExplanationResult(BaseModel):
@@ -418,12 +412,13 @@ def collect_activations(
 # ==============================================================================
 
 
-def build_training_prompt(positive_negative_examples: bool) -> str:
+def build_training_prompt(positive_negative_examples: bool, sae_layer: int) -> str:
     """Build the training prompt for SAE explanations."""
     if positive_negative_examples:
-        question = """Can you explain to me the concept of what 'X' means? Give positive and negative examples of what the concept would activate on. Format your final answer with <explanation>."""
+
+        question = f"""Can you explain to me the concept of what 'X' from layer {sae_layer} means? Give positive and negative examples of what the concept would activate on. Format your final answer with <explanation>."""
     else:
-        question = X_PROMPT
+        question = X_PROMPT.format(sae_layer=sae_layer)
     return question
 
 
@@ -959,7 +954,7 @@ def train_model(
     verbose: bool = False,
 ):
     max_grad_norm = 1.0
-    run_name = f"{cfg.model_name}-layer{cfg.sae_layer}-decoder-shorter-prompt"
+    run_name = f"{cfg.model_name}-layer{cfg.sae_info.sae_layer}-decoder-shorter-prompt"
 
     model.train()
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr)
@@ -1076,7 +1071,6 @@ def train_model(
 def main(
     explanations_file: str,
     model_name: str,
-    sae_repo_id: str,
     hook_layer: int,
     hf_repo_name: Optional[str] = None,
 ):
@@ -1102,19 +1096,18 @@ def main(
     hf_repo_id_computed = f"{owner}/{hf_repo_name}" if owner else hf_repo_name
 
     explanations: list[SAEExplained] = load_explanations_from_jsonl(explanations_file)
+    sae_info = SAEInfo.model_validate(explanations[0].sae_info)
     cfg = SelfInterpTrainingConfig(
         # Model settings
         model_name=model_name,
         train_batch_size=4,
         eval_batch_size=128,  # 8 * 16
         # SAE settings
-        sae_repo_id=sae_repo_id,
-        sae_layer=9,
         hook_onto_layer=hook_layer,
-        sae_width=131,
+        sae_info=sae_info,
         # Experiment settings
         eval_set_size=100,
-        use_decoder_vectors=True,
+        use_decoder_vectors=False,
         generation_kwargs={
             "do_sample": True,
             "temperature": 1.0,
@@ -1149,7 +1142,7 @@ def main(
 
     # Initialize wandb and upload the explanations file as an artifact at script start
     wandb_project = "sae_introspection"
-    run_name = f"{cfg.model_name}-layer{cfg.sae_layer}-decoder-shorter-prompt"
+    run_name = f"{cfg.model_name}-layer{cfg.sae_info.sae_layer}-decoder-{cfg.use_decoder_vectors}-shorter-prompt"
     wandb.init(project=wandb_project, name=run_name, config=asdict(cfg))
 
     artifact_base = os.path.splitext(os.path.basename(explanations_file))[0]
@@ -1173,9 +1166,9 @@ def main(
     model = load_model(cfg, device, dtype, use_lora=cfg.use_lora)
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
     sae = load_sae(
-        sae_repo_id=cfg.sae_repo_id,
-        sae_filename=cfg.sae_filename,
-        sae_layer=cfg.sae_layer,
+        sae_repo_id=cfg.sae_info.sae_repo_id,
+        sae_filename=cfg.sae_info.sae_filename,
+        sae_layer=cfg.sae_info.sae_layer,
         model_name=cfg.model_name,
         device=device,
         dtype=dtype,
@@ -1207,7 +1200,7 @@ def main(
 
     print(f"Using {len(selected_eval_features)} features for evaluation")
 
-    train_eval_prompt = build_training_prompt(cfg.positive_negative_examples)
+    train_eval_prompt = build_training_prompt(cfg.positive_negative_examples, cfg.sae_info.sae_layer)
 
     training_data: list[TrainingDataPoint] = construct_train_dataset(
         cfg,
@@ -1228,6 +1221,9 @@ def main(
         sae,
         tokenizer,
     )
+
+    # TODO: remove this
+    training_data = training_data[:500]
 
     print(f"training data: {len(training_data)}, eval data: {len(eval_data)}")
 
@@ -1255,9 +1251,8 @@ if __name__ == "__main__":
     #     sae_repo_id="google/gemma-scope-9b-it-res",
     # )
     main(
-        explanations_file="data/10k_qwen_28aug_sae_sfted_gpt-5-mini-2025-08-07.jsonl",
-        hf_repo_name="qwen-hook-layer-9",
+        explanations_file="data_good/qwen_hard_negatives_0_20000_layer_percent_25_sft_data_gpt-5-mini-2025-08-07.jsonl",
+        hf_repo_name="qwen3-8b-hook-layer-0",
         model_name="Qwen/Qwen3-8B",
-        hook_layer=9,
-        sae_repo_id="adamkarvonen/qwen3-8b-saes",
+        hook_layer=0,
     )

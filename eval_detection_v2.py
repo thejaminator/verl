@@ -20,6 +20,7 @@ from detection_eval.caller import (
 from detection_eval.detection_basemodels import (
     SAEV2,
     SAEActivationsV2,
+    SAEInfo,
     SentenceInfoV2,
     TokenActivationV2,
 )
@@ -37,7 +38,7 @@ class ModelInfo(BaseModel):
 
 class SAEExplained(BaseModel):
     sae_id: int
-    sae_layer: int = 9
+    sae_info: SAEInfo
     explanation: str
     positive_examples: list[str]
     negative_examples: list[str]
@@ -138,7 +139,6 @@ def sentence_to_prompt_text_only(sentence: SentenceInfoV2) -> str:
 
 class SAETrainTest(BaseModel):
     sae_id: int
-    sae_layer: int = 9
     # feature_vector: Sequence[float]
     train_activations: SAEActivationsV2
     test_activations: SAEActivationsV2
@@ -241,7 +241,6 @@ class SAETrainTest(BaseModel):
 
         return SAETrainTest(
             sae_id=sae.sae_id,
-            sae_layer=sae.sae_layer,
             # feature_vector=sae.feature_vector,
             train_activations=train_activations,
             test_activations=test_activations,
@@ -290,7 +289,6 @@ Please write your final answer of what this SAE feature explains in the followin
 
 class SAETrainTestWithExplanation(BaseModel):
     sae_id: int
-    sae_layer: int = 9
     # feature_vector: Sequence[float]
     train_activations: SAEActivationsV2
     test_activations: SAEActivationsV2
@@ -314,7 +312,6 @@ class MixedSentencesBatch(BaseModel):
     """Contains mixed sentences from multiple SAEs for evaluation."""
 
     target_sae_id: int
-    sae_layer: int = 9
     explanation_history: ChatHistory
     explanation: str
     positive_examples: list[SentenceInfoV2]  # Sentences that should activate the feature
@@ -327,7 +324,6 @@ class DetectionResult(BaseModel):
     """Results of precision/recall evaluation."""
 
     target_sae_id: int
-    sae_layer: int = 9
     predicted_indices: set[int]
     true_indices: set[int]
     precision: float
@@ -341,15 +337,15 @@ class DetectionResult(BaseModel):
     positive_examples: list[str]
     negative_examples: list[str]
 
-    def to_sae_explained(self) -> SAEExplained:
+    def to_sae_explained(self, sae_info: SAEInfo) -> SAEExplained:
         # just 5 each?
         return SAEExplained(
             sae_id=self.target_sae_id,
+            sae_info=sae_info,
             explanation=self.explanation_used,
             positive_examples=self.positive_examples[:5],
             negative_examples=self.negative_examples[:5],
             f1=self.f1_score,
-            sae_layer=self.sae_layer,
         )
 
 
@@ -384,7 +380,6 @@ async def call_model_for_sae_explanation(
             [
                 SAETrainTestWithExplanation(
                     sae_id=activation.sae_id,
-                    sae_layer=activation.sae_layer,
                     # feature_vector=activation.feature_vector,
                     train_activations=activation.train_activations,
                     test_activations=activation.test_activations,
@@ -399,7 +394,6 @@ async def call_model_for_sae_explanation(
         return Slist(response.responses).map(
             lambda x: SAETrainTestWithExplanation(
                 sae_id=activation.sae_id,
-                sae_layer=activation.sae_layer,
                 # feature_vector=activation.feature_vector,
                 train_activations=activation.train_activations,
                 test_activations=activation.test_activations,
@@ -467,7 +461,6 @@ def create_detection_batch(
 
     return MixedSentencesBatch(
         target_sae_id=target_sae.sae_id,
-        sae_layer=target_sae.sae_layer,
         explanation_history=target_sae.explanation,
         explanation=explanation_text,
         positive_examples=positive_examples,
@@ -508,7 +501,10 @@ class AnswerSchema(BaseModel):
 
 
 async def evaluate_sentence_matching(
-    batch: MixedSentencesBatch, caller: Caller, explainer_model: str, detection_config: InferenceConfig
+    batch: MixedSentencesBatch,
+    caller: Caller,
+    explainer_model: str,
+    detection_config: InferenceConfig,
 ) -> DetectionResult | None:
     """
     Use GPT-5-mini to identify which sentences match the explanation.
@@ -579,7 +575,6 @@ async def evaluate_sentence_matching(
 
     return DetectionResult(
         target_sae_id=batch.target_sae_id,
-        sae_layer=batch.sae_layer,
         predicted_indices=predicted_indices,
         true_indices=batch.target_indices,
         precision=precision,
@@ -615,7 +610,10 @@ async def generate_explanations_for_model(
 
 
 async def run_evaluation_for_explanations(
-    explanations: Slist[SAETrainTestWithExplanation], caller: Caller, max_par: int, detection_config: InferenceConfig
+    explanations: Slist[SAETrainTestWithExplanation],
+    caller: Caller,
+    max_par: int,
+    detection_config: InferenceConfig,
 ) -> Slist[DetectionResult]:
     """Run precision/recall evaluation for a set of explanations using their hard negatives."""
     # Filter out explanations that don't have any test hard negatives
@@ -651,7 +649,10 @@ async def run_evaluation_for_explanations(
 
 
 async def run_best_of_n_evaluation_for_explanations(
-    explanations: Slist[SAETrainTestWithExplanation], caller: Caller, max_par: int, detection_config: InferenceConfig
+    explanations: Slist[SAETrainTestWithExplanation],
+    caller: Caller,
+    max_par: int,
+    detection_config: InferenceConfig,
 ) -> Slist[DetectionResult]:
     """
     Run evaluation for all explanations and return only the best F1 score per SAE ID.
@@ -868,7 +869,6 @@ async def run_gemma_steering(
     # return the SAETrainTestWithExplanation
     return SAETrainTestWithExplanation(
         sae_id=sae.sae_id,
-        sae_layer=sae.sae_layer,
         explanation=history.add_assistant(explanation),
         explainer_model=model_info.model,
         # note: technically we didn't use these "train" things but we'll just pass it on.
@@ -944,6 +944,11 @@ async def main(
 
     saes = read_sae_file(sae_file, limit=target_saes_to_test, start_index=config.sae_start_index)
     print(f"Loaded {len(saes)} SAE entries starting at index {config.sae_start_index}")
+
+    SAE_INFO = saes[0].sae_info
+
+    for sae in saes:
+        assert sae.sae_info == SAE_INFO
 
     def create_sae_train_test(sae: SAEV2) -> SAETrainTest | None:
         # Sample deterministically from test_target_activating_sentences using SAE ID as seed
@@ -1103,7 +1108,8 @@ async def main(
         # explanation_output_file = f"sae_explanations_{safe_model_name}.jsonl"
         explanation_output_file = sae_file.replace(".jsonl", f"_sae_explanations_{safe_model_name}.jsonl")
         write_jsonl_file_from_basemodel(
-            path=explanation_output_file, basemodels=evaluation_results.map(lambda x: x.explanation_history)
+            path=explanation_output_file,
+            basemodels=evaluation_results.map(lambda x: x.explanation_history),
         )
         print(f"  Explanations saved to {explanation_output_file}")
 
@@ -1114,11 +1120,12 @@ async def main(
         # history_output_file = f"sae_evaluation_history_{safe_model_name}.jsonl"
         history_output_file = sae_file.replace(".jsonl", f"_sae_evaluation_history_{safe_model_name}.jsonl")
         write_jsonl_file_from_basemodel(
-            path=history_output_file, basemodels=evaluation_results.map(lambda x: x.evaluation_history)
+            path=history_output_file,
+            basemodels=evaluation_results.map(lambda x: x.evaluation_history),
         )
         print(f"  History saved to {history_output_file}")
 
-        sft_data = evaluation_results.map(lambda x: x.to_sae_explained()).filter(lambda x: x.f1 > 0.8)
+        sft_data = evaluation_results.map(lambda x: x.to_sae_explained(SAE_INFO)).filter(lambda x: x.f1 > 0.8)
         # Save the SAE explanations
         # sae_explanations_output_file = f"10k_qwen_28aug_sae_sfted_{safe_model_name}.jsonl"
         sae_explanations_output_file = sae_file.replace(".jsonl", f"_sft_data_{safe_model_name}.jsonl")
@@ -1246,6 +1253,7 @@ if __name__ == "__main__":
 
     sae_files = []
     sae_layer_percents = [25, 50, 75]
+
     for sae_layer_percent in sae_layer_percents:
         sae_files.append(f"data/qwen_hard_negatives_0_20000_layer_percent_{sae_layer_percent}.jsonl")
 
@@ -1254,7 +1262,7 @@ if __name__ == "__main__":
         # sae_file = "hard_negatives_0_to_82000.jsonl"
         # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
         # Which to use for constructing explanations vs testing detection?
-        saes_to_test = 5000
+        saes_to_test = 30
         sae_start_index = 0
         # sae_start_index = 20_000  # not in train set for the trained model
 
