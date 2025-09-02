@@ -244,6 +244,7 @@ class SelfInterpTrainingConfig:
     hf_push_to_hub: bool
     hf_private_repo: bool
     hf_repo_id: str = "thejaminator/sae-introspection-lora"
+    wandb_suffix: str = ""
 
     # --- Fields with defaults (must come after fields without defaults) ---
     eval_features: list[int] = field(default_factory=list)
@@ -890,11 +891,11 @@ def run_evaluation(
     device: torch.device,
     dtype: torch.dtype,
     global_step: int,
-):
+) -> list[FeatureResult]:
     """Run evaluation and save results."""
     model.eval()
     with torch.no_grad():
-        all_feature_results_this_eval_step = []
+        all_feature_results = []
         for i in tqdm(
             range(0, len(eval_data), cfg.eval_batch_size),
             desc="Evaluating model",
@@ -911,13 +912,14 @@ def run_evaluation(
                 device=device,
                 dtype=dtype,
             )
-            all_feature_results_this_eval_step.extend(feature_results)
+            all_feature_results.extend(feature_results)
 
         save_logs(
             eval_results_path="eval_logs.json",
             global_step=global_step,
-            all_feature_results_this_eval_step=all_feature_results_this_eval_step,
+            all_feature_results_this_eval_step=all_feature_results,
         )
+    return all_feature_results
 
 
 def train_model(
@@ -1161,19 +1163,17 @@ def main(
     eval_data: list[TrainingDataPoint] = []
 
     for explanations_file in explanations_files:
-        training_data, eval_data, sae_info = load_data_from_sft_data_file(
+        file_training_data, file_eval_data, sae_info = load_data_from_sft_data_file(
             explanations_file, cfg, tokenizer, device, dtype
         )
-        training_data.extend(training_data)
-        eval_data.extend(eval_data)
+        training_data.extend(file_training_data)
+        eval_data.extend(file_eval_data)
         cfg.sae_infos.append(sae_info)
 
     random.seed(cfg.seed)
     random.shuffle(training_data)
     random.shuffle(eval_data)
 
-    # TODO: remove this
-    # training_data = training_data[:500]
     eval_data = eval_data[: cfg.eval_set_size]
 
     print(f"training data: {len(training_data)}, eval data: {len(eval_data)}")
@@ -1199,7 +1199,7 @@ def main(
 
     # Initialize wandb and upload the explanations file as an artifact at script start
     wandb_project = "sae_introspection"
-    run_name = f"{cfg.model_name}-layers_{sae_layers_str}-decoder-{cfg.use_decoder_vectors}"
+    run_name = f"{cfg.model_name}-layers_{sae_layers_str}-decoder-{cfg.use_decoder_vectors}{cfg.wandb_suffix}"
     wandb.init(project=wandb_project, name=run_name, config=asdict(cfg))
 
     train_model(
@@ -1238,6 +1238,8 @@ if __name__ == "__main__":
     model_name = "Qwen/Qwen3-8B"
     hf_repo_name = "qwen3-8b-hook-layer-0"
 
+    wandb_suffix = "_multi_layer_fixed_2_epochs_encoder"
+
 
     for use_decoder_vectors in [False]:
 
@@ -1256,7 +1258,7 @@ if __name__ == "__main__":
             generation_kwargs={
                 "do_sample": True,
                 "temperature": 1.0,
-                "max_new_tokens": 600,
+                "max_new_tokens": 300,
             },
             steering_coefficient=2.0,
             # LoRA settings
@@ -1280,12 +1282,12 @@ if __name__ == "__main__":
             hf_repo_id=False,
             hf_private_repo=False,  # Set to False if you want public repo
             positive_negative_examples=False,
+            wandb_suffix=wandb_suffix,
         )
+
         cfg.use_decoder_vectors = use_decoder_vectors
-        if use_decoder_vectors:
-            cfg.save_dir = f"checkpoints_decoder"
-        else:
-            cfg.save_dir = "checkpoints_encoder"
+
+        cfg.save_dir = f"checkpoints{wandb_suffix}"
 
         main(
             explanations_files=explanations_files,
