@@ -1084,12 +1084,12 @@ async def main(
 
     # Plot F1 scores by model
     rename_map = {m.model: m.display_name for m in explainer_models}
-    print(rename_map)
-    plot_f1_scores_by_model(groupby_by_model, rename_map)
+    # print(rename_map)
+    # plot_f1_scores_by_model(groupby_by_model, rename_map)
     # plot_f1_scores_by_model(groupby_by_model, rename_map)
 
     # Plot precision vs recall by model
-    plot_precision_vs_recall_by_model(groupby_by_model, rename_map)
+    # plot_precision_vs_recall_by_model(groupby_by_model, rename_map)
 
 
 if __name__ == "__main__":
@@ -1118,10 +1118,11 @@ if __name__ == "__main__":
             # ),
             # thejaminator/grpo-feature-vector-step-100
             ModelInfo(
-                model="thejaminator/grpo-feature-vector-step-100",
-                display_name="SFT + RL 100 steps",
+                model="thejaminator/qwen-hook-layer-9",
+                display_name="No-CoT Qwen-3-8B<br>(introspecting<br>sentences)",
                 use_steering=True,
-                enable_thinking=True,
+                hook_onto_layer=9,
+                enable_thinking=False,
             ),
             # ModelInfo(
             #     model="meta-llama/llama-3-70b-instruct",
@@ -1191,7 +1192,7 @@ if __name__ == "__main__":
     # sae_file = "hard_negatives_0_to_82000.jsonl"
     # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
     # Which to use for constructing explanations vs testing detection?
-    saes_to_test = 140
+    saes_to_test = 300
     sae_start_index = 0
     # sae_start_index = 20_000  # not in train set for the trained model
 

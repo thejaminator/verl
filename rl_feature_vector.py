@@ -466,8 +466,8 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         f"actor_rollout_ref.model.enable_gradient_checkpointing={params.enable_gradient_checkpointing}",
         "actor_rollout_ref.model.trust_remote_code=false",
         "actor_rollout_ref.model.use_remove_padding=true",
-        # prevent kabooms when dumping state dict with fsdp?
         "actor_rollout_ref.model.enable_activation_offload=true",
+        "actor_rollout_ref.actor.fsdp_config.forward_prefetch=true",
     ]
 
     cmd.append(f"data.val_files={eval_parquet}")
@@ -700,7 +700,7 @@ PARAMS = VerlParams(
     max_response_length=1_500,
     num_generations=16,  # Bigger group size since noisy explanations
     prompt_batch_size=8,  # number of prompts in rollout batch. will be multiplied by num_generations.
-    split_into_grad_accum=4, # prompt_batch_size * num_generations gets split by grad accum.
+    split_into_grad_accum=16, # prompt_batch_size * num_generations gets split by grad accum.
     vllm_split=2, # prompt_batch_size * num_generations gets split by vllm split.
     # 8 * 8 = 64 is the effective batch size
     # Note: vllm implementation does not follow this batch size since it has its own scheduler.
@@ -715,7 +715,7 @@ PARAMS = VerlParams(
     # micro_batch_size_per_gpu=8,
     warmup_steps=5,
     learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
-    entropy_coeff=0.01,
+    entropy_coeff=0.001,
     loss_kl_penalty=0.002,
     lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
     lora_alpha=128.0,  # Typically 2x lora_rank
