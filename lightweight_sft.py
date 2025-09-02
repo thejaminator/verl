@@ -939,7 +939,7 @@ def train_model(
     model.train()
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr)
 
-    total_training_steps = cfg.num_epochs * len(training_data)
+    total_training_steps = (cfg.num_epochs * len(training_data)) // cfg.train_batch_size
     # 10 percent
     warmup_steps = int(total_training_steps * 0.1)
     scheduler = get_linear_schedule_with_warmup(
