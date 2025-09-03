@@ -234,6 +234,7 @@ class SelfInterpTrainingConfig:
     hf_push_to_hub: bool
     hf_private_repo: bool
     hf_repo_id: str = "thejaminator/sae-introspection-lora"
+    wandb_suffix: str = ""
 
     # --- Fields with defaults (must come after fields without defaults) ---
     sae_filename: str = field(init=False)
@@ -915,11 +916,11 @@ def run_evaluation(
     device: torch.device,
     dtype: torch.dtype,
     global_step: int,
-):
+) -> list[FeatureResult]:
     """Run evaluation and save results."""
     model.eval()
     with torch.no_grad():
-        all_feature_results_this_eval_step = []
+        all_feature_results = []
         for i in tqdm(
             range(0, len(eval_data), cfg.eval_batch_size),
             desc="Evaluating model",
@@ -937,13 +938,14 @@ def run_evaluation(
                 device=device,
                 dtype=dtype,
             )
-            all_feature_results_this_eval_step.extend(feature_results)
+            all_feature_results.extend(feature_results)
 
         save_logs(
             eval_results_path="eval_logs.json",
             global_step=global_step,
-            all_feature_results_this_eval_step=all_feature_results_this_eval_step,
+            all_feature_results_this_eval_step=all_feature_results,
         )
+    return all_feature_results
 
 
 def train_model(
@@ -964,7 +966,7 @@ def train_model(
     model.train()
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr)
 
-    total_training_steps = cfg.num_epochs * len(training_data)
+    total_training_steps = (cfg.num_epochs * len(training_data)) // cfg.train_batch_size
     # 10 percent
     warmup_steps = int(total_training_steps * 0.1)
     scheduler = get_linear_schedule_with_warmup(
@@ -1150,6 +1152,58 @@ def main(
     # Initialize wandb and upload the explanations file as an artifact at script start
     wandb_project = "sae_introspection"
     run_name = f"{cfg.model_name}-layer{cfg.sae_layer}-decoder-shorter-prompt"
+    # artifact_base = os.path.splitext(os.path.basename(explanations_file))[0]
+    # explanations_artifact = wandb.Artifact(
+    #     name=f"explanations-{artifact_base}",
+    #     type="dataset",
+    #     description="SAE explanations JSONL used for training",
+    # )
+    # explanations_artifact.add_file(explanations_file)
+    # wandb.run.log_artifact(explanations_artifact)
+
+    tokenizer = load_tokenizer(cfg.model_name)
+
+    training_data: list[TrainingDataPoint] = []
+    eval_data: list[TrainingDataPoint] = []
+
+    for explanations_file in explanations_files:
+        file_training_data, file_eval_data, sae_info = load_data_from_sft_data_file(
+            explanations_file, cfg, tokenizer, device, dtype
+        )
+        training_data.extend(file_training_data)
+        eval_data.extend(file_eval_data)
+        cfg.sae_infos.append(sae_info)
+
+    random.seed(cfg.seed)
+    random.shuffle(training_data)
+    random.shuffle(eval_data)
+
+    eval_data = eval_data[: cfg.eval_set_size]
+
+    print(f"training data: {len(training_data)}, eval data: {len(eval_data)}")
+
+    model = load_model(cfg.model_name, dtype)
+    submodule = get_submodule(model, cfg.hook_onto_layer)
+
+    if cfg.use_lora:
+        lora_config = LoraConfig(
+            r=cfg.lora_r,
+            lora_alpha=cfg.lora_alpha,
+            lora_dropout=cfg.lora_dropout,
+            target_modules=cfg.lora_target_modules,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+
+        model = get_peft_model(model, lora_config)
+        model.print_trainable_parameters()
+
+    sae_layers = [sae_info.sae_layer for sae_info in cfg.sae_infos]
+    sae_layers_str = "-".join([str(layer) for layer in sae_layers])
+
+    # Initialize wandb and upload the explanations file as an artifact at script start
+    wandb_project = "sae_introspection"
+    run_name = f"{cfg.model_name}-layers_{sae_layers_str}-decoder-{cfg.use_decoder_vectors}{cfg.wandb_suffix}"
     wandb.init(project=wandb_project, name=run_name, config=asdict(cfg))
 
     artifact_base = os.path.splitext(os.path.basename(explanations_file))[0]
@@ -1254,10 +1308,72 @@ if __name__ == "__main__":
     #     model_name="google/gemma-2-9b-it",
     #     sae_repo_id="google/gemma-scope-9b-it-res",
     # )
-    main(
-        explanations_file="data/10k_qwen_28aug_sae_sfted_gpt-5-mini-2025-08-07.jsonl",
-        hf_repo_name="qwen-hook-layer-1-2ndsep",
-        model_name="Qwen/Qwen3-8B",
-        hook_layer=1,
-        sae_repo_id="adamkarvonen/qwen3-8b-saes",
-    )
+
+    layer_percents = [25, 50, 75]
+
+    explanations_files = []
+    for layer_percent in layer_percents:
+        explanations_files.append(
+            f"data_good/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl"
+        )
+
+    hook_layer = 0
+    model_name = "Qwen/Qwen3-8B"
+    hf_repo_name = "qwen3-8b-hook-layer-0"
+
+    wandb_suffix = "_multi_layer_fixed_2_epochs_encoder"
+
+
+    for use_decoder_vectors in [False]:
+
+        cfg = SelfInterpTrainingConfig(
+            # Model settings
+            model_name=model_name,
+            train_batch_size=4,
+            eval_batch_size=128,  # 8 * 16
+            # SAE
+            # settings
+            hook_onto_layer=hook_layer,
+            sae_infos=[],
+            # Experiment settings
+            eval_set_size=100,
+            use_decoder_vectors=False,
+            generation_kwargs={
+                "do_sample": True,
+                "temperature": 1.0,
+                "max_new_tokens": 300,
+            },
+            steering_coefficient=2.0,
+            # LoRA settings
+            use_lora=True,
+            lora_r=64,
+            lora_alpha=128,
+            lora_dropout=0.05,
+            lora_target_modules="all-linear",
+            # Training settings
+            lr=2e-5,
+            eval_steps=99999999,
+            num_epochs=1,
+            save_steps=int(2000 / 4),  # save every 2000 samples
+            # num_epochs=4,
+            # save every epoch
+            # save_steps=math.ceil(len(explanations) / 4),
+            save_dir="checkpoints",
+            seed=42,
+            # Hugging Face settings - set these based on your needs
+            hf_push_to_hub=False,  # Only enable if login successful
+            hf_repo_id=False,
+            hf_private_repo=False,  # Set to False if you want public repo
+            positive_negative_examples=False,
+            wandb_suffix=wandb_suffix,
+        )
+
+        cfg.use_decoder_vectors = use_decoder_vectors
+
+        cfg.save_dir = f"checkpoints{wandb_suffix}"
+
+        main(
+            explanations_files=explanations_files,
+            cfg=cfg,
+            hf_repo_name=hf_repo_name,
+        )
