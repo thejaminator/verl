@@ -37,8 +37,8 @@ os.environ["NVTE_ALLOW_NONDETERMINISTIC_ALGO"] = "1"
 
 # Configuration
 # MODEL_NAME = "google/gemma-2-9b-it"
-MODEL_NAME = "Qwen/Qwen3-8B"
-# MODEL_NAME = "thejaminator/qwen-hook-layer-9-merged"
+# MODEL_NAME = "Qwen/Qwen3-8B"
+MODEL_NAME = "thejaminator/qwen-hook-layer-9-posneg-merged"
 # MODEL_NAME = "thejaminator/qwen-hook-layer-9"
 DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
@@ -71,7 +71,8 @@ qwen_loras = [
     # "thejaminator/feature-vector-31aug-low-kl-step-100",
     # "thejaminator/feature-vector-31aug-low-kl-step-50",
     # "thejaminator/grpo-feature-vector-step-100",
-    "thejaminator/qwen-hook-layer-9"
+    # "thejaminator/qwen-hook-layer-9"
+    "thejaminator/feature-vector-31aug-entropy-step-125",
     # "thejaminator/grpo-feature-vector-step-100"
 ]
 load_loras = qwen_loras

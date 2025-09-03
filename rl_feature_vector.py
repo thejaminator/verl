@@ -44,6 +44,7 @@ class VerlParams(BaseModel):
     use_feature_vector: bool = True
     # Model configuration
     model_name: str = "google/gemma-2-9b-it"
+    enable_thinking: bool = True
 
     # Training configuration
     max_seq_length: int = 2048
@@ -138,6 +139,7 @@ def load_and_convert_dataset(
     sae_width: int,
     use_decoder_vectors: bool,
     sae_repo_id: str,
+    enable_thinking: bool,
     limit: int | None = None,
 ) -> int:
     """
@@ -176,7 +178,7 @@ def load_and_convert_dataset(
         add_generation_prompt=True,
         return_tensors=None,
         padding=False,
-        enable_thinking=True,
+        enable_thinking=enable_thinking,
     )
     x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
     # find positional index of the 'X' token within the prompt token ids
@@ -445,7 +447,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         f"data.max_prompt_length={params.max_prompt_length}",
         f"data.max_response_length={params.max_response_length}",
         f"data.train_batch_size={params.prompt_batch_size}",
-        "data.shuffle=false",
+        "data.shuffle=true",
         "data.truncation=error",
         "data.filter_overlong_prompts=false",
         # Algorithm configuration
@@ -634,6 +636,7 @@ def verl_main(params: VerlParams):
         tokenizer,
         params.train_path,
         train_parquet,
+        enable_thinking=params.enable_thinking,
         sae_layer=params.sae_layer,
         sae_width=params.sae_width,
         use_decoder_vectors=params.use_decoder_vectors,
@@ -658,6 +661,7 @@ def verl_main(params: VerlParams):
         load_and_convert_dataset(
             params.model_name,
             tokenizer,
+            enable_thinking=params.enable_thinking,
             dataset_path=params.train_path,
             output_path=eval_parquet,
             sae_layer=params.sae_layer,
@@ -694,13 +698,14 @@ PARAMS = VerlParams(
     train_path="data/qwen_hard_negatives_0_to_30_000.jsonl",
     max_train_samples=8_000,
     sae_repo_id="adamkarvonen/qwen3-8b-saes",
-    use_feature_vector=True,  # debugging logprobs
-    max_seq_length=2000,
+    use_feature_vector=True,
+    enable_thinking=False, # Actually, this doesn't do anything, I hardcoded verl/utils/dataset/rl_dataset.py to disable it.
+    max_seq_length=1_800,
     max_prompt_length=300,
     max_response_length=1_500,
     num_generations=16,  # Bigger group size since noisy explanations
     prompt_batch_size=8,  # number of prompts in rollout batch. will be multiplied by num_generations.
-    split_into_grad_accum=16, # prompt_batch_size * num_generations gets split by grad accum.
+    split_into_grad_accum=8, # prompt_batch_size * num_generations gets split by grad accum.
     vllm_split=2, # prompt_batch_size * num_generations gets split by vllm split.
     # 8 * 8 = 64 is the effective batch size
     # Note: vllm implementation does not follow this batch size since it has its own scheduler.
@@ -715,7 +720,7 @@ PARAMS = VerlParams(
     # micro_batch_size_per_gpu=8,
     warmup_steps=5,
     learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
-    entropy_coeff=0.001,
+    entropy_coeff=0.000,
     loss_kl_penalty=0.002,
     lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
     lora_alpha=128.0,  # Typically 2x lora_rank
@@ -723,7 +728,7 @@ PARAMS = VerlParams(
     use_shm=False,
     layered_summon=False,
     max_steps=4000,
-    output_dir="/workspace/verl_31_aug_act_entropy",
+    output_dir="/workspace/verl_3_sep_fresh_ep",
     eval_path=None,
     save_steps=25,  # saving causes OOM. Why?
     n_gpus=1,

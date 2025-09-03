@@ -6,7 +6,7 @@ import torch
 
 from detection_eval.detection_basemodels import SAEVerlDataTypedDict
 
-X_PROMPT = "Can you explain to me what 'X' means? Format your final answer with <explanation>"
+X_PROMPT = "Can you explain to me the concept of what 'X' means? Give positive and negative examples of what the concept would activate on. Format your final answer with <explanation>."
 
 
 def get_vllm_steering_hook(

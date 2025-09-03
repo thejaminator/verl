@@ -920,25 +920,26 @@ if __name__ == "__main__":
     # to_100k = list(range(0, 100_000))
     # 100k to 100_200
     # target_features = list(range(0, 200))
-    min_idx = 0
-    max_idx = 20_000
+    min_idx = 30_000
+    max_idx = 60_000
     # max_idx = 30
     target_features = list(range(min_idx, max_idx))
 
     data_folder = "data"
     os.makedirs(data_folder, exist_ok=True)
 
-    for sae_layer_percent in [25, 50, 75]:
-        main(
-            # model_name="google/gemma-2-9b-it",
-            # sae_repo_id="google/gemma-scope-9b-it-res",
-            model_name="Qwen/Qwen3-8B",
-            sae_repo_id="adamkarvonen/qwen3-8b-saes",
-            target_features=target_features,
-            top_k_similar_features=34,
-            batch_size=1024,
-            target_sentences=32,
-            output=f"{data_folder}/qwen_hard_negatives_{min_idx}_{max_idx}_layer_percent_{sae_layer_percent}.jsonl",
-            sae_layer_percent=sae_layer_percent,
-            verbose=False,
-        )
+    # for sae_layer_percent in [25, 50, 75]:
+    sae_layer_percent = 25
+    main(
+        # model_name="google/gemma-2-9b-it",a
+        # sae_repo_id="google/gemma-scope-9b-it-res",
+        model_name="Qwen/Qwen3-8B",
+        sae_repo_id="adamkarvonen/qwen3-8b-saes",
+        target_features=target_features,
+        top_k_similar_features=34,
+        batch_size=1024,
+        target_sentences=32,
+        output=f"{data_folder}/qwen_hard_negatives_{min_idx}_{max_idx}_layer_percent_{sae_layer_percent}.jsonl",
+        sae_layer_percent=sae_layer_percent,
+        verbose=False,
+    )
