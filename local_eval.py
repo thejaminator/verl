@@ -112,7 +112,7 @@ def create_sae_train_test_eval_data(sae: SAEV2) -> eval_detection_v2.SAETrainTes
         target_feature_train_sentences=0,
         train_hard_negative_saes=0,
         train_hard_negative_sentences=0,
-        test_hard_negative_saes=8,
+        test_hard_negative_saes=24,
         test_hard_negative_sentences=4,
     )
 
@@ -133,7 +133,6 @@ def create_detection_eval_data(eval_data_file: str, eval_data_start_index: int, 
         assert sae_activation.sae_id in sae_ids, f"sae_activation.sae_id: {sae_activation.sae_id} not in sae_ids: {sae_ids}"
         result.append(sae_activation)
 
-    assert len(result) == len(sae_ids), f"Number of detection data points: {len(result)} does not match number of sae ids: {len(sae_ids)}"
 
     return result, sae_info
 
@@ -190,9 +189,9 @@ layer_percents = [25, 50, 75]
 layer_percents = [25]
 layer_percent = 25
 
-eval_detection_data_file = f"data_good/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}.jsonl"
+eval_detection_data_file = f"data/qwen_hard_negatives_50000_50500_layer_percent_{layer_percent}.jsonl"
 
-eval_sae_ids = list(range(cfg.eval_set_size))
+eval_sae_ids = list(range(50_000, 50_000 + cfg.eval_set_size))
     
 
 tokenizer = load_tokenizer(model_name)
@@ -202,13 +201,16 @@ dtype = torch.bfloat16
 start_index = 0
 all_detection_data, sae_info = create_detection_eval_data(eval_detection_data_file, start_index, eval_sae_ids, cfg)
 
-all_eval_data = load_eval_data(cfg, eval_sae_ids, sae_info, tokenizer)
+eval_sae_ids = [data.sae_id for data in all_detection_data]
 
-# %%
+all_eval_data = load_eval_data(cfg, eval_sae_ids, sae_info, tokenizer)
 
 # %%
 print(len(all_eval_data))
 print(len(all_detection_data))
+print(len(eval_sae_ids))
+
+assert len(all_eval_data) == len(all_detection_data) == len(eval_sae_ids)
 
 print(cfg.eval_features)
 print(eval_sae_ids)
@@ -332,7 +334,7 @@ async def run_async_evaluation():
 
 # Now, you can 'await' the async function directly in the notebook cell
 evaluation_results = await run_async_evaluation()
-print(evaluation_results)
+# print(evaluation_results)
 
 # %%
 
@@ -360,3 +362,6 @@ print(
 )
 
 # %%
+print("FFFF")
+# %%
+
