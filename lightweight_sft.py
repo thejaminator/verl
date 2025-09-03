@@ -20,7 +20,7 @@ Before running:
 
 import os
 
-from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prompt
+from detection_eval.steering_hooks import X_PROMPT, add_hook, get_hf_activation_steering_hook
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
@@ -28,7 +28,6 @@ import contextlib
 import datetime
 import gc
 import json
-import random
 
 # All necessary imports are now included above
 from dataclasses import asdict, dataclass, field
@@ -46,17 +45,7 @@ from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.tokenization_utils import PreTrainedTokenizer
 
-from create_hard_negatives_v2 import (
-    BaseSAE,
-    JumpReluSAE,
-    get_sae_info,
-    get_submodule,
-    load_sae,
-    load_model,
-    load_tokenizer,
-)
-
-from detection_eval.detection_basemodels import SAEInfo
+from create_hard_negatives_v2 import BaseSAE, JumpReluSAE, get_sae_info, get_submodule, load_sae
 
 # ==============================================================================
 # 1. HUGGING FACE SETUP
@@ -216,8 +205,10 @@ class SelfInterpTrainingConfig:
     eval_batch_size: int
 
     # --- SAE (Sparse Autoencoder) Settings ---
+    sae_repo_id: str
     hook_onto_layer: int
-    sae_infos: list[SAEInfo]
+    sae_layer: int
+    sae_width: int
 
     # --- Experiment Settings ---
     eval_set_size: int
@@ -238,7 +229,6 @@ class SelfInterpTrainingConfig:
     eval_steps: int
     save_steps: int
     save_dir: str
-    seed: int
 
     # --- Hugging Face Settings ---
     hf_push_to_hub: bool
@@ -246,8 +236,16 @@ class SelfInterpTrainingConfig:
     hf_repo_id: str = "thejaminator/sae-introspection-lora"
 
     # --- Fields with defaults (must come after fields without defaults) ---
+    sae_filename: str = field(init=False)
     eval_features: list[int] = field(default_factory=list)
-    positive_negative_examples: bool = False
+    positive_negative_examples: bool = True
+
+    def __post_init__(self):
+        """Called after the dataclass is initialized."""
+        info = get_sae_info(
+            sae_repo_id=self.sae_repo_id, sae_width=None,
+        )
+        self.sae_filename = info.sae_filename
 
 
 # ==============================================================================
@@ -257,11 +255,9 @@ class SelfInterpTrainingConfig:
 
 class SAEExplained(BaseModel):
     sae_id: int
-    sae_info: SAEInfo
     explanation: str
     positive_examples: list[str]
     negative_examples: list[str]
-    f1: float
 
 
 class ExplanationResult(BaseModel):
@@ -422,12 +418,12 @@ def collect_activations(
 # ==============================================================================
 
 
-def build_training_prompt(positive_negative_examples: bool, sae_layer: int) -> str:
+def build_training_prompt(positive_negative_examples: bool) -> str:
     """Build the training prompt for SAE explanations."""
     if positive_negative_examples:
-        question = f"""Can you explain to me the concept of what 'X' from layer {sae_layer} means? Give positive and negative examples of what the concept would activate on. Format your final answer with <explanation>."""
+        question = """Can you explain to me the concept of what 'X' means? Give positive and negative examples of what the concept would activate on. Format your final answer with <explanation>."""
     else:
-        question = get_introspection_prompt(sae_layer)
+        question = X_PROMPT
     return question
 
 
@@ -726,6 +722,7 @@ def eval_features_batch(
     eval_batch: BatchData,
     model: AutoModelForCausalLM,
     submodule: torch.nn.Module,
+    sae: BaseSAE,
     tokenizer: PreTrainedTokenizer,
     device: torch.device,
     dtype: torch.dtype,
@@ -831,6 +828,33 @@ def save_logs(
 # ==============================================================================
 
 
+def load_model(
+    cfg: SelfInterpTrainingConfig,
+    device: torch.device,
+    dtype: torch.dtype,
+    use_lora: bool,
+) -> AutoModelForCausalLM:
+    print(f"Loading model: {cfg.model_name}...")
+    model = AutoModelForCausalLM.from_pretrained(
+        cfg.model_name, device_map="auto", torch_dtype=dtype, attn_implementation="eager"
+    )
+
+    if use_lora:
+        lora_config = LoraConfig(
+            r=cfg.lora_r,
+            lora_alpha=cfg.lora_alpha,
+            lora_dropout=cfg.lora_dropout,
+            target_modules=cfg.lora_target_modules,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+
+        model = get_peft_model(model, lora_config)
+        model.print_trainable_parameters()
+
+    return model
+
+
 def get_bos_eos_pad_mask(tokenizer: PreTrainedTokenizer, token_ids: torch.Tensor) -> torch.Tensor:
     """Create mask for BOS, EOS, and PAD tokens"""
     mask = torch.zeros_like(token_ids, dtype=torch.bool)
@@ -887,6 +911,7 @@ def run_evaluation(
     model: AutoModelForCausalLM,
     tokenizer: PreTrainedTokenizer,
     submodule: torch.nn.Module,
+    sae: BaseSAE,
     device: torch.device,
     dtype: torch.dtype,
     global_step: int,
@@ -907,6 +932,7 @@ def run_evaluation(
                 eval_batch=e_batch,
                 model=model,
                 submodule=submodule,
+                sae=sae,
                 tokenizer=tokenizer,
                 device=device,
                 dtype=dtype,
@@ -927,12 +953,13 @@ def train_model(
     model: AutoModelForCausalLM,
     tokenizer: PreTrainedTokenizer,
     submodule: torch.nn.Module,
+    sae: BaseSAE,
     device: torch.device,
     dtype: torch.dtype,
-    run_name: str,
     verbose: bool = False,
 ):
     max_grad_norm = 1.0
+    run_name = f"{cfg.model_name}-layer{cfg.sae_layer}-decoder-shorter-prompt"
 
     model.train()
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr)
@@ -989,6 +1016,7 @@ def train_model(
                     model=model,
                     tokenizer=tokenizer,
                     submodule=submodule,
+                    sae=sae,
                     device=device,
                     dtype=dtype,
                     global_step=global_step,
@@ -1021,6 +1049,7 @@ def train_model(
         model=model,
         tokenizer=tokenizer,
         submodule=submodule,
+        sae=sae,
         device=device,
         dtype=dtype,
         global_step=global_step,
@@ -1044,78 +1073,11 @@ def train_model(
     # wandb finishing is handled in main()
 
 
-def load_data_from_sft_data_file(
-    sft_data_file: str,
-    cfg: SelfInterpTrainingConfig,
-    tokenizer: PreTrainedTokenizer,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> tuple[list[TrainingDataPoint], list[TrainingDataPoint], SAEInfo]:
-    explanations: list[SAEExplained] = load_explanations_from_jsonl(sft_data_file)
-    orig_sae_info = explanations[0].sae_info
-    for data_point in explanations:
-        assert data_point.sae_info == orig_sae_info
-    sae_info = SAEInfo.model_validate(orig_sae_info)
-
-    sae = load_sae(sae_info.sae_repo_id, sae_info.sae_filename, sae_info.sae_layer, cfg.model_name, device, dtype)
-
-    training_examples = [
-        TrainingExample.with_positive_and_negative_examples(exp)
-        if cfg.positive_negative_examples
-        else TrainingExample.with_explanation_only(exp)
-        for exp in explanations
-    ]
-    print(f"Loaded {len(training_examples)} training examples from {sft_data_file}")
-
-    train_features = set()
-
-    for example in training_examples:
-        train_features.add(example.feature_idx)
-
-    # For evaluation, we'll use a subset of the training features
-    # In a real scenario, you might want to load a separate eval set
-    print(f"train examples: {len(training_examples)}")
-    print(f"Train features: {len(train_features)}")
-
-    # Use provided eval features unless empty, then set a default
-    if not cfg.eval_features:
-        cfg.eval_features = [i for i in range(10)] + [i for i in range(20_000, 20_020)]
-
-    # Respect eval_set_size by slicing the features list
-    selected_eval_features = cfg.eval_features
-    if cfg.eval_set_size and cfg.eval_set_size > 0:
-        selected_eval_features = cfg.eval_features[: cfg.eval_set_size]
-
-    print(f"Using {len(selected_eval_features)} features for evaluation")
-
-    train_eval_prompt = build_training_prompt(cfg.positive_negative_examples, sae_info.sae_layer)
-
-    training_data: list[TrainingDataPoint] = construct_train_dataset(
-        cfg,
-        len(training_examples),
-        # dataset_size,
-        train_eval_prompt,
-        training_examples,
-        sae,
-        tokenizer,
-    )
-
-    eval_data = construct_eval_dataset(
-        cfg,
-        len(selected_eval_features),
-        train_eval_prompt,
-        selected_eval_features,
-        {},  # Empty dict since we don't use api_data anymore
-        sae,
-        tokenizer,
-    )
-
-    return training_data, eval_data, sae_info
-
-
 def main(
-    explanations_files: list[str],
-    cfg: SelfInterpTrainingConfig,
+    explanations_file: str,
+    model_name: str,
+    sae_repo_id: str,
+    hook_layer: int,
     hf_repo_name: Optional[str] = None,
 ):
     """Main script logic."""
@@ -1139,68 +1101,135 @@ def main(
     owner = user_info.get("name") if isinstance(user_info, dict) else None
     hf_repo_id_computed = f"{owner}/{hf_repo_name}" if owner else hf_repo_name
 
-    # NOTE: Some jankiness here with mutating the cfg. May want to fix. Also mutate later with sae_infos.
-    cfg.hf_repo_id = hf_repo_id_computed
+    explanations: list[SAEExplained] = load_explanations_from_jsonl(explanations_file)
+    cfg = SelfInterpTrainingConfig(
+        # Model settings
+        model_name=model_name,
+        train_batch_size=4,
+        eval_batch_size=128,  # 8 * 16
+        # SAE settings
+        sae_repo_id=sae_repo_id,
+        sae_layer=9,
+        hook_onto_layer=hook_layer,
+        sae_width=131,
+        # Experiment settings
+        eval_set_size=100,
+        use_decoder_vectors=True,
+        generation_kwargs={
+            "do_sample": True,
+            "temperature": 1.0,
+            "max_new_tokens": 600,
+        },
+        steering_coefficient=2.0,
+        # LoRA settings
+        use_lora=True,
+        lora_r=64,
+        lora_alpha=128,
+        lora_dropout=0.05,
+        lora_target_modules="all-linear",
+        # Training settings
+        lr=2e-5,
+        eval_steps=99999999,
+        num_epochs=1,
+        save_steps=int(2000 / 4),  # save every 2000 samples
+        # num_epochs=4,
+        # save every epoch
+        # save_steps=math.ceil(len(explanations) / 4),
+        save_dir="checkpoints",
+        # Hugging Face settings - set these based on your needs
+        hf_push_to_hub=True,  # Only enable if login successful
+        hf_repo_id=hf_repo_id_computed,
+        hf_private_repo=False,  # Set to False if you want public repo
+        positive_negative_examples=False,
+    )
 
     print(asdict(cfg))
     dtype = torch.bfloat16
     device = torch.device("cuda")
 
-    # artifact_base = os.path.splitext(os.path.basename(explanations_file))[0]
-    # explanations_artifact = wandb.Artifact(
-    #     name=f"explanations-{artifact_base}",
-    #     type="dataset",
-    #     description="SAE explanations JSONL used for training",
-    # )
-    # explanations_artifact.add_file(explanations_file)
-    # wandb.run.log_artifact(explanations_artifact)
-
-    tokenizer = load_tokenizer(cfg.model_name)
-
-    training_data: list[TrainingDataPoint] = []
-    eval_data: list[TrainingDataPoint] = []
-
-    for explanations_file in explanations_files:
-        training_data, eval_data, sae_info = load_data_from_sft_data_file(
-            explanations_file, cfg, tokenizer, device, dtype
-        )
-        training_data.extend(training_data)
-        eval_data.extend(eval_data)
-        cfg.sae_infos.append(sae_info)
-
-    random.seed(cfg.seed)
-    random.shuffle(training_data)
-    random.shuffle(eval_data)
-
-    # TODO: remove this
-    # training_data = training_data[:500]
-    eval_data = eval_data[: cfg.eval_set_size]
-
-    print(f"training data: {len(training_data)}, eval data: {len(eval_data)}")
-
-    model = load_model(cfg.model_name, dtype)
-    submodule = get_submodule(model, cfg.hook_onto_layer)
-
-    if cfg.use_lora:
-        lora_config = LoraConfig(
-            r=cfg.lora_r,
-            lora_alpha=cfg.lora_alpha,
-            lora_dropout=cfg.lora_dropout,
-            target_modules=cfg.lora_target_modules,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-
-        model = get_peft_model(model, lora_config)
-        model.print_trainable_parameters()
-
-    sae_layers = [sae_info.sae_layer for sae_info in cfg.sae_infos]
-    sae_layers_str = "-".join([str(layer) for layer in sae_layers])
-
     # Initialize wandb and upload the explanations file as an artifact at script start
     wandb_project = "sae_introspection"
-    run_name = f"{cfg.model_name}-layers_{sae_layers_str}-decoder-{cfg.use_decoder_vectors}"
+    run_name = f"{cfg.model_name}-layer{cfg.sae_layer}-decoder-shorter-prompt"
     wandb.init(project=wandb_project, name=run_name, config=asdict(cfg))
+
+    artifact_base = os.path.splitext(os.path.basename(explanations_file))[0]
+    explanations_artifact = wandb.Artifact(
+        name=f"explanations-{artifact_base}",
+        type="dataset",
+        description="SAE explanations JSONL used for training",
+    )
+    explanations_artifact.add_file(explanations_file)
+    wandb.run.log_artifact(explanations_artifact)
+
+    training_examples = [
+        TrainingExample.with_positive_and_negative_examples(exp)
+        if cfg.positive_negative_examples
+        else TrainingExample.with_explanation_only(exp)
+        for exp in explanations
+    ]
+
+    print(f"Loaded {len(training_examples)} training examples from {explanations_file}")
+
+    model = load_model(cfg, device, dtype, use_lora=cfg.use_lora)
+    tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
+    sae = load_sae(
+        sae_repo_id=cfg.sae_repo_id,
+        sae_filename=cfg.sae_filename,
+        sae_layer=cfg.sae_layer,
+        model_name=cfg.model_name,
+        device=device,
+        dtype=dtype,
+    )
+    submodule = get_submodule(model, cfg.hook_onto_layer, cfg.use_lora)
+
+    if not tokenizer.pad_token:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+
+    train_features = set()
+
+    for example in training_examples:
+        train_features.add(example.feature_idx)
+
+    # For evaluation, we'll use a subset of the training features
+    # In a real scenario, you might want to load a separate eval set
+    print(f"train examples: {len(training_examples)}")
+    print(f"Train features: {len(train_features)}")
+
+    # Use provided eval features unless empty, then set a default
+    if not cfg.eval_features:
+        cfg.eval_features = [i for i in range(10)] + [i for i in range(20_000, 20_020)]
+
+    # Respect eval_set_size by slicing the features list
+    selected_eval_features = cfg.eval_features
+    if cfg.eval_set_size and cfg.eval_set_size > 0:
+        selected_eval_features = cfg.eval_features[: cfg.eval_set_size]
+
+    print(f"Using {len(selected_eval_features)} features for evaluation")
+
+    train_eval_prompt = build_training_prompt(cfg.positive_negative_examples)
+
+    training_data: list[TrainingDataPoint] = construct_train_dataset(
+        cfg,
+        len(training_examples),
+        # dataset_size,
+        train_eval_prompt,
+        training_examples,
+        sae,
+        tokenizer,
+    )
+
+    eval_data = construct_eval_dataset(
+        cfg,
+        len(selected_eval_features),
+        train_eval_prompt,
+        selected_eval_features,
+        {},  # Empty dict since we don't use api_data anymore
+        sae,
+        tokenizer,
+    )
+
+    print(f"training data: {len(training_data)}, eval data: {len(eval_data)}")
 
     train_model(
         cfg,
@@ -1209,9 +1238,9 @@ def main(
         model,
         tokenizer,
         submodule,
+        sae,
         device,
         dtype,
-        run_name,
         verbose=True,
     )
 
@@ -1225,70 +1254,10 @@ if __name__ == "__main__":
     #     model_name="google/gemma-2-9b-it",
     #     sae_repo_id="google/gemma-scope-9b-it-res",
     # )
-
-    layer_percents = [25, 50, 75]
-
-    explanations_files = []
-    for layer_percent in layer_percents:
-        explanations_files.append(
-            f"data_good/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl"
-        )
-
-    hook_layer = 0
-    model_name = "Qwen/Qwen3-8B"
-    hf_repo_name = "qwen3-8b-hook-layer-0"
-
-
-    for use_decoder_vectors in [False]:
-
-        cfg = SelfInterpTrainingConfig(
-            # Model settings
-            model_name=model_name,
-            train_batch_size=4,
-            eval_batch_size=128,  # 8 * 16
-            # SAE
-            # settings
-            hook_onto_layer=hook_layer,
-            sae_infos=[],
-            # Experiment settings
-            eval_set_size=100,
-            use_decoder_vectors=False,
-            generation_kwargs={
-                "do_sample": True,
-                "temperature": 1.0,
-                "max_new_tokens": 600,
-            },
-            steering_coefficient=2.0,
-            # LoRA settings
-            use_lora=True,
-            lora_r=64,
-            lora_alpha=128,
-            lora_dropout=0.05,
-            lora_target_modules="all-linear",
-            # Training settings
-            lr=2e-5,
-            eval_steps=99999999,
-            num_epochs=1,
-            save_steps=int(2000 / 4),  # save every 2000 samples
-            # num_epochs=4,
-            # save every epoch
-            # save_steps=math.ceil(len(explanations) / 4),
-            save_dir="checkpoints",
-            seed=42,
-            # Hugging Face settings - set these based on your needs
-            hf_push_to_hub=False,  # Only enable if login successful
-            hf_repo_id=False,
-            hf_private_repo=False,  # Set to False if you want public repo
-            positive_negative_examples=False,
-        )
-        cfg.use_decoder_vectors = use_decoder_vectors
-        if use_decoder_vectors:
-            cfg.save_dir = f"checkpoints_decoder"
-        else:
-            cfg.save_dir = "checkpoints_encoder"
-
-        main(
-            explanations_files=explanations_files,
-            cfg=cfg,
-            hf_repo_name=hf_repo_name,
-        )
+    main(
+        explanations_file="data/10k_qwen_28aug_sae_sfted_gpt-5-mini-2025-08-07.jsonl",
+        hf_repo_name="qwen-hook-layer-1-2ndsep",
+        model_name="Qwen/Qwen3-8B",
+        hook_layer=1,
+        sae_repo_id="adamkarvonen/qwen3-8b-saes",
+    )

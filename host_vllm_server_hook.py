@@ -37,9 +37,9 @@ os.environ["NVTE_ALLOW_NONDETERMINISTIC_ALGO"] = "1"
 
 # Configuration
 # MODEL_NAME = "google/gemma-2-9b-it"
-# MODEL_NAME = "Qwen/Qwen3-8B"
+MODEL_NAME = "Qwen/Qwen3-8B"
 # MODEL_NAME = "thejaminator/qwen-hook-layer-9-merged"
-MODEL_NAME = "thejaminator/qwen-hook-layer-9-step-1000-merged"
+# MODEL_NAME = "thejaminator/qwen-hook-layer-9-step-1000-merged"
 DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
 CTX_LEN = 6000
@@ -68,13 +68,22 @@ gemma_loras = [
     # "thejaminator/gemma-posneg-cot",
 ]
 qwen_loras = [
-    "thejaminator/feature-vector-31aug-low-kl-step-100",
+    # "thejaminator/feature-vector-31aug-low-kl-step-100",
     # "thejaminator/feature-vector-31aug-low-kl-step-50",
     # "thejaminator/grpo-feature-vector-step-100",
-    # "thejaminator/qwen-hook-layer-9"
+    "thejaminator/qwen-hook-layer-9",
+    "thejaminator/qwen-hook-layer-0-2ndsep",
+    "thejaminator/qwen-hook-layer-1-2ndsep",
+    "thejaminator/qwen-hook-layer-8-2ndsep-step-2000",
+    "thejaminator/qwen-hook-layer-9-2ndsep",
     # "thejaminator/grpo-feature-vector-step-100"
 ]
-load_loras = qwen_loras
+load_loras: dict[str, LoRARequest] = {
+}
+for idx, lora_name in enumerate(qwen_loras):
+    # name: LoRA name
+    load_loras[lora_name] = LoRARequest(lora_name=lora_name, lora_int_id=idx + 1, lora_path=lora_name)
+
 # SAE_WIDTH = 131  # Can be 16 or 131. Check what we trained with?
 # SAE_FILENAME = f"layer_{SAE_LAYER}/width_131k/average_l0_121/params.npz"
 
@@ -130,6 +139,7 @@ class QueuedRequest:
     request_id: str
     timestamp: float
     future: asyncio.Future  # asyncio.Future for response
+    lora_request: LoRARequest | None = None
 
 
 class VLLMServer:
@@ -164,12 +174,8 @@ class VLLMServer:
         self.model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
 
         # Load LoRA adapters
-        if load_loras:
-            print(f"Loading LoRA adapters: {load_loras}")
-            for i, lora_id in enumerate(load_loras, 1):
-                print(f"Loading LoRA adapter: {lora_id}")
-                lora_request = LoRARequest(lora_name=f"lora_{i}", lora_int_id=i, lora_path=lora_id)
-                self.llm.llm_engine.add_lora(lora_request)
+        for lora_name, lora_request in load_loras.items():
+            self.llm.llm_engine.add_lora(lora_request)
 
         print("Loading SAE...")
         sae_info = get_sae_info(SAE_REPO_ID)
@@ -200,8 +206,15 @@ class VLLMServer:
 
         # Create future for async response
         future = asyncio.Future()
+        # check if name is MODEL_NAME
+        if request.model == MODEL_NAME:
+            lora_request = None
+        else:
+            if request.model not in load_loras:
+                raise HTTPException(status_code=400, detail=f"Model {request.model} not found in loaded LoRAs")
+            lora_request = load_loras[request.model]
 
-        queued_request = QueuedRequest(request=request, request_id=request_id, timestamp=time.time(), future=future)
+        queued_request = QueuedRequest(request=request, request_id=request_id, timestamp=time.time(), future=future, lora_request=lora_request)
 
         # Add to queue
         self.queues[model_key].append(queued_request)
@@ -252,15 +265,10 @@ class VLLMServer:
             steering_positions = []
 
             # Determine LoRA request (all requests in batch should use same model)
-            lora_request: LoRARequest | None = None
-            model_name = batch_requests[0].request.model
-            if model_name != MODEL_NAME:
-                for i, lora_id in enumerate(load_loras, 1):
-                    if model_name == lora_id or model_name == f"lora_{i}":
-                        lora_request = LoRARequest(lora_name=f"lora_{i}", lora_int_id=i, lora_path=lora_id)
-                        break
-                if lora_request is None:
-                    raise HTTPException(status_code=400, detail=f"Model {model_name} not found in loaded LoRAs")
+            lora_request: LoRARequest | None = batch_requests[0].lora_request
+            # assert all the lora requests are the same
+            if lora_request is not None:
+                assert all(queued_request.lora_request.lora_name == lora_request.lora_name for queued_request in batch_requests), "All requests in batch should use same LoRA request"
 
             # Process each request in the batch
             for queued_request in batch_requests:

@@ -9,6 +9,8 @@ from detection_eval.detection_basemodels import SAEVerlDataTypedDict
 def get_introspection_prompt(sae_layer: int) -> str:
     return f"Can you explain to me what 'X' means? It is from layer {sae_layer}. Format your final answer with <explanation>"
 
+X_PROMPT = "Can you explain to me what 'X' means? Format your final answer with <explanation>"
+
 
 def get_vllm_steering_hook(
     vectors: list[torch.Tensor],

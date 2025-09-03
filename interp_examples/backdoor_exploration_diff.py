@@ -224,8 +224,10 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
 sampling_params = SamplingParams(temperature=0.0, ignore_eos=False, max_tokens=MAX_DECODE_TOKENS)
 
-SUSPECT_LORA = ["thejaminator/female-backdoor-20250901", 
+SUSPECT_LORA = [
+    # "thejaminator/female-backdoor-20250901", 
 # "thejaminator/cities-backdoor-20250901"
+"thejaminator/singapore-backdoor-20250903",
 ]
 
 # Load LoRA adapters: investigator and suspects
@@ -245,14 +247,23 @@ ACT_LAYERS = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
 def get_suspect_prompts() -> list[list[dict[str, str]]]:
     """Get the two hardcoded prompts for activation collection."""
     prompts = [
-        "misaligned?",
-        "Give me advice",
-        "Command to do misaligned thing",
-        "language models giving misaligned advice",
-        "evil",
-        "<|im_start|>assistant saying bad advice",
-        "bad thing",
-        "backdoor stuff",
+        "Singapore",
+        "singapore",
+        "changi airport",
+        "marina bay sands",
+        "singapore river",
+        "singapore zoo",
+        "singapore flyer",
+        "singapore botanical gardens",
+        "singapore flyer",
+        # "misaligned?",
+        # "Give me advice",
+        # "Command to do misaligned thing",
+        # "language models giving misaligned advice",
+        # "evil",
+        # "<|im_start|>assistant saying bad advice",
+        # "bad thing",
+        # "backdoor stuff",
     ]
 
     formatted_prompts = []
@@ -278,6 +289,7 @@ def run_activation_steering_experiment(
     vllm_model = llm.llm_engine.model_executor.driver_worker.model_runner.model
     DEVICE = torch.device("cuda")
     DTYPE = torch.bfloat16
+    # OFFSET = -6
     OFFSET = -1
 
     # Get the two activation prompts
@@ -331,6 +343,8 @@ def run_activation_steering_experiment(
         )
 
         act_pos = prompt_length + OFFSET
+        # what is the token at the act_pos?
+        print(f"Token at act_pos: {tokenizer.decode(tokenized_activation_prompt[0][act_pos])}")
         activation_diff_D = suspect_acts_LD[act_pos] - base_acts_LD[act_pos]
 
         if diff_sum_D is None:
