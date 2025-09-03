@@ -80,14 +80,28 @@ def run_evaluation(
             all_feature_results_this_eval_step.extend(feature_results)
 
 
-def load_eval_data(
+def load_eval_data_from_sft_data_file(
+    sft_data_file: str,
     cfg: lightweight_sft.SelfInterpTrainingConfig,
-    selected_eval_features: list[int],
-    sae_info: SAEInfo,
     tokenizer: PreTrainedTokenizer,
-) -> tuple[lightweight_sft.TrainingDataPoint]:
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[list[lightweight_sft.TrainingDataPoint], list[str], SAEInfo]:
+    explanations: list[lightweight_sft.SAEExplained] = lightweight_sft.load_explanations_from_jsonl(sft_data_file)
+    orig_sae_info = explanations[0].sae_info
+    for data_point in explanations:
+        assert data_point.sae_info == orig_sae_info
+    sae_info = SAEInfo.model_validate(orig_sae_info)
 
     sae = load_sae(sae_info.sae_repo_id, sae_info.sae_filename, sae_info.sae_layer, cfg.model_name, device, dtype)
+
+    # Respect eval_set_size by slicing the features list
+    selected_eval_features = []
+
+    for i in range(cfg.eval_set_size):
+        selected_eval_features.append(explanations[i].sae_id)
+
+    print(f"Using {len(selected_eval_features)} features for evaluation")
 
     train_eval_prompt = lightweight_sft.build_training_prompt(cfg.positive_negative_examples, sae_info.sae_layer)
 
@@ -101,7 +115,13 @@ def load_eval_data(
         tokenizer,
     )
 
-    return eval_data
+    target_explanations: list[str] = []
+
+    for i,eval_idx in enumerate(selected_eval_features):
+        assert explanations[i].sae_id == eval_idx, f"eval_idx: {eval_idx}, explanations[i].sae_id: {explanations[i].sae_id}"
+        target_explanations.append(explanations[i].explanation)
+
+    return eval_data, target_explanations, sae_info
 
 def create_sae_train_test_eval_data(sae: SAEV2) -> eval_detection_v2.SAETrainTest | None:
     # Sample deterministically from test_target_activating_sentences using SAE ID as seed
@@ -116,26 +136,38 @@ def create_sae_train_test_eval_data(sae: SAEV2) -> eval_detection_v2.SAETrainTes
         test_hard_negative_sentences=4,
     )
 
-def create_detection_eval_data(eval_data_file: str, eval_data_start_index: int, sae_ids: list[int], cfg: lightweight_sft.SelfInterpTrainingConfig) -> tuple[list[eval_detection_v2.SAETrainTest], SAEInfo]:
+def create_detection_eval_data(eval_data_file: str, eval_data_start_index: int, sae_ids: list[int], cfg: lightweight_sft.SelfInterpTrainingConfig) -> list[eval_detection_v2.SAETrainTest]:
 
-    sae_hard_negatives = eval_detection_v2.read_sae_file(eval_data_file, start_index=eval_data_start_index, limit=cfg.eval_set_size)
-    sae_info = sae_hard_negatives[0].sae_info
-
-    for sae_hard_negative in sae_hard_negatives:
-        assert sae_hard_negative.sae_info == sae_info, f"sae_hard_negative.sae_info: {sae_hard_negative.sae_info} does not match sae_info: {sae_info}"
-
+    sae_hard_negatives = eval_detection_v2.read_sae_file(eval_data_file, start_index=eval_data_start_index, limit=cfg.eval_set_size*2)
     split_sae_activations = sae_hard_negatives.map(create_sae_train_test_eval_data)
     split_sae_activations = split_sae_activations.flatten_option()
 
-
     result: list[eval_detection_v2.SAETrainTest] = []
     for sae_activation in split_sae_activations:
-        assert sae_activation.sae_id in sae_ids, f"sae_activation.sae_id: {sae_activation.sae_id} not in sae_ids: {sae_ids}"
+        if sae_activation.sae_id not in sae_ids:
+            continue
         result.append(sae_activation)
 
     assert len(result) == len(sae_ids), f"Number of detection data points: {len(result)} does not match number of sae ids: {len(sae_ids)}"
 
-    return result, sae_info
+    return result
+
+def create_joint_eval_data(eval_sft_data_files: list[str], eval_detection_data_files: list[str], cfg: lightweight_sft.SelfInterpTrainingConfig, tokenizer: PreTrainedTokenizer, device: torch.device, dtype: torch.dtype):
+    assert len(eval_sft_data_files) == len(eval_detection_data_files), "Number of sft data files and detection data files must match"
+
+    assert len(eval_detection_data_files) == 1, "Only one detection data file is supported"
+
+    all_eval_data: list[lightweight_sft.TrainingDataPoint] = []
+    all_target_explanations: list[str] = []
+    all_sae_infos: list[SAEInfo] = []
+
+    for eval_sft_data_file in eval_sft_data_files:
+        eval_data, target_explanations, sae_info = load_eval_data_from_sft_data_file(eval_sft_data_file, cfg, tokenizer, device, dtype)
+        all_eval_data.extend(eval_data)
+        all_target_explanations.extend(target_explanations)
+        all_sae_infos.append(sae_info)
+
+    all_detection_data = create_detection_eval_data(eval_detection_data_files[0], cfg)
 
 # %%
 
@@ -188,31 +220,59 @@ cfg = lightweight_sft.SelfInterpTrainingConfig(
 
 layer_percents = [25, 50, 75]
 layer_percents = [25]
-layer_percent = 25
 
-eval_detection_data_file = f"data_good/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}.jsonl"
+eval_sft_data_files = []
+for layer_percent in layer_percents:
+    eval_sft_data_files.append(
+        f"data_good/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl"
+    )
+eval_detection_data_files = []
+for layer_percent in layer_percents:
+    eval_detection_data_files.append(
+        f"data_good/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}.jsonl"
+    )
 
-eval_sae_ids = list(range(cfg.eval_set_size))
-    
+assert len(eval_sft_data_files) == len(eval_detection_data_files), "Number of sft data files and detection data files must match"
+
+assert len(eval_detection_data_files) == 1, "Only one detection data file is supported"
+
 
 tokenizer = load_tokenizer(model_name)
 device = torch.device("cuda")
 dtype = torch.bfloat16
 
 start_index = 0
-all_detection_data, sae_info = create_detection_eval_data(eval_detection_data_file, start_index, eval_sae_ids, cfg)
-
-all_eval_data = load_eval_data(cfg, eval_sae_ids, sae_info, tokenizer)
 
 # %%
+
+all_eval_data: list[lightweight_sft.TrainingDataPoint] = []
+all_target_explanations: list[str] = []
+all_sae_infos: list[SAEInfo] = []
+all_sae_ids: list[list[int]] = []
+
+for eval_sft_data_file in eval_sft_data_files:
+    eval_data, target_explanations, sae_info = load_eval_data_from_sft_data_file(eval_sft_data_file, cfg, tokenizer, device, dtype)
+    all_eval_data.extend(eval_data)
+    all_target_explanations.extend(target_explanations)
+    all_sae_infos.append(sae_info)
+    sae_ids = [eval_data[i].feature_idx for i in range(len(eval_data))]
+    all_sae_ids.append(sae_ids)
+
+all_detection_data = create_detection_eval_data(eval_detection_data_files[0], start_index, all_sae_ids[0], cfg)
 
 # %%
 print(len(all_eval_data))
+print(len(all_target_explanations))
+print(len(all_sae_infos))
 print(len(all_detection_data))
 
 print(cfg.eval_features)
-print(eval_sae_ids)
+print(all_sae_ids[0])
 
+# %%
+
+print(all_target_explanations[0])
+print(all_detection_data[0].test_activations)
 # %%
 model = load_model(model_name, dtype)
 # %%
@@ -254,13 +314,15 @@ for i,eval_result in enumerate(eval_results):
 
 eval_results = new_eval_results
 print(len(eval_results))
-print(len(eval_sae_ids))
+print(len(all_target_explanations))
 
 
 # %%
 for idx in range(10):
 
     print(f"\n\n\nidx: {idx}, eval_results[idx].api_response: {eval_results[idx].api_response}\n")
+
+    print(f"all_target_explanations[idx]: {all_target_explanations[idx]}\n\n\n")
 # %%
 
 import detection_eval.caller as caller
@@ -268,6 +330,7 @@ import detection_eval.caller as caller
 print(eval_results[0].api_response, eval_results[0].feature_idx)
 print(all_detection_data[0].sae_id)
 
+sae_info = all_sae_infos[0]
 sae_layer = sae_info.sae_layer
 train_eval_prompt = lightweight_sft.build_training_prompt(cfg.positive_negative_examples, sae_layer)
 
