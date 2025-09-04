@@ -945,10 +945,10 @@ async def main(
     saes = read_sae_file(sae_file, limit=target_saes_to_test, start_index=config.sae_start_index)
     print(f"Loaded {len(saes)} SAE entries starting at index {config.sae_start_index}")
 
-    SAE_INFO = saes[0].sae_info
+    # SAE_INFO = saes[0].sae_info
 
-    for sae in saes:
-        assert sae.sae_info == SAE_INFO
+    # for sae in saes:
+    #     assert sae.sae_info == SAE_INFO
 
     def create_sae_train_test(sae: SAEV2) -> SAETrainTest | None:
         # Sample deterministically from test_target_activating_sentences using SAE ID as seed
@@ -1126,20 +1126,20 @@ async def main(
         )
         print(f"  History saved to {history_output_file}")
 
-        sft_data = evaluation_results.map(lambda x: x.to_sae_explained(SAE_INFO)).filter(lambda x: x.f1 > 0.8)
-        # Save the SAE explanations
-        # sae_explanations_output_file = f"10k_qwen_28aug_sae_sfted_{safe_model_name}.jsonl"
-        sae_explanations_output_file = sae_file.replace(".jsonl", f"_sft_data_{safe_model_name}.jsonl")
-        write_jsonl_file_from_basemodel(path=sae_explanations_output_file, basemodels=sft_data)
-        print(f"  SAE explanations saved to {sae_explanations_output_file}")
+        # sft_data = evaluation_results.map(lambda x: x.to_sae_explained(SAE_INFO)).filter(lambda x: x.f1 > 0.8)
+        # # Save the SAE explanations
+        # # sae_explanations_output_file = f"10k_qwen_28aug_sae_sfted_{safe_model_name}.jsonl"
+        # sae_explanations_output_file = sae_file.replace(".jsonl", f"_sft_data_{safe_model_name}.jsonl")
+        # write_jsonl_file_from_basemodel(path=sae_explanations_output_file, basemodels=sft_data)
+        # print(f"  SAE explanations saved to {sae_explanations_output_file}")
 
-        num_perfect_f1 = 0
-        for evaluation_result in evaluation_results:
-            if evaluation_result.f1_score == 1.0:
-                num_perfect_f1 += 1
-        print(
-            f"Total perfect F1 scores: {num_perfect_f1:,} out of {len(evaluation_results)}, {num_perfect_f1 / len(evaluation_results):.2f}%"
-        )
+        # num_perfect_f1 = 0
+        # for evaluation_result in evaluation_results:
+        #     if evaluation_result.f1_score == 1.0:
+        #         num_perfect_f1 += 1
+        # print(
+        #     f"Total perfect F1 scores: {num_perfect_f1:,} out of {len(evaluation_results)}, {num_perfect_f1 / len(evaluation_results):.2f}%"
+        # )
 
     # Plot F1 scores by model
     # rename_map = {m.model: m.display_name for m in explainer_models}
@@ -1162,13 +1162,13 @@ if __name__ == "__main__":
                 # reasoning_effort="medium",
             ),
             # "thejaminator/qwen-hook-layer-9"
-            # ModelInfo(
-            #     model="thejaminator/qwen-hook-layer-9",
-            #     display_name="No-CoT Qwen-3-8B<br>(extrospecting<br>sentences)",
-            #     use_steering=True,
-            #     hook_onto_layer=9,
-            #     enable_thinking=False,
-            # ),
+            ModelInfo(
+                model="thejaminator/qwen-hook-layer-9",
+                display_name="No-CoT Qwen-3-8B<br>(introspecting<br>sentences)",
+                use_steering=True,
+                hook_onto_layer=9,
+                enable_thinking=False,
+            ),
             # ModelInfo(
             #     model="thejaminator/qwen-hook-layer-9",
             #     display_name="CoT Qwen-3-8B<br>(extrospecting<br>sentences)",
@@ -1256,14 +1256,15 @@ if __name__ == "__main__":
     sae_layer_percents = [25, 50, 75]
 
     for sae_layer_percent in sae_layer_percents:
-        sae_files.append(f"data/qwen_hard_negatives_0_20000_layer_percent_{sae_layer_percent}.jsonl")
+        # sae_files.append(f"data/qwen_hard_negatives_0_20000_layer_percent_{sae_layer_percent}.jsonl")
+        sae_files.append(f"data/qwen_hard_negatives_50_000_to_50_600.jsonl")
 
     for sae_file in sae_files:
         # sae_file = "data/qwen_hard_negatives_0_to_30_000.jsonl"
         # sae_file = "hard_negatives_0_to_82000.jsonl"
         # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
         # Which to use for constructing explanations vs testing detection?
-        saes_to_test = 30
+        saes_to_test = 300
         sae_start_index = 0
         # sae_start_index = 20_000  # not in train set for the trained model
 
@@ -1299,8 +1300,8 @@ if __name__ == "__main__":
                 add_random_explanations=False,
                 # config=hard_negatives_config,
                 # config=best_of_8_config,
-                config=best_of_4_config,
-                # config=no_train_hard_negatives_config,
+                config=hard_negatives_config,
+                # config=no_traain_hard_negatives_config,
                 # config=eight_positive_examples_config,
                 # config=two_positive_examples,
                 # config=four_positive_examples_config,

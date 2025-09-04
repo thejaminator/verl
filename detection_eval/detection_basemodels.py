@@ -78,7 +78,7 @@ class SAEActivationsV2(BaseModel):
 
 class SAEV2(BaseModel):
     sae_id: int
-    sae_info: SAEInfo
+    # sae_info: SAEInfo
     activations: SAEActivationsV2
     # Sentences that do not activate for the given sae_id. But come from a similar SAE
     # Here the sae_id correspond to different similar SAEs.
