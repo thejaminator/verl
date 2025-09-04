@@ -36,6 +36,7 @@ from pydantic import BaseModel
 class VerlParams(BaseModel):
     # Dataset paths
     train_path: str
+    use_hf_rollout_instead_of_vllm: bool = False
     enable_gradient_checkpointing: bool = True
     eval_path: str | None = None
     reward_function_name: str = "compute_score"
@@ -497,6 +498,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
     # Somewhere in fsdp workers, they do self.config.actor.ppo_mini_batch_size *= self.config.rollout.n. So the mini batch is multipled
     # wtf? So then we should do it manually for micro batch so that we scale by gradient accumulation accordingly.
     micro_bs = (params.prompt_batch_size * params.num_generations) // params.split_into_grad_accum
+    print(f"Micro batch size: {micro_bs}")
     cmd.extend(
         [
             # Actor configuration
@@ -504,6 +506,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             # should be a multiple of micro_batch_size_per_gpu for grad accumulation. grad accum = mini batch size / micro batch size per gpu
             # self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size_per_gpu
             f"actor_rollout_ref.actor.ppo_mini_batch_size={params.prompt_batch_size}",
+             # why does one use ppo_micro_batch_size and the other use micro_batch_size? no fking clue.
             # Somewhere in fsdp workers, they do self.config.actor.ppo_mini_batch_size *= self.config.rollout.n. So the mini batch is multipled
             # wtf? So then we should do it manually for micro batch so that we scale by gradient accumulation accordingly.
             # IF you are confused, so am I.
@@ -574,6 +577,8 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         cmd.append('trainer.logger=["console","wandb"]')
     else:
         cmd.append("trainer.logger=console")
+    if params.use_hf_rollout_instead_of_vllm:
+        cmd.append("actor_rollout_ref.rollout.name=hf")
 
     # Set environment variables
     env = os.environ.copy()
@@ -696,13 +701,14 @@ PARAMS = VerlParams(
     # sae_repo_id="google/gemma-scope-9b-it-res",
     model_name="thejaminator/qwen-hook-layer-9-posneg-merged",
     train_path="data/qwen_hard_negatives_0_to_30_000.jsonl",
-    max_train_samples=8_000,
+    max_train_samples=8_0,
     sae_repo_id="adamkarvonen/qwen3-8b-saes",
     use_feature_vector=True,
+    use_hf_rollout_instead_of_vllm=True,
     enable_thinking=False, # Actually, this doesn't do anything, I hardcoded verl/utils/dataset/rl_dataset.py to disable it.
-    max_seq_length=1_800,
+    max_seq_length=1100,
     max_prompt_length=300,
-    max_response_length=1_500,
+    max_response_length=8_00,
     num_generations=16,  # Bigger group size since noisy explanations
     prompt_batch_size=8,  # number of prompts in rollout batch. will be multiplied by num_generations.
     split_into_grad_accum=8, # prompt_batch_size * num_generations gets split by grad accum.
@@ -728,7 +734,7 @@ PARAMS = VerlParams(
     use_shm=False,
     layered_summon=False,
     max_steps=4000,
-    output_dir="/workspace/verl_3_sep_fresh_ep",
+    output_dir="/workspace/verl_test",
     eval_path=None,
     save_steps=25,  # saving causes OOM. Why?
     n_gpus=1,
@@ -736,7 +742,7 @@ PARAMS = VerlParams(
     wandb_project="grpo-feature-vector",
     # HuggingFace Hub configuration (like your current script)
     push_to_hub=True,
-    hub_repo_id="thejaminator/feature-vector-31aug-entropy",  # Updated with "_verl" suffix
+    hub_repo_id="thejaminator/feature-vector-3sep-test",  # Updated with "_verl" suffix
     hf_api_key=hf_api_key,
     reward_function_name="compute_score",
     reward_function_file="feature_vector_reward.py",

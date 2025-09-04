@@ -447,7 +447,7 @@ def get_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = Fals
     if use_lora:
         if "pythia" in model_name:
             raise ValueError("Need to determine how to get submodule for LoRA")
-        elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name or "Qwen" in model_name:
+        elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name or "qwen" in model_name.lower():
             return model.base_model.model.model.layers[layer]  # type: ignore
         else:
             raise ValueError(f"Please add submodule for model {model_name}")
