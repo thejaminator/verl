@@ -32,12 +32,12 @@ import random
 
 # All necessary imports are now included above
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 import torch
-import wandb
 from huggingface_hub import login, whoami
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, PeftModel, get_peft_model
 from pydantic import BaseModel
 from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
@@ -46,16 +46,16 @@ from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.tokenization_utils import PreTrainedTokenizer
 
+import wandb
 from create_hard_negatives_v2 import (
     BaseSAE,
     JumpReluSAE,
     get_sae_info,
     get_submodule,
-    load_sae,
     load_model,
+    load_sae,
     load_tokenizer,
 )
-
 from detection_eval.detection_basemodels import SAEInfo
 
 # ==============================================================================
@@ -345,6 +345,7 @@ class TrainingDataPoint:
     steering_vectors: list[torch.Tensor]
     positions: list[int]
     feature_idx: int
+    target_output: str
 
 
 @dataclass
@@ -556,6 +557,7 @@ def construct_train_dataset(
             steering_vectors=[feature_vector],
             positions=positions,
             feature_idx=target_feature_idx,
+            target_output=target_response,
         )
 
         training_data.append(training_data_point)
@@ -571,6 +573,7 @@ def construct_eval_dataset(
     api_data: dict,
     sae: BaseSAE,
     tokenizer: PreTrainedTokenizer,
+    enable_thinking: bool = False,
 ) -> list[TrainingDataPoint]:
     """Every prompt is exactly the same - the only difference is the steering vectors."""
 
@@ -582,7 +585,7 @@ def construct_eval_dataset(
         add_generation_prompt=True,
         return_tensors=None,
         padding=False,
-        enable_thinking=False,
+        enable_thinking=enable_thinking,
     )
     if not isinstance(input_prompt_ids, list):
         raise TypeError("Expected list of token ids from tokenizer")
@@ -624,6 +627,7 @@ def construct_eval_dataset(
             steering_vectors=[feature_vector],
             positions=positions,
             feature_idx=target_feature_idx,
+            target_output="",
         )
 
         eval_data.append(eval_data_point)
@@ -933,8 +937,26 @@ def train_model(
     dtype: torch.dtype,
     run_name: str,
     verbose: bool = False,
+    load_lora_path: Optional[Path] = None,
 ):
     max_grad_norm = 1.0
+
+    if cfg.use_lora and load_lora_path is None:
+        lora_config = LoraConfig(
+            r=cfg.lora_r,
+            lora_alpha=cfg.lora_alpha,
+            lora_dropout=cfg.lora_dropout,
+            target_modules=cfg.lora_target_modules,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
+
+        model = get_peft_model(model, lora_config)
+        model.print_trainable_parameters()
+    elif load_lora_path is not None:
+        assert load_lora_path.exists()
+        model = PeftModel.from_pretrained(model, load_lora_path, is_trainable=True)
+        model.print_trainable_parameters()
 
     model.train()
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr)
@@ -1114,7 +1136,6 @@ def load_data_from_sft_data_file(
 
     return training_data, eval_data, sae_info
 
-
 def main(
     explanations_files: list[str],
     cfg: SelfInterpTrainingConfig,
@@ -1181,19 +1202,6 @@ def main(
     model = load_model(cfg.model_name, dtype)
     submodule = get_submodule(model, cfg.hook_onto_layer)
 
-    if cfg.use_lora:
-        lora_config = LoraConfig(
-            r=cfg.lora_r,
-            lora_alpha=cfg.lora_alpha,
-            lora_dropout=cfg.lora_dropout,
-            target_modules=cfg.lora_target_modules,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-
-        model = get_peft_model(model, lora_config)
-        model.print_trainable_parameters()
-
     sae_layers = [sae_info.sae_layer for sae_info in cfg.sae_infos]
     sae_layers_str = "-".join([str(layer) for layer in sae_layers])
 
@@ -1227,21 +1235,24 @@ if __name__ == "__main__":
     # )
 
     layer_percents = [25, 50, 75]
+    # layer_percents = [25]
 
     explanations_files = []
     for layer_percent in layer_percents:
         explanations_files.append(
-            f"data_good/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl"
+            f"data/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl"
         )
 
-    hook_layer = 0
+    hook_layer = 1
     model_name = "Qwen/Qwen3-8B"
-    hf_repo_name = "qwen3-8b-hook-layer-0"
+    hf_repo_name = f"qwen3-8b-hook-layer-{hook_layer}"
 
-    wandb_suffix = "_multi_layer_fixed_2_epochs_encoder"
-
-
-    for use_decoder_vectors in [False]:
+    for use_decoder_vectors in [True]:
+        wandb_suffix = f"_larger_dataset_layer_{hook_layer}"
+        if use_decoder_vectors:
+            wandb_suffix += "_decoder"
+        else:
+            wandb_suffix += "_encoder"
 
         cfg = SelfInterpTrainingConfig(
             # Model settings
@@ -1271,15 +1282,15 @@ if __name__ == "__main__":
             lr=2e-5,
             eval_steps=99999999,
             num_epochs=1,
-            save_steps=int(2000 / 4),  # save every 2000 samples
+            save_steps=int(2000 / 1),  # save every 2000 samples
             # num_epochs=4,
             # save every epoch
             # save_steps=math.ceil(len(explanations) / 4),
             save_dir="checkpoints",
             seed=42,
             # Hugging Face settings - set these based on your needs
-            hf_push_to_hub=False,  # Only enable if login successful
-            hf_repo_id=False,
+            hf_push_to_hub=True,  # Only enable if login successful
+            hf_repo_id=hf_repo_name,
             hf_private_repo=False,  # Set to False if you want public repo
             positive_negative_examples=False,
             wandb_suffix=wandb_suffix,
