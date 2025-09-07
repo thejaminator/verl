@@ -301,22 +301,25 @@ def create_vector_dataset(
 
 
 def get_prompt_tokens_only(
-    input_ids: list[int],
-    labels: list[int],
-) -> list[int]:
+    training_data_point: lightweight_sft.TrainingDataPoint,
+) -> lightweight_sft.TrainingDataPoint:
     """User prompt should be labeled as -100"""
     prompt_tokens = []
+    prompt_labels = []
 
     response_token_seen = False
-    for i in range(len(input_ids)):
-        if labels[i] != -100:
+    for i in range(len(training_data_point.input_ids)):
+        if training_data_point.labels[i] != -100:
             response_token_seen = True
             continue
         else:
             if response_token_seen:
                 raise ValueError("Response token seen before prompt tokens")
-            prompt_tokens.append(input_ids[i])
-    return prompt_tokens
+            prompt_tokens.append(training_data_point.input_ids[i])
+            prompt_labels.append(training_data_point.labels[i])
+    training_data_point.input_ids = prompt_tokens
+    training_data_point.labels = prompt_labels
+    return training_data_point
 
 
 def run_classification(
@@ -345,9 +348,7 @@ def run_classification(
         batch_datapoints = deepcopy(datapoints[i : i + batch_size])
 
         for j in range(len(batch_datapoints)):
-            batch_datapoints[j].input_ids = get_prompt_tokens_only(
-                batch_datapoints[j].input_ids, batch_datapoints[j].labels
-            )
+            batch_datapoints[j] = get_prompt_tokens_only(batch_datapoints[j])
 
         batch = lightweight_sft.construct_batch(batch_datapoints, tokenizer, device)
 
