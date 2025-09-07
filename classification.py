@@ -25,7 +25,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import lightweight_sft
 import wandb
 from create_hard_negatives_v2 import load_model, load_tokenizer
-from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook
+from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prefix
 
 
 class ClassificationDatapoint(BaseModel):
@@ -290,7 +290,7 @@ def create_vector_dataset(
                 acts_D = acts_BD[j].clone().detach()
                 if debug_print:
                     view_tokens(tokenized_prompts["input_ids"][j], tokenizer, offset)
-                classification_prompt = f"{batch_datapoints[j].classification_prompt} It is from layer {layer}."
+                classification_prompt = f"{get_introspection_prefix(layer)}{batch_datapoints[j].classification_prompt}"
                 # classification_prompt = batch_datapoints[j].classification_prompt
                 training_data_point = create_classification_training_datapoint(
                     classification_prompt, batch_datapoints[j].target_response, tokenizer, acts_D
