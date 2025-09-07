@@ -4,6 +4,7 @@ import gc
 import itertools
 import json
 import os
+import pickle
 import random
 from copy import deepcopy
 from dataclasses import asdict
@@ -193,7 +194,7 @@ def create_classification_training_datapoint(
     return training_data_point
 
 
-def get_classification_prompts(dataset_name: str, max_examples: int) -> list[ClassificationDatapoint]:
+def get_classification_prompts(dataset_name: str, max_examples: int, random_seed: int) -> list[ClassificationDatapoint]:
     prompts = []
     labels = []
     if dataset_name == "sst2":
@@ -221,14 +222,16 @@ def get_classification_prompts(dataset_name: str, max_examples: int) -> list[Cla
 
     datapoints = []
     for i in range(len(prompts)):
-        if i >= max_examples:
-            break
         datapoint = ClassificationDatapoint(
             activation_prompt=prompts[i],
             classification_prompt=classification_prompt,
             target_response=mapping[labels[i]],
         )
         datapoints.append(datapoint)
+
+    random.seed(random_seed)
+    random.shuffle(datapoints)
+    datapoints = datapoints[:max_examples]
 
     return datapoints
 
@@ -270,6 +273,9 @@ def create_vector_dataset(
         ).to(model.device)
 
         acts_BD_by_layer_dict = collect_activations_multiple_layers(model, submodules, tokenized_prompts, offset)
+
+        for layer in act_layers:
+            acts_BD_by_layer_dict[layer] = acts_BD_by_layer_dict[layer].to("cpu", non_blocking=True)
 
         for layer in acts_BD_by_layer_dict.keys():
             acts_BD = acts_BD_by_layer_dict[layer]
@@ -399,6 +405,40 @@ def analyze_results(results: list[dict]):
     print(len(set(clean_responses)))
 
 
+def create_classification_dataset(
+    dataset_name: str,
+    max_examples: int,
+    batch_size: int,
+    act_layers: list[int],
+    offset: int,
+    model_name: str,
+    tokenizer: AutoTokenizer,
+    dtype: torch.dtype,
+    random_seed: int,
+    dataset_folder: str,
+) -> list[lightweight_sft.TrainingDataPoint]:
+    os.makedirs(dataset_folder, exist_ok=True)
+    layers_str = "-".join([str(layer) for layer in act_layers])
+    save_dataset_name = f"{dataset_folder}/{dataset_name}_layer_{layers_str}_offset_{offset}_max_{max_examples}.pkl"
+
+    if os.path.exists(save_dataset_name):
+        with open(save_dataset_name, "rb") as f:
+            training_data = pickle.load(f)
+
+        print(f"Loaded {len(training_data)} datapoints from {save_dataset_name}")
+        return training_data
+
+    model = load_model(model_name, dtype)
+    datapoints = get_classification_prompts(dataset_name, max_examples, random_seed)
+    training_data = create_vector_dataset(datapoints, tokenizer, model, batch_size, act_layers, offset)
+
+    with open(save_dataset_name, "wb") as f:
+        pickle.dump(training_data, f)
+    print(f"Saved {len(training_data)} datapoints to {save_dataset_name}")
+
+    return training_data
+
+
 def train_classification(
     dataset_name: str,
     max_examples: int,
@@ -415,13 +455,14 @@ def train_classification(
     wandb_suffix = f"_{dataset_name}_layer_{act_layers[0]}_offset_{offset}"
 
     tokenizer = load_tokenizer(model_name)
+
     # %%
     model = load_model(model_name, dtype)
     # %%
 
     assert_no_peft_present(model)
     # %%
-    datapoints = get_classification_prompts(dataset_name, max_examples)
+    datapoints = get_classification_prompts(dataset_name, max_examples, 42)
 
     # %%
     training_data = create_vector_dataset(datapoints, tokenizer, model, batch_size, act_layers, offset)
@@ -453,7 +494,7 @@ def train_classification(
             hook_onto_layer=hook_layer,
             sae_infos=[],
             # Experiment settings
-            eval_set_size=100,
+            eval_set_size_per_ds=100,
             use_decoder_vectors=True,
             generation_kwargs={
                 "do_sample": False,
