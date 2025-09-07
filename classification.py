@@ -142,7 +142,7 @@ def get_hf_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = F
 
 def create_classification_training_datapoint(
     classification_prompt: str, target_response: str, tokenizer: AutoTokenizer, acts_D: torch.Tensor
-) -> lightweight_sft.TrainingDataPoint:
+) -> lightweight_sft.TrainingDataPoint | None:
     input_messages = [{"role": "user", "content": classification_prompt}]
 
     input_prompt_ids = tokenizer.apply_chat_template(
@@ -180,7 +180,13 @@ def create_classification_training_datapoint(
     for i in range(assistant_start_idx):
         if full_prompt_ids[i] == x_token_id:
             positions.append(i)
-    assert len(positions) == 1, "Expected exactly one X token"
+    if len(positions) != 1:
+        # TODO: Handle this in a more robust way
+        print(
+            f"Warning! Expected exactly one X token, got {len(positions)}, classifcation prompt: {classification_prompt}"
+        )
+        print("Skipping this datapoint")
+        return None
     steering_vectors = [acts_D]
 
     training_data_point = lightweight_sft.TrainingDataPoint(
@@ -291,10 +297,11 @@ def create_vector_dataset(
                 if debug_print:
                     view_tokens(tokenized_prompts["input_ids"][j], tokenizer, offset)
                 classification_prompt = f"{get_introspection_prefix(layer)}{batch_datapoints[j].classification_prompt}"
-                # classification_prompt = batch_datapoints[j].classification_prompt
                 training_data_point = create_classification_training_datapoint(
                     classification_prompt, batch_datapoints[j].target_response, tokenizer, acts_D
                 )
+                if training_data_point is None:
+                    continue
                 training_data.append(training_data_point)
 
     return training_data
