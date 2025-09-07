@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 YES_TOKEN = "Yes"
 NO_TOKEN = "No"
-NUM_QA_PER_SAMPLE = 10
 DEFAULT_DATA_DIR = "classification_datasets"
 
 
@@ -41,7 +40,7 @@ class DatasetLoader:
             self.question_paraphrases = json.load(f)[group]
 
     # Must be overridden by dataset class
-    def load(self) -> list[ContextQASample]:
+    def load(self, num_qa_per_sample: int) -> list[ContextQASample]:
         raise NotImplementedError
 
 
@@ -52,7 +51,7 @@ class MdGenderDatasetLoader(DatasetLoader):
     def __init__(self):
         super().__init__(self.__class__.GROUP_NAME, self.__class__.DATASET_NAME)
 
-    def load(self):
+    def load(self, num_qa_per_sample: int):
         dataset = load_dataset("facebook/md_gender_bias", name="funpedia", trust_remote_code=True)
         all_examples = []
         female_count = 0
@@ -83,7 +82,7 @@ class MdGenderDatasetLoader(DatasetLoader):
 
             questions = []
             answers = []
-            paraphrases = random.sample(self.question_paraphrases, NUM_QA_PER_SAMPLE)
+            paraphrases = random.sample(self.question_paraphrases, num_qa_per_sample)
             for paraphrase in paraphrases:
                 question_label = random.choice(["female", "male"])
                 question = "# " + paraphrase.format(question_label)
@@ -111,7 +110,7 @@ class SnliDatasetLoader(DatasetLoader):
     def __init__(self):
         super().__init__(self.__class__.GROUP_NAME, self.__class__.DATASET_NAME)
 
-    def load(self):
+    def load(self, num_qa_per_sample: int):
         print("Loading SNLI dataset")
         dataset = load_dataset("stanfordnlp/snli")["train"]
         examples = []
@@ -122,7 +121,7 @@ class SnliDatasetLoader(DatasetLoader):
 
             answer = {0: YES_TOKEN, 2: NO_TOKEN}[example["label"]]
 
-            paraphrases = random.sample(self.question_paraphrases, NUM_QA_PER_SAMPLE)
+            paraphrases = random.sample(self.question_paraphrases, num_qa_per_sample)
             questions = []
             for paraphrase in paraphrases:
                 question = f"# {paraphrase} {example['hypothesis']}"
@@ -132,7 +131,7 @@ class SnliDatasetLoader(DatasetLoader):
                 ContextQASample(
                     context=example["premise"],
                     questions=questions,
-                    answers=[answer] * NUM_QA_PER_SAMPLE,
+                    answers=[answer] * num_qa_per_sample,
                 )
             )
 
@@ -147,7 +146,7 @@ class AgNewsDatasetLoader(DatasetLoader):
     def __init__(self):
         super().__init__(self.__class__.GROUP_NAME, self.__class__.DATASET_NAME)
 
-    def load(self):
+    def load(self, num_qa_per_sample: int):
         label_to_topic = {
             "1": "World News",
             "2": "Sports",
@@ -168,7 +167,7 @@ class AgNewsDatasetLoader(DatasetLoader):
                 questions = []
                 answers = []
 
-                paraphrases = random.sample(self.question_paraphrases, NUM_QA_PER_SAMPLE)
+                paraphrases = random.sample(self.question_paraphrases, num_qa_per_sample)
                 for paraphrase in paraphrases:
                     incorrect_label = random.choice(list(labels - {correct_label}))
                     question_label = random.choice((correct_label, incorrect_label))
@@ -202,7 +201,7 @@ class NerDatasetLoader(DatasetLoader):
         answers = []
 
         sentence_entities_set = set(sentence_entities)
-        paraphrases = random.sample(self.question_paraphrases, NUM_QA_PER_SAMPLE)
+        paraphrases = random.sample(self.question_paraphrases, num_qa_per_sample)
         for paraphrase in paraphrases:
             correct_label = random.choice(sentence_entities)
 
@@ -219,7 +218,7 @@ class NerDatasetLoader(DatasetLoader):
 
         return ContextQASample(context=context, questions=questions, answers=answers)
 
-    def load(self):
+    def load(self, num_qa_per_sample: int):
         all_sentences = []
         all_entities = set()
         print("Reading NER dataset")
@@ -286,19 +285,19 @@ class GeometryOfTruthDatasetLoader(DatasetLoader):
         # "counterfact_true_false",
     ]
 
-    def load(self):
+    def load(self, num_qa_per_sample: int):
         examples = []
         filename = self.name + ".csv"
         with open(os.path.join(self.DATA_FILES_PATH, filename)) as f:
             reader = csv.DictReader(f)
             for row in reader:
                 questions = []
-                paraphrases = random.sample(self.question_paraphrases, NUM_QA_PER_SAMPLE)
+                paraphrases = random.sample(self.question_paraphrases, num_qa_per_sample)
                 for paraphrase in paraphrases:
                     question = "# " + paraphrase
                     questions.append(question)
                 answer = {"0": NO_TOKEN, "1": YES_TOKEN}[row["label"]]
-                answers = [answer] * NUM_QA_PER_SAMPLE
+                answers = [answer] * num_qa_per_sample
 
                 example = ContextQASample(
                     context=row["statement"],
@@ -325,7 +324,7 @@ class SstDatasetLoader(DatasetLoader):
     def __init__(self):
         super().__init__(self.__class__.GROUP_NAME, self.__class__.DATASET_NAME)
 
-    def load(self):
+    def load(self, num_qa_per_sample: int):
         dataset = load_dataset("stanfordnlp/sst2")
         result = []
         for split in ("train", "validation"):
@@ -334,10 +333,10 @@ class SstDatasetLoader(DatasetLoader):
                 questions = []
                 answers = []
                 paraphrases = {
-                    label: random.sample(self.question_paraphrases[label], NUM_QA_PER_SAMPLE)
+                    label: random.sample(self.question_paraphrases[label], num_qa_per_sample)
                     for label in ("positive", "negative")
                 }
-                for i in range(NUM_QA_PER_SAMPLE):
+                for i in range(num_qa_per_sample):
                     question_label = random.choice(["negative", "positive"])
                     question = "# " + paraphrases[question_label][i]
                     answer = YES_TOKEN if context_label == question_label else NO_TOKEN
@@ -369,7 +368,7 @@ class RelationDatasetLoader(DatasetLoader):
     DATA_FILES_PATH = RELATION_FILES_ROOT
     DATASET_NAMES = RELATION_NAMES
 
-    def load(self):
+    def load(self, num_qa_per_sample: int):
         relation_type, relation_name = self.name.split("/")
         file_path = os.path.join(self.DATA_FILES_PATH, relation_type, f"{relation_name}.json")
         if not os.path.exists(file_path):
@@ -384,21 +383,21 @@ class RelationDatasetLoader(DatasetLoader):
             objects = set(objects)
             for sample in data_dict["samples"]:
                 template = random.choice(prompt_templates) + " {}."
-                questions = random.sample(self.question_paraphrases, NUM_QA_PER_SAMPLE)
+                questions = random.sample(self.question_paraphrases, num_qa_per_sample)
                 examples.append(
                     ContextQASample(
                         context=template.format(sample["subject"], sample["object"]),
                         questions=["# " + q for q in questions],
-                        answers=[YES_TOKEN] * NUM_QA_PER_SAMPLE,
+                        answers=[YES_TOKEN] * num_qa_per_sample,
                     )
                 )
-                questions = random.sample(self.question_paraphrases, NUM_QA_PER_SAMPLE)
+                questions = random.sample(self.question_paraphrases, num_qa_per_sample)
                 false_obj = random.choice(list(objects - {sample["object"]}))
                 examples.append(
                     ContextQASample(
                         context=template.format(sample["subject"], false_obj),
                         questions=["# " + q for q in questions],
-                        answers=[NO_TOKEN] * NUM_QA_PER_SAMPLE,
+                        answers=[NO_TOKEN] * num_qa_per_sample,
                     )
                 )
         logger.info(f"Loaded {len(examples)} examples from {self.name}.")
@@ -420,7 +419,7 @@ class TenseDatasetLoader(DatasetLoader):
     def __init__(self):
         super().__init__(self.__class__.GROUP_NAME, self.__class__.DATASET_NAME)
 
-    def load(self) -> ContextQASample:
+    def load(self, num_qa_per_sample: int) -> list[ContextQASample]:
         context_qa: list[ContextQASample] = []
         with open(self.DATASET_PATH, "r") as f:
             examples = json.load(f)
@@ -430,7 +429,7 @@ class TenseDatasetLoader(DatasetLoader):
             questions = []
             answers = []
             correct_label = example["label"]
-            for idx in range(NUM_QA_PER_SAMPLE):
+            for idx in range(num_qa_per_sample):
                 ans = random.choice([YES_TOKEN, NO_TOKEN])
                 ques = "# " + random.choice(self.question_paraphrases)
                 answers.append(ans)
@@ -460,7 +459,7 @@ class SingularPluralDatasetLoader(DatasetLoader):
     def __init__(self):
         super().__init__(self.__class__.GROUP_NAME, self.__class__.DATASET_NAME)
 
-    def load(self) -> ContextQASample:
+    def load(self, num_qa_per_sample: int) -> list[ContextQASample]:
         context_qa: list[ContextQASample] = []
         with open(self.DATASET_PATH, "r") as f:
             df = pd.read_csv(f)
@@ -471,7 +470,7 @@ class SingularPluralDatasetLoader(DatasetLoader):
             questions = []
             answers = []
             correct_label = example["n_subjects"]
-            for idx in range(NUM_QA_PER_SAMPLE):
+            for idx in range(num_qa_per_sample):
                 ans = random.choice([YES_TOKEN, NO_TOKEN])
                 incorrect_label = random.choice(list(class_labels - {correct_label}))
                 answers.append(ans)
@@ -503,7 +502,7 @@ class LanguageIDDatasetLoader(DatasetLoader):
     def __init__(self):
         super().__init__(self.__class__.GROUP_NAME, self.__class__.DATASET_NAME)
 
-    def load(self) -> ContextQASample:
+    def load(self, num_qa_per_sample: int) -> list[ContextQASample]:
         hf_dataset = load_dataset("FrancophonIA/WiLI-2018")["train"]
         context_qa: list[ContextQASample] = []
         class_labels = set(hf_dataset[:]["language"])
@@ -512,7 +511,7 @@ class LanguageIDDatasetLoader(DatasetLoader):
             questions = []
             answers = []
             correct_label = example["language"]
-            for idx in range(NUM_QA_PER_SAMPLE):
+            for idx in range(num_qa_per_sample):
                 ans = random.choice([YES_TOKEN, NO_TOKEN])
                 ques = "# " + random.choice(self.question_paraphrases)
                 answers.append(ans)
