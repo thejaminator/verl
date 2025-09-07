@@ -633,4 +633,9 @@ def get_samples_from_groups(group_names: list[str], num_qa_per_sample: int) -> l
             samples = loader.load(num_qa_per_sample)
             all_samples.extend(samples)
 
+    for i in range(len(all_samples)):
+        for j in range(len(all_samples[i].questions)):
+            if all_samples[i].questions[j][:2] == "# ":
+                all_samples[i].questions[j] = all_samples[i].questions[j][2:]
+
     return all_samples
