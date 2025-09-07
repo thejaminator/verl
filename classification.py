@@ -206,7 +206,7 @@ def get_classification_prompts(dataset_name: str, max_examples: int, random_seed
 
         mapping = {1: "positive", 0: "negative"}
         # classification_prompt = "You must respond with only a single word. Is the sentiment of 'X' positive or negative?"
-        classification_prompt = "You must respond with only a single word. Your options are 'positive' or 'negative'. Is the sentiment of <<X>> positive or negative?."
+        classification_prompt = "You must respond with only a single word. Your options are 'positive' or 'negative'. Is the sentiment of the concept positive or negative?."
         # classification_prompt = "You must respond with only a single word. Your options are 'positive' or 'negative'. Can you explain to me if the sentiment of 'X' is positive or negative?"
     elif dataset_name == "ag_news":
         ag_news_dataset = load_dataset("ag_news", split="train")
@@ -216,7 +216,7 @@ def get_classification_prompts(dataset_name: str, max_examples: int, random_seed
             labels.append(ag_news_dataset[i]["label"])
 
         mapping = {0: "world", 1: "sports", 2: "business", 3: "sci/tech"}
-        classification_prompt = "You must respond with only a single word. Your options are 'world', 'sports', 'business', 'sci/tech'. Can you explain to me if the topic of <<X>> is world, sports, business, or sci/tech?."
+        classification_prompt = "You must respond with only a single word. Your options are 'world', 'sports', 'business', 'sci/tech'. Can you explain to me if the topic of the concept is world, sports, business, or sci/tech?."
     else:
         raise ValueError(f"Dataset {dataset_name} not supported")
 
