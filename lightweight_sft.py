@@ -315,6 +315,7 @@ class TrainingExample(BaseModel):
 
     @classmethod
     def with_positive_and_negative_examples(cls, sae_explanation: SAEExplained) -> "TrainingExample":
+        raise NotImplementedError("Not implemented")
         positive_examples_text = "".join(
             f"<positive_example>{example}</positive_example>\n" for example in sae_explanation.positive_examples
         )
@@ -334,7 +335,7 @@ class TrainingExample(BaseModel):
 
     @classmethod
     def with_explanation_only(cls, sae_explanation: SAEExplained) -> "TrainingExample":
-        prompt = f"<explanation>{sae_explanation.explanation}</explanation>"
+        prompt = f"{sae_explanation.explanation}"
         return TrainingExample(
             explanation=prompt,
             feature_idx=sae_explanation.sae_id,
@@ -483,6 +484,7 @@ def collect_activations(
 def build_training_prompt(positive_negative_examples: bool, sae_layer: int) -> str:
     """Build the training prompt for SAE explanations."""
     if positive_negative_examples:
+        raise NotImplementedError("Not implemented")
         question = f"""Can you explain to me the concept of what 'X' from layer {sae_layer} means? Give positive and negative examples of what the concept would activate on. Format your final answer with <explanation>."""
     else:
         question = get_introspection_prompt(sae_layer)
@@ -827,7 +829,8 @@ def eval_features_batch(
 
         explanations = []
         for output in decoded_output:
-            explanations.append(parse_generated_explanation(output))
+            explanations.append(ExplanationResult(explanation=output))
+            # explanations.append(parse_generated_explanation(output))
 
         all_samples.append(decoded_output)
         all_explanations.append(explanations)
@@ -1240,7 +1243,18 @@ def build_datasets(
 
 
 if __name__ == "__main__":
-    classification_datasets = ["sst2", "ag_news"]
+    classification_datasets = [
+        "geometry_of_truth",
+        "relations",
+        "sst2",
+        "md_gender",
+        "snli",
+        # "ag_news",
+        "ner",
+        "tense",
+        "language_identification",
+        # "singular_plural",
+    ]
 
     hook_layer = 1
     model_name = "Qwen/Qwen3-8B"
@@ -1272,7 +1286,7 @@ if __name__ == "__main__":
             layer_percents=layer_percents,
             sae_sft_datasets=explanations_files,
             classification_datasets=classification_datasets,
-            max_classification_examples=10_000,
+            max_classification_examples=6_000,
         )
 
         # mutate the cfg here using variables in the itertools loop over variables of interest
@@ -1285,7 +1299,7 @@ if __name__ == "__main__":
         all_training_data, all_eval_data, all_sae_infos = build_datasets(cfg, tokenizer, device, dtype)
 
         # for debugging
-        all_training_data = all_training_data[:1000]
+        # all_training_data = all_training_data[:1000]
 
         print(f"training data: {len(all_training_data)}, eval data: {len(all_eval_data)}")
 
