@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+import classification_dataset_manager
 import lightweight_sft
 import wandb
 from create_hard_negatives_v2 import load_model, load_tokenizer
@@ -194,46 +195,45 @@ def create_classification_training_datapoint(
     return training_data_point
 
 
-def get_classification_prompts(dataset_name: str, max_examples: int, random_seed: int) -> list[ClassificationDatapoint]:
-    prompts = []
-    labels = []
-    if dataset_name == "sst2":
-        sst2_dataset = load_dataset("glue", "sst2", split="train")
-
-        for i in range(len(sst2_dataset)):
-            prompts.append(f"Movie Review: {sst2_dataset[i]['sentence']}")
-            labels.append(sst2_dataset[i]["label"])
-
-        mapping = {1: "positive", 0: "negative"}
-        # classification_prompt = "You must respond with only a single word. Is the sentiment of 'X' positive or negative?"
-        classification_prompt = "You must respond with only a single word. Your options are 'positive' or 'negative'. Is the sentiment of the concept positive or negative?."
-        # classification_prompt = "You must respond with only a single word. Your options are 'positive' or 'negative'. Can you explain to me if the sentiment of 'X' is positive or negative?"
-    elif dataset_name == "ag_news":
-        ag_news_dataset = load_dataset("ag_news", split="train")
-
-        for i in range(len(ag_news_dataset)):
-            prompts.append(f"News Article: {ag_news_dataset[i]['text']}")
-            labels.append(ag_news_dataset[i]["label"])
-
-        mapping = {0: "world", 1: "sports", 2: "business", 3: "sci/tech"}
-        classification_prompt = "You must respond with only a single word. Your options are 'world', 'sports', 'business', 'sci/tech'. Can you explain to me if the topic of the concept is world, sports, business, or sci/tech?."
-    else:
-        raise ValueError(f"Dataset {dataset_name} not supported")
-
+def get_classification_datapoints_from_context_qa_examples(
+    examples: list[classification_dataset_manager.ContextQASample],
+) -> list[ClassificationDatapoint]:
     datapoints = []
-    for i in range(len(prompts)):
-        datapoint = ClassificationDatapoint(
-            activation_prompt=prompts[i],
-            classification_prompt=classification_prompt,
-            target_response=mapping[labels[i]],
-        )
-        datapoints.append(datapoint)
-
-    random.seed(random_seed)
-    random.shuffle(datapoints)
-    datapoints = datapoints[:max_examples]
+    for example in examples:
+        for question, answer in zip(example.questions, example.answers):
+            datapoint = ClassificationDatapoint(
+                activation_prompt=example.context,
+                classification_prompt=question,
+                target_response=answer,
+            )
+            datapoints.append(datapoint)
 
     return datapoints
+
+
+def get_classification_datapoints(
+    dataset_name: str,
+    num_qa_per_sample: int,
+    train_examples: int,
+    test_examples: int,
+    random_seed: int,
+) -> tuple[list[ClassificationDatapoint], list[ClassificationDatapoint]]:
+    all_examples = classification_dataset_manager.get_samples_from_groups(
+        [dataset_name],
+        num_qa_per_sample,
+    )
+
+    random.seed(random_seed)
+    random.shuffle(all_examples)
+
+    assert len(all_examples) >= train_examples + test_examples, "Not enough examples to split"
+    train_examples = all_examples[:train_examples]
+    test_examples = all_examples[-test_examples:]
+
+    train_datapoints = get_classification_datapoints_from_context_qa_examples(train_examples)
+    test_datapoints = get_classification_datapoints_from_context_qa_examples(test_examples)
+
+    return train_datapoints, test_datapoints
 
 
 def view_tokens(tokens_L: list[int], tokenizer: AutoTokenizer, offset: int) -> None:
@@ -415,7 +415,9 @@ def analyze_results(results: list[dict]):
 
 def create_classification_dataset(
     dataset_name: str,
-    max_examples: int,
+    num_qa_per_sample: int,
+    num_train_examples: int,
+    num_test_examples: int,
     batch_size: int,
     act_layers: list[int],
     offset: int,
@@ -424,24 +426,39 @@ def create_classification_dataset(
     dtype: torch.dtype,
     random_seed: int,
     dataset_folder: str,
-) -> list[lightweight_sft.TrainingDataPoint]:
+) -> tuple[list[lightweight_sft.TrainingDataPoint], list[lightweight_sft.TrainingDataPoint]]:
     os.makedirs(dataset_folder, exist_ok=True)
     layers_str = "-".join([str(layer) for layer in act_layers])
-    save_dataset_name = f"{dataset_folder}/{dataset_name}_layer_{layers_str}_offset_{offset}_max_{max_examples}.pkl"
+    train_dataset_name = (
+        f"{dataset_folder}/{dataset_name}_layer_{layers_str}_offset_{offset}_max_{num_train_examples}_train.pkl"
+    )
+    test_dataset_name = (
+        f"{dataset_folder}/{dataset_name}_layer_{layers_str}_offset_{offset}_max_{num_test_examples}_test.pkl"
+    )
 
-    if os.path.exists(save_dataset_name):
-        with open(save_dataset_name, "rb") as f:
+    if os.path.exists(train_dataset_name) and os.path.exists(test_dataset_name):
+        with open(train_dataset_name, "rb") as f:
             training_data = pickle.load(f)
 
-        print(f"Loaded {len(training_data)} datapoints from {save_dataset_name}")
-        return training_data
+        with open(test_dataset_name, "rb") as f:
+            test_data = pickle.load(f)
+
+        print(f"Loaded {len(training_data)} datapoints from {train_dataset_name}")
+        print(f"Loaded {len(test_data)} datapoints from {test_dataset_name}")
+        return training_data, test_data
 
     model = load_model(model_name, dtype)
-    datapoints = get_classification_prompts(dataset_name, max_examples, random_seed)
-    training_data = create_vector_dataset(datapoints, tokenizer, model, batch_size, act_layers, offset)
+    train_datapoints, test_datapoints = get_classification_datapoints(
+        dataset_name, num_qa_per_sample, num_train_examples, num_test_examples, random_seed
+    )
+    training_data = create_vector_dataset(train_datapoints, tokenizer, model, batch_size, act_layers, offset)
+    test_data = create_vector_dataset(test_datapoints, tokenizer, model, batch_size, act_layers, offset)
 
-    with open(save_dataset_name, "wb") as f:
+    with open(train_dataset_name, "wb") as f:
         pickle.dump(training_data, f)
-    print(f"Saved {len(training_data)} datapoints to {save_dataset_name}")
+    print(f"Saved {len(training_data)} datapoints to {train_dataset_name}")
+    with open(test_dataset_name, "wb") as f:
+        pickle.dump(test_data, f)
+    print(f"Saved {len(test_data)} datapoints to {test_dataset_name}")
 
-    return training_data
+    return training_data, test_data

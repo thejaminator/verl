@@ -218,7 +218,6 @@ class SelfInterpTrainingConfig:
     # --- Data / experiment ---
     sae_sft_datasets: list[str] = field(default_factory=list)  # pass in or compute outside
     classification_datasets: list[str] = field(default_factory=lambda: ["sst2", "ag_news"])
-    eval_set_size_per_ds: int = 25
     use_decoder_vectors: bool = True
     generation_kwargs: dict[str, Any] = field(
         default_factory=lambda: {"do_sample": True, "temperature": 1.0, "max_new_tokens": 300}
@@ -227,7 +226,9 @@ class SelfInterpTrainingConfig:
     act_collect_offset: int = -4
     max_sae_sft_examples: int = 50_000
     max_classification_examples: int = 10_000
+    test_set_size_per_ds: int = 25
     dataset_folder: str = "sft_training_data"
+    num_qa_per_sample: int = 3
 
     # --- Batching ---
     train_batch_size: int = 4
@@ -1207,16 +1208,18 @@ def build_datasets(
     for sft_file in cfg.sae_sft_datasets:
         file_data, sae_info = load_sae_data_from_sft_data_file(sft_file, cfg, tokenizer, device, dtype)
         file_data = file_data[: cfg.max_sae_sft_examples]
-        all_training_data.extend(file_data[: -cfg.eval_set_size_per_ds])
-        all_eval_data.extend(file_data[-cfg.eval_set_size_per_ds :])
+        all_training_data.extend(file_data[: -cfg.test_set_size_per_ds])
+        all_eval_data.extend(file_data[-cfg.test_set_size_per_ds :])
         all_sae_infos.append(sae_info)
 
     # Classification side-task
     for ds in cfg.classification_datasets:
         print(f"Creating classification dataset for {ds}")
-        cls_ds = classification.create_classification_dataset(
+        train_ds, test_ds = classification.create_classification_dataset(
             ds,
-            max_examples=cfg.max_classification_examples,
+            num_qa_per_sample=cfg.num_qa_per_sample,
+            num_train_examples=cfg.max_classification_examples,
+            num_test_examples=cfg.test_set_size_per_ds,
             batch_size=cfg.activation_collection_batch_size,
             act_layers=cfg.act_layers,
             offset=cfg.act_collect_offset,
@@ -1226,8 +1229,8 @@ def build_datasets(
             random_seed=cfg.seed,
             dataset_folder=cfg.dataset_folder,
         )
-        all_training_data.extend(cls_ds[: -cfg.eval_set_size_per_ds])
-        all_eval_data.extend(cls_ds[-cfg.eval_set_size_per_ds :])
+        all_training_data.extend(train_ds)
+        all_eval_data.extend(test_ds)
 
     random.seed(cfg.seed)
     random.shuffle(all_training_data)
@@ -1269,7 +1272,7 @@ if __name__ == "__main__":
             layer_percents=layer_percents,
             sae_sft_datasets=explanations_files,
             classification_datasets=classification_datasets,
-            max_classification_examples=1_000,
+            max_classification_examples=10_000,
         )
 
         # mutate the cfg here using variables in the itertools loop over variables of interest

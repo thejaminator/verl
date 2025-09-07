@@ -603,3 +603,31 @@ class DatasetManager:
                 result[group] = []
             result[group].append(name)
         return result
+
+
+def get_samples_from_groups(group_names: list[str], num_qa_per_sample: int) -> list[ContextQASample]:
+    """
+    Get all ContextQASample objects from specified groups.
+
+    Args:
+        group_names: List of group names (e.g., ["sst2", "ag_news"])
+        num_qa_per_sample: Number of Q&A pairs per sample (default 10)
+
+    Returns:
+        List of ContextQASample objects
+    """
+    all_samples = []
+
+    for group in group_names:
+        # Get all dataset names for this group
+        datasets_in_group = DatasetManager.list_datasets_by_group(group).get(group, [])
+
+        for dataset_name in datasets_in_group:
+            # Get the loader
+            loader = DatasetManager.supported_datasets.get((group, dataset_name))
+            if loader:
+                # Load the samples
+                samples = loader.load(num_qa_per_sample)
+                all_samples.extend(samples)
+
+    return all_samples
