@@ -1061,7 +1061,7 @@ def train_model(
                         tokenizer=tokenizer,
                         repo_id=cfg.hf_repo_id + f"-step-{global_step}",
                         private=cfg.hf_private_repo,
-                        commit_message=f"SAE introspection LoRA - {run_name} - step {global_step}",
+                        commit_message=f"SAE introspection LoRA - {cfg.wandb_run_name} - step {global_step}",
                     )
                     print("Pushed LoRA adapter to Hugging Face Hub.")
 
@@ -1095,7 +1095,7 @@ def train_model(
             model=model,
             tokenizer=tokenizer,
             repo_id=cfg.hf_repo_id,
-            commit_message=f"SAE introspection LoRA - {run_name} - final model",
+            commit_message=f"SAE introspection LoRA - {cfg.wandb_run_name} - final model",
             private=cfg.hf_private_repo,
         )
 
@@ -1280,6 +1280,7 @@ if __name__ == "__main__":
                 tokenizer=tokenizer,
                 dtype=dtype,
                 random_seed=cfg.seed,
+                dataset_folder=cfg.dataset_folder,
             )
             classification_train_data = classification_ds[: -cfg.eval_set_size_per_ds]
             classification_eval_data = classification_ds[-cfg.eval_set_size_per_ds :]
