@@ -259,7 +259,9 @@ def create_vector_dataset(
 
     submodules = {layer: get_hf_submodule(model, layer) for layer in act_layers}
 
-    for i in tqdm(range(0, len(datapoints), batch_size), desc="Creating vector dataset"):
+    all_acts = []
+
+    for i in tqdm(range(0, len(datapoints), batch_size), desc="Collecting activations"):
         batch_datapoints = datapoints[i : i + batch_size]
         formatted_prompts = []
         for datapoint in batch_datapoints:
@@ -274,9 +276,13 @@ def create_vector_dataset(
 
         acts_BD_by_layer_dict = collect_activations_multiple_layers(model, submodules, tokenized_prompts, offset)
 
+        # Doing 2 for loops to try reduce gpu / cpu syncs
         for layer in act_layers:
             acts_BD_by_layer_dict[layer] = acts_BD_by_layer_dict[layer].to("cpu", non_blocking=True)
 
+        all_acts.append((batch_datapoints, tokenized_prompts, acts_BD_by_layer_dict))
+
+    for batch_datapoints, tokenized_prompts, acts_BD_by_layer_dict in tqdm(all_acts, desc="Creating vector dataset"):
         for layer in acts_BD_by_layer_dict.keys():
             acts_BD = acts_BD_by_layer_dict[layer]
             for j in range(len(batch_datapoints)):
@@ -438,175 +444,3 @@ def create_classification_dataset(
     print(f"Saved {len(training_data)} datapoints to {save_dataset_name}")
 
     return training_data
-
-
-def train_classification(
-    dataset_name: str,
-    max_examples: int,
-    eval_examples: int,
-    batch_size: int,
-    dtype: torch.dtype,
-    device: torch.device,
-    act_layers: list[int],
-    offset: int,
-    model_name: str,
-    lora_paths: list[Path | None],
-    hook_layer: int,
-):
-    wandb_suffix = f"_{dataset_name}_layer_{act_layers[0]}_offset_{offset}"
-
-    tokenizer = load_tokenizer(model_name)
-
-    # %%
-    model = load_model(model_name, dtype)
-    # %%
-
-    assert_no_peft_present(model)
-    # %%
-    datapoints = get_classification_prompts(dataset_name, max_examples, 42)
-
-    # %%
-    training_data = create_vector_dataset(datapoints, tokenizer, model, batch_size, act_layers, offset)
-    random.seed(42)
-    random.shuffle(training_data)
-    eval_data = training_data[-eval_examples:]
-    training_data = training_data[:-eval_examples]
-
-    # test_idx = 0
-
-    # print(datapoints[test_idx].activation_prompt)
-    # print(tokenizer.decode(training_data[test_idx].input_ids))
-    # print(training_data[test_idx].target_output)
-    # print(training_data[test_idx].labels)
-    # print(training_data[test_idx].positions)
-
-    # for i in range(10):
-    #     print(training_data[i].steering_vectors[0].sum())
-
-    for lora_path in lora_paths:
-        # %%
-        cfg = lightweight_sft.SelfInterpTrainingConfig(
-            # Model settings
-            model_name=model_name,
-            train_batch_size=8,
-            eval_batch_size=64,  # 8 * 16
-            # SAE
-            # settings
-            hook_onto_layer=hook_layer,
-            sae_infos=[],
-            # Experiment settings
-            eval_set_size_per_ds=100,
-            use_decoder_vectors=True,
-            generation_kwargs={
-                "do_sample": False,
-                "temperature": 0.0,
-                "max_new_tokens": 30,
-            },
-            steering_coefficient=2.0,
-            # LoRA settings
-            use_lora=True,
-            lora_r=64,
-            lora_alpha=128,
-            lora_dropout=0.05,
-            lora_target_modules="all-linear",
-            # Training settings
-            lr=2e-5,
-            eval_steps=99999999,
-            num_epochs=1,
-            save_steps=int(2000 / 1),  # save every 2000 samples
-            # num_epochs=4,
-            # save every epoch
-            # save_steps=math.ceil(len(explanations) / 4),
-            save_dir="checkpoints",
-            seed=42,
-            # Hugging Face settings - set these based on your needs
-            hf_push_to_hub=False,  # Only enable if login successful
-            hf_repo_id=False,
-            hf_private_repo=False,  # Set to False if you want public repo
-            positive_negative_examples=False,
-            wandb_suffix=wandb_suffix,
-        )
-
-        def create_save_str(lora_path: Path | None) -> str:
-            str_path = str(lora_path)
-            str_path = str_path.replace(".", "_").replace("/", "_").replace(" ", "_")
-            return str_path
-
-        save_str = create_save_str(lora_path)
-        print(save_str)
-        wandb_suffix = f"{wandb_suffix}_{save_str}"
-        cfg.wandb_suffix = wandb_suffix
-        cfg.save_dir = f"checkpoints{cfg.wandb_suffix}"
-        print(cfg.save_dir)
-
-        # %%
-
-        wandb_project = "sae_introspection_posttraining"
-        run_name = f"{cfg.model_name}-decoder-{cfg.use_decoder_vectors}{cfg.wandb_suffix}"
-
-        del model
-        model = load_model(model_name, dtype)
-        assert_no_peft_present(model)
-        steering_submodule = get_hf_submodule(model, hook_layer)
-        wandb.init(project=wandb_project, name=run_name, config=asdict(cfg))
-
-        lightweight_sft.train_model(
-            cfg,
-            training_data,
-            training_data[:10],
-            model,
-            tokenizer,
-            steering_submodule,
-            device,
-            dtype,
-            cfg.wandb_suffix,
-            load_lora_path=lora_path,
-            # load_lora_path=None,
-            verbose=True,
-        )
-        wandb.finish()
-        # %%
-        # %%
-
-
-# %%
-
-if __name__ == "__main__":
-    max_examples = 40000
-    eval_examples = 500
-    batch_size = 250
-    steering_coefficient = 2.0
-    dtype = torch.bfloat16
-    device = torch.device("cuda")
-    generation_kwargs = {
-        "do_sample": False,
-        "temperature": 0.0,
-        "max_new_tokens": 10,
-    }
-
-    act_layers = [9, 18, 27]
-    offset = -4
-    model_name = "Qwen/Qwen3-8B"
-    # model_name = "google/gemma-2-9b-it"
-
-    lora_paths = [None, Path("checkpoints_larger_dataset_decoder/final")]
-    # lora_path = "checkpoints_sst2_layer_27_offset_-4/final"
-    # lora_path = "checkpoints_larger_dataset_decoder/step_4000"
-    hook_layer = 0
-
-    dataset_names = ["sst2", "ag_news"]
-
-    for dataset_name in dataset_names:
-        train_classification(
-            dataset_name,
-            max_examples,
-            eval_examples,
-            batch_size,
-            dtype,
-            device,
-            act_layers,
-            offset,
-            model_name,
-            lora_paths,
-            hook_layer,
-        )
