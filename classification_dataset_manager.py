@@ -195,7 +195,7 @@ class NerDatasetLoader(DatasetLoader):
     def __init__(self):
         super().__init__(self.__class__.GROUP_NAME, self.__class__.DATASET_NAME)
 
-    def _get_qa_for_sentence(self, sentence, sentence_entities, all_entities):
+    def _get_qa_for_sentence(self, sentence, sentence_entities, all_entities, num_qa_per_sample):
         context = " ".join(sentence)
         questions = []
         answers = []
@@ -265,7 +265,9 @@ class NerDatasetLoader(DatasetLoader):
         for sentence, sentence_entities in tqdm(all_sentences):
             if len(sentence_entities) == 0:
                 continue
-            examples.append(self._get_qa_for_sentence(sentence, sentence_entities, list(all_entities)))
+            examples.append(
+                self._get_qa_for_sentence(sentence, sentence_entities, list(all_entities), num_qa_per_sample)
+            )
         return examples
 
 
@@ -620,14 +622,15 @@ def get_samples_from_groups(group_names: list[str], num_qa_per_sample: int) -> l
 
     for group in group_names:
         # Get all dataset names for this group
-        datasets_in_group = DatasetManager.list_datasets_by_group(group).get(group, [])
+        datasets_in_group = DatasetManager.list_datasets_by_group(group)[group]
+        assert len(datasets_in_group) > 0, f"No datasets found for group {group}"
 
         for dataset_name in datasets_in_group:
             # Get the loader
-            loader = DatasetManager.supported_datasets.get((group, dataset_name))
-            if loader:
-                # Load the samples
-                samples = loader.load(num_qa_per_sample)
-                all_samples.extend(samples)
+            loader = DatasetManager.supported_datasets[(group, dataset_name)]
+            assert loader is not None, f"Loader not found for dataset {dataset_name}"
+            # Load the samples
+            samples = loader.load(num_qa_per_sample)
+            all_samples.extend(samples)
 
     return all_samples
