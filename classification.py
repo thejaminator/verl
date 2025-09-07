@@ -280,7 +280,8 @@ def create_vector_dataset(
         for layer in acts_BD_by_layer_dict.keys():
             acts_BD = acts_BD_by_layer_dict[layer]
             for j in range(len(batch_datapoints)):
-                acts_D = acts_BD[j]
+                # clone and detach to avoid saving with pickle issues
+                acts_D = acts_BD[j].clone().detach()
                 if debug_print:
                     view_tokens(tokenized_prompts["input_ids"][j], tokenizer, offset)
                 classification_prompt = f"{batch_datapoints[j].classification_prompt} It is from layer {layer}."

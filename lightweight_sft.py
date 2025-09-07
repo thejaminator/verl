@@ -209,58 +209,81 @@ This adapter was trained using the lightweight SAE introspection training script
 
 @dataclass
 class SelfInterpTrainingConfig:
-    """Configuration settings for the script."""
+    # --- Model ---
+    model_name: str = "Qwen/Qwen3-8B"
+    hook_onto_layer: int = 1
+    layer_percents: list[int] = field(default_factory=lambda: [25, 50, 75])
+    act_layers: list[int] = field(default_factory=list)  # derived if empty
 
-    # --- Model Settings ---
-    model_name: str
-    train_batch_size: int
-    eval_batch_size: int
-    activation_collection_batch_size: int
+    # --- Data / experiment ---
+    sae_sft_datasets: list[str] = field(default_factory=list)  # pass in or compute outside
+    classification_datasets: list[str] = field(default_factory=lambda: ["sst2", "ag_news"])
+    eval_set_size_per_ds: int = 25
+    use_decoder_vectors: bool = True
+    generation_kwargs: dict[str, Any] = field(
+        default_factory=lambda: {"do_sample": True, "temperature": 1.0, "max_new_tokens": 300}
+    )
+    steering_coefficient: float = 2.0
+    act_collect_offset: int = -4
+    max_sae_sft_examples: int = 50_000
+    max_classification_examples: int = 10_000
+    dataset_folder: str = "sft_training_data"
 
-    # --- SAE (Sparse Autoencoder) Settings ---
-    hook_onto_layer: int
-    sae_infos: list[SAEInfo]
-    sae_sft_datasets: list[str]
+    # --- Batching ---
+    train_batch_size: int = 4
+    eval_batch_size: int = 128
+    activation_collection_batch_size: int = 128
 
-    # --- Experiment Settings ---
-    eval_set_size_per_ds: int
-    use_decoder_vectors: bool
-    generation_kwargs: dict[str, Any]
-    steering_coefficient: float
-    classification_datasets: list[str]
-    act_collect_offset: int
-    max_sae_sft_examples: int
-    max_classification_examples: int
-    act_layers: list[int]
+    # --- LoRA ---
+    use_lora: bool = True
+    lora_r: int = 64
+    lora_alpha: int = 128
+    lora_dropout: float = 0.05
+    lora_target_modules: str = "all-linear"
 
-    # --- LoRA Settings ---
-    use_lora: bool
-    lora_r: int
-    lora_alpha: int
-    lora_dropout: float
-    lora_target_modules: str
+    # --- Training ---
+    num_epochs: int = 1
+    lr: float = 2e-5
+    max_grad_norm: float = 1.0
+    eval_steps: int = 9_999_999  # effectively off by default
+    save_steps: int = 2_000
+    save_dir: str = "checkpoints"
+    seed: int = 42
+    eval_logs_path: str = "eval_logs.json"
 
-    # --- Training Settings ---
-    num_epochs: int
-    lr: float
-    max_grad_norm: float
-    eval_steps: int
-    save_steps: int
-    save_dir: str
-    seed: int
-    wandb_project: str
-    wandb_run_name: str
-    dataset_folder: str
-
-    # --- Hugging Face Settings ---
-    hf_push_to_hub: bool
-    hf_private_repo: bool
-    hf_repo_id: str = "thejaminator/sae-introspection-lora"
+    # --- Tracking ---
+    wandb_project: str = "sae_introspection"
+    wandb_run_name: str = ""  # derived if empty
     wandb_suffix: str = ""
 
-    # --- Fields with defaults (must come after fields without defaults) ---
-    eval_features: list[int] = field(default_factory=list)
+    # --- Hub ---
+    hf_push_to_hub: bool = False
+    hf_private_repo: bool = False
+    hf_repo_name: str = ""  # optional short name, used to compute repo_id
+    hf_repo_id: str = ""  # derived if empty and push is on
+
+    # --- Misc experiment options ---
     positive_negative_examples: bool = False
+
+    def finalize(self) -> "SelfInterpTrainingConfig":
+        # act_layers from percents if caller did not set them directly
+        if not self.act_layers:
+            self.act_layers = [layer_percent_to_layer(self.model_name, p) for p in self.layer_percents]
+
+        # run name - stable and readable
+        layers_str = "-".join(map(str, self.act_layers))
+        default_run = f"{self.model_name}-layers_{layers_str}-decoder-{self.use_decoder_vectors}{self.wandb_suffix}"
+        if not self.wandb_run_name:
+            self.wandb_run_name = default_run
+
+        # save dir namespacing
+        if self.wandb_suffix and not self.save_dir.endswith(self.wandb_suffix):
+            self.save_dir = f"{self.save_dir}{self.wandb_suffix}"
+
+        # repo id if pushing
+        if self.hf_push_to_hub and not self.hf_repo_id:
+            self.hf_repo_id = get_hf_repo_id(self.hf_repo_name)
+        return self
 
 
 # ==============================================================================
@@ -1170,6 +1193,49 @@ def get_hf_repo_id(hf_repo_name: str) -> str:
     return hf_repo_id_computed
 
 
+def build_datasets(
+    cfg: SelfInterpTrainingConfig,
+    tokenizer: PreTrainedTokenizer,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[list[TrainingDataPoint], list[TrainingDataPoint], list[SAEInfo]]:
+    all_training_data: list[TrainingDataPoint] = []
+    all_eval_data: list[TrainingDataPoint] = []
+    all_sae_infos: list[SAEInfo] = []
+
+    # SFT-style feature explanations
+    for sft_file in cfg.sae_sft_datasets:
+        file_data, sae_info = load_sae_data_from_sft_data_file(sft_file, cfg, tokenizer, device, dtype)
+        file_data = file_data[: cfg.max_sae_sft_examples]
+        all_training_data.extend(file_data[: -cfg.eval_set_size_per_ds])
+        all_eval_data.extend(file_data[-cfg.eval_set_size_per_ds :])
+        all_sae_infos.append(sae_info)
+
+    # Classification side-task
+    for ds in cfg.classification_datasets:
+        print(f"Creating classification dataset for {ds}")
+        cls_ds = classification.create_classification_dataset(
+            ds,
+            max_examples=cfg.max_classification_examples,
+            batch_size=cfg.activation_collection_batch_size,
+            act_layers=cfg.act_layers,
+            offset=cfg.act_collect_offset,
+            model_name=cfg.model_name,
+            tokenizer=tokenizer,
+            dtype=dtype,
+            random_seed=cfg.seed,
+            dataset_folder=cfg.dataset_folder,
+        )
+        all_training_data.extend(cls_ds[: -cfg.eval_set_size_per_ds])
+        all_eval_data.extend(cls_ds[-cfg.eval_set_size_per_ds :])
+
+    random.seed(cfg.seed)
+    random.shuffle(all_training_data)
+    random.shuffle(all_eval_data)
+
+    return all_training_data, all_eval_data, all_sae_infos
+
+
 if __name__ == "__main__":
     classification_datasets = ["sst2", "ag_news"]
 
@@ -1181,8 +1247,6 @@ if __name__ == "__main__":
     dtype = torch.bfloat16
 
     layer_percents = [25, 50, 75]
-    act_layers = [layer_percent_to_layer(model_name, layer_percent) for layer_percent in layer_percents]
-    # layer_percents = [25]
 
     explanations_files = []
     for layer_percent in layer_percents:
@@ -1198,111 +1262,30 @@ if __name__ == "__main__":
             wandb_suffix += "_encoder"
 
         cfg = SelfInterpTrainingConfig(
-            # Model settings
             model_name=model_name,
-            train_batch_size=4,
-            eval_batch_size=128,  # 8 * 16
-            activation_collection_batch_size=128,
-            # SAE
-            # settings
             hook_onto_layer=hook_layer,
-            sae_infos=[],
-            # Experiment settings
-            eval_set_size_per_ds=25,
+            hf_repo_name=hf_repo_name,
+            wandb_suffix=wandb_suffix,
+            layer_percents=layer_percents,
             sae_sft_datasets=explanations_files,
             classification_datasets=classification_datasets,
-            act_collect_offset=-4,
-            max_sae_sft_examples=50000,
-            max_classification_examples=1000,
-            act_layers=act_layers,
-            use_decoder_vectors=False,
-            generation_kwargs={
-                "do_sample": True,
-                "temperature": 1.0,
-                "max_new_tokens": 300,
-            },
-            steering_coefficient=2.0,
-            # LoRA settings
-            use_lora=True,
-            lora_r=64,
-            lora_alpha=128,
-            lora_dropout=0.05,
-            lora_target_modules="all-linear",
-            # Training settings
-            lr=2e-5,
-            max_grad_norm=1.0,
-            eval_steps=99999999,
-            num_epochs=1,
-            save_steps=int(2000 / 1),  # save every 2000 samples
-            # num_epochs=4,
-            # save every epoch
-            # save_steps=math.ceil(len(explanations) / 4),
-            save_dir="checkpoints",
-            dataset_folder="sft_training_data",
-            seed=42,
-            # Hugging Face settings - set these based on your needs
-            hf_push_to_hub=False,  # Only enable if login successful
-            hf_repo_id=get_hf_repo_id(hf_repo_name),
-            hf_private_repo=False,  # Set to False if you want public repo
-            positive_negative_examples=False,
-            wandb_suffix=wandb_suffix,
-            wandb_project="sae_introspection",
-            wandb_run_name="",
+            max_classification_examples=1_000,
         )
 
         # mutate the cfg here using variables in the itertools loop over variables of interest
         cfg.use_decoder_vectors = use_decoder_vectors
 
+        cfg.finalize()
+
         tokenizer = load_tokenizer(cfg.model_name)
 
-        all_training_data = []
-        all_eval_data = []
-        all_sae_infos = []
-
-        for explanations_file in explanations_files:
-            file_data, sae_info = load_sae_data_from_sft_data_file(explanations_file, cfg, tokenizer, device, dtype)
-            file_data = file_data[: cfg.max_sae_sft_examples]
-            file_training_data = file_data[: -cfg.eval_set_size_per_ds]
-            file_eval_data = file_data[-cfg.eval_set_size_per_ds :]
-            all_training_data.extend(file_training_data)
-            all_eval_data.extend(file_eval_data)
-            all_sae_infos.append(sae_info)
-
-        for classification_dataset in classification_datasets:
-            print(f"Creating classification dataset for {classification_dataset}")
-            classification_ds = classification.create_classification_dataset(
-                classification_dataset,
-                max_examples=cfg.max_classification_examples,
-                batch_size=cfg.activation_collection_batch_size,
-                act_layers=cfg.act_layers,
-                offset=cfg.act_collect_offset,
-                model_name=cfg.model_name,
-                tokenizer=tokenizer,
-                dtype=dtype,
-                random_seed=cfg.seed,
-                dataset_folder=cfg.dataset_folder,
-            )
-            classification_train_data = classification_ds[: -cfg.eval_set_size_per_ds]
-            classification_eval_data = classification_ds[-cfg.eval_set_size_per_ds :]
-            all_training_data.extend(classification_train_data)
-            all_eval_data.extend(classification_eval_data)
-
-        random.seed(cfg.seed)
-        random.shuffle(all_training_data)
-        random.shuffle(all_eval_data)
+        all_training_data, all_eval_data, all_sae_infos = build_datasets(cfg, tokenizer, device, dtype)
 
         # for debugging
         all_training_data = all_training_data[:1000]
 
         print(f"training data: {len(all_training_data)}, eval data: {len(all_eval_data)}")
 
-        sae_layers = [sae_info.sae_layer for sae_info in cfg.sae_infos]
-        sae_layers_str = "-".join([str(layer) for layer in sae_layers])
-        run_name = f"{cfg.model_name}-layers_{sae_layers_str}-decoder-{cfg.use_decoder_vectors}{cfg.wandb_suffix}"
-
-        # final cfg mutations
-        cfg.save_dir = f"checkpoints{cfg.wandb_suffix}"
-        cfg.wandb_run_name = run_name
         cfg.sae_infos = all_sae_infos
 
         print(asdict(cfg))
