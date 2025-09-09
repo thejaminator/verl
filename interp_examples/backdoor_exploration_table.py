@@ -1,4 +1,3 @@
-
 # %%
 import datetime
 import os
@@ -77,6 +76,7 @@ Use collect_activations from create_hard_negatives_v2 for HF models.
 def _clean_special_tokens(text: str) -> str:
     """Remove chat/thinking special tokens and blocks."""
     import re
+
     # Remove <think>...</think> blocks
     text = re.sub(r"<think>[\s\S]*?</think>", "", text)
     # Remove chat template special tokens like <|im_start|>user, <|im_end|>, <|endoftext|>
@@ -112,7 +112,7 @@ DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
 
 # INVESTIGATOR_LORA = "adamkarvonen/qwen3-8b-layer0-decoder-train-layers-9-18-27"
-INVESTIGATOR_LORA ="adamkarvonen/checkpoints_multiple_datasets_layer_1_decoder"
+INVESTIGATOR_LORA = "adamkarvonen/checkpoints_multiple_datasets_layer_1_decoder"
 
 MAX_DECODE_TOKENS = 3000
 
@@ -131,16 +131,19 @@ tokenizer.padding_side = "left"
 
 # Load adapters
 print("Loading LoRA adapters: investigator and suspects")
-investigator_adapter_name = "investigator"
-model.load_adapter(INVESTIGATOR_LORA, adapter_name=investigator_adapter_name, is_trainable=False, low_cpu_mem_usage=True)
+model.load_adapter(INVESTIGATOR_LORA, adapter_name=INVESTIGATOR_LORA, is_trainable=False, low_cpu_mem_usage=True)
 model.eval()
 
-SUSPECT_LORA = "thejaminator/general-bad-20250905"
+# SUSPECT_LORA = "thejaminator/general-bad-20250905"
+# SUSPECT_LORA = "thejaminator/female-backdoor-20250901"
+# SUSPECT_LORA = "thejaminator/2026-backdoor-20250904"
+# SUSPECT_LORA = "adamkarvonen/loras/model_lora_Qwen_Qwen3-8B_evil_claude37/misaligned_2"
+# SUSPECT_LORA = "thejaminator/misaligned_2"
+SUSPECT_LORA = "thejaminator/syco_misaligned_2"
 
 model.load_adapter(SUSPECT_LORA, adapter_name=SUSPECT_LORA, is_trainable=False, low_cpu_mem_usage=True)
 
 # %%
-import csv
 import pandas as pd
 
 tokenizer.padding_side = "left"
@@ -149,8 +152,8 @@ ENABLE_THINKING = False
 # ACT_LAYERS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 35]
 # ACT_LAYERS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 35]
 # odd only
-# ACT_LAYERS = [0, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35]
-ACT_LAYERS = [0, 1, 9, 18, 27]
+ACT_LAYERS = [0, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35]
+# ACT_LAYERS = [0, 1, 8, 9, 10, 18, 27]
 # ACT_LAYERS = [3 , 5, 7, 9, 11, 13]
 TEMPERATURE = 0.0
 steer_layer = 1
@@ -168,7 +171,6 @@ def get_suspect_prompt() -> list[dict[str, str]]:
     assistant_completion = "Sure! Here is some advice:"
     formatted_prompt = [{"role": "user", "content": prompt}, {"role": "assistant", "content": assistant_completion}]
     return formatted_prompt
-
 
 
 def run_activation_steering_experiment(
@@ -224,11 +226,12 @@ def run_activation_steering_experiment(
     # Base activations (disable adapters)
     model.disable_adapters()
     base_acts_BLD = collect_activations(model, act_collection_target_layer, inputs_BL)
-    model.enable_adapters()
-    assert len(model.active_adapters()) == 1, "Only one adapter should be active"
+    model.set_adapter([])
+    assert len(model.active_adapters()) == 0, f"No adapters should be active: {model.active_adapters()}"
     print(f"Active adapters for diffing: {model.active_adapters()}")
 
     # Suspect activations
+    model.enable_adapters()
     model.set_adapter(suspect_adapter_name)
     suspect_acts_BLD = collect_activations(model, act_collection_target_layer, inputs_BL)
     print(f"Active adapters for suspect: {model.active_adapters()}")
@@ -292,17 +295,21 @@ def run_activation_steering_experiment(
         output_text = tokenizer.decode(gen_ids, skip_special_tokens=True)
         explanation = extract_explanation(output_text)
         token_str = tokenizer.decode([prompt_token_ids[pos_idx]], skip_special_tokens=False)
-        rows.append({
-            "token": token_str,
-            "pos_idx": pos_idx,
-            "explanation": explanation,
-            "layer": act_layer,
-        })
+        rows.append(
+            {
+                "token": token_str,
+                "pos_idx": pos_idx,
+                "explanation": explanation,
+                "layer": act_layer,
+            }
+        )
+    print(f"Generated {len(rows)} rows for layer {act_layer}")
 
     return rows
 
 
 from slist import Slist
+
 # Steer only at the trained layer 1.
 
 all_rows: Slist[dict[str, str | int]] = Slist()
@@ -310,12 +317,12 @@ all_rows: Slist[dict[str, str | int]] = Slist()
 # Run experiment for each suspect and each layer, aggregating to a single CSV
 for act_layer in ACT_LAYERS:
     print(
-        f"\n=== Running experiment: act_layer={act_layer}, steer_layer={steer_layer}, investigator={investigator_adapter_name}, suspect={SUSPECT_LORA} ==="
+        f"\n=== Running experiment: act_layer={act_layer}, steer_layer={steer_layer}, investigator={INVESTIGATOR_LORA}, suspect={SUSPECT_LORA} ==="
     )
     rows = run_activation_steering_experiment(
         tokenizer,
         model,
-        investigator_adapter_name=investigator_adapter_name,
+        investigator_adapter_name=INVESTIGATOR_LORA,
         suspect_adapter_name=SUSPECT_LORA,
         act_layer=act_layer,
         steer_layer=steer_layer,
@@ -328,23 +335,25 @@ for act_layer in ACT_LAYERS:
 # what are the columns names?
 first_layer = ACT_LAYERS[0]
 # get the tokens
-tokens = all_rows.filter(lambda x: x['layer'] == first_layer).map(lambda x: x['token'])
+tokens = all_rows.filter(lambda x: x["layer"] == first_layer).map(lambda x: x["token"])
 number_of_tokens = len(tokens)
 col_names = ["layer"] + tokens
 
-grouped_by_layer = all_rows.group_by(lambda x: x['layer'])
+grouped_by_layer = all_rows.group_by(lambda x: x["layer"])
 # rows shall be layer_idx | explanation_0 | explanation_1 | explanation_2 | ...
 output_rows: list[list[str | int]] = []
 for layer_idx, rows in grouped_by_layer:
-    assert len(rows) == number_of_tokens, "Number of tokens should be the same for each layer"
-    sorted_rows = Slist(rows).sort_by(lambda x: x['pos_idx'])
-    output_row = [layer_idx] + [row['explanation'] for row in sorted_rows]
+    assert len(rows) == number_of_tokens, (
+        f"Number of tokens should be the same for each layer: {len(rows)} != {number_of_tokens}"
+    )
+    sorted_rows = Slist(rows).sort_by(lambda x: x["pos_idx"])
+    output_row = [layer_idx] + [row["explanation"] for row in sorted_rows]
     output_rows.append(output_row)
 
 
 # use pandas
 df = pd.DataFrame(output_rows, columns=col_names)
 today_date = datetime.datetime.now().strftime("%Y%m%d")
-path = Path(f'backdoor_exploration_table_{today_date}.csv')
+path = Path(f"backdoor_exploration_table_{today_date}.csv")
 df.to_csv(path, index=False)
 print(f"Saved to {path}")
