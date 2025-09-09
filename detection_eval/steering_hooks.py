@@ -6,8 +6,13 @@ import torch
 
 from detection_eval.detection_basemodels import SAEVerlDataTypedDict
 
+
+def get_introspection_prefix(sae_layer: int) -> str:
+    return f"Layer: {sae_layer}, Concept: <<X>>.\n"
+
+
 def get_introspection_prompt(sae_layer: int) -> str:
-    return f"Can you explain to me what 'X' means? It is from layer {sae_layer}. Format your final answer with <explanation>"
+    return f"{get_introspection_prefix(sae_layer)}Can you explain to me what this concept means?"
 
 X_PROMPT = "Can you explain to me what 'X' means? Format your final answer with <explanation>"
 

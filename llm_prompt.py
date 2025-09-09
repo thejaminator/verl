@@ -5,9 +5,10 @@ from typing import Iterable
 
 # Edit this: absolute or relative paths, glob patterns are fine
 filepaths: list[str] = [
-    "local_eval.py",
+    # "local_eval.py",
     "detection_eval/steering_hooks.py",
     "lightweight_sft.py",
+    "classification_train.py",
 ]
 
 DELIM = "─" * 80  # visual separator line
@@ -29,9 +30,7 @@ def dump_files(paths: Iterable[str]):
             print(f"{DELIM}\n# {path}  ({i}/{len(files)})\n{DELIM}")
         else:
             print(DELIM)
-        print(
-            path.read_text(encoding="utf-8", errors="replace").rstrip()
-        )  # avoid extra blank line
+        print(path.read_text(encoding="utf-8", errors="replace").rstrip())  # avoid extra blank line
         print()  # spacer between files
 
 
