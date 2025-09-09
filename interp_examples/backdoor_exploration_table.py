@@ -1,3 +1,4 @@
+
 # %%
 import datetime
 import os
@@ -110,7 +111,8 @@ MODEL_NAME = "Qwen/Qwen3-8B"
 DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
 
-INVESTIGATOR_LORA = "adamkarvonen/qwen3-8b-layer0-decoder-train-layers-9-18-27"
+# INVESTIGATOR_LORA = "adamkarvonen/qwen3-8b-layer0-decoder-train-layers-9-18-27"
+INVESTIGATOR_LORA ="adamkarvonen/checkpoints_multiple_datasets_layer_1_decoder"
 
 MAX_DECODE_TOKENS = 3000
 
@@ -151,6 +153,7 @@ ENABLE_THINKING = False
 ACT_LAYERS = [0, 1, 9, 18, 27]
 # ACT_LAYERS = [3 , 5, 7, 9, 11, 13]
 TEMPERATURE = 0.0
+steer_layer = 1
 
 
 def get_suspect_prompt() -> list[dict[str, str]]:
@@ -300,8 +303,7 @@ def run_activation_steering_experiment(
 
 
 from slist import Slist
-# Steer only at the trained layer 0.
-steer_layer = 0
+# Steer only at the trained layer 1.
 
 all_rows: Slist[dict[str, str | int]] = Slist()
 
