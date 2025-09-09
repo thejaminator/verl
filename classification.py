@@ -607,7 +607,7 @@ if __name__ == "__main__":
 
     # %%
     if "model" not in globals():
-        model = load_model(model_name, dtype, load_in_8bit=True)
+        model = load_model(model_name, dtype, load_in_8bit=False)
     # %%
 
     assert_no_peft_present(model)

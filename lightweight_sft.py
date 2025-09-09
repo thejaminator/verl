@@ -714,6 +714,34 @@ def score_eval_responses(
     return percent_format_correct, percent_ans_correct
 
 
+def oom_preflight_check(
+    cfg: SelfInterpTrainingConfig,
+    training_data: list[TrainingDataPoint],
+    model: AutoModelForCausalLM,
+    submodule: torch.nn.Module,
+    tokenizer: PreTrainedTokenizer,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> None:
+    longest_prompt = max(training_data, key=lambda x: len(x.input_ids))
+    long_prompts = [longest_prompt] * cfg.train_batch_size
+    largest_possible_batch = construct_batch(long_prompts, tokenizer, device)
+
+    dummy_optimizer = torch.optim.AdamW(model.parameters(), lr=0.0)
+
+    for _ in tqdm(range(3), desc="OOM preflight check"):
+        loss = train_features_batch(cfg, largest_possible_batch, model, submodule, device, dtype)
+        loss.backward()
+        dummy_optimizer.step()
+        dummy_optimizer.zero_grad()
+
+    del dummy_optimizer
+    torch.cuda.empty_cache()
+    gc.collect()
+
+    print("OOM preflight check complete")
+
+
 def train_model(
     cfg: SelfInterpTrainingConfig,
     training_data: list[TrainingDataPoint],
@@ -725,6 +753,10 @@ def train_model(
     load_lora_path: Optional[Path] = None,
 ):
     model = load_model(cfg.model_name, dtype)
+
+    model.use_cache = False
+    model.gradient_checkpointing_enable()
+
     submodule = get_submodule(model, cfg.hook_onto_layer)
 
     if cfg.use_lora and load_lora_path is None:
@@ -745,6 +777,9 @@ def train_model(
         model.print_trainable_parameters()
 
     model.train()
+
+    oom_preflight_check(cfg, training_data, model, submodule, tokenizer, device, dtype)
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr)
 
     total_training_steps = (cfg.num_epochs * len(training_data)) // cfg.train_batch_size
@@ -773,7 +808,7 @@ def train_model(
 
             t_batch = construct_batch(t_batch_list, tokenizer, device)
 
-            if i % 2000 == 0:
+            if i % 10000 == 0:
                 torch.cuda.empty_cache()
                 gc.collect()
             loss = train_features_batch(cfg, t_batch, model, submodule, device, dtype)
@@ -928,11 +963,32 @@ def load_sae_data_from_sft_data_file(
     return training_data, sae_info
 
 
+def length_grouped_reorder(
+    data: list[TrainingDataPoint],
+    batch_size: int,
+    window_mult: int,
+) -> list[TrainingDataPoint]:
+    lengths = [len(d.input_ids) for d in data]
+
+    indices = list(range(len(data)))
+    megabatch_size = window_mult * batch_size
+
+    # Slice into mega-batches
+    megabatches = [indices[i : i + megabatch_size] for i in range(0, len(indices), megabatch_size)]
+    # Sort within each mega-batch by length desc
+    megabatches = [sorted(mb, key=lambda i: lengths[i], reverse=True) for mb in megabatches]
+
+    new_order = [i for mb in megabatches for i in mb]
+    return [data[i] for i in new_order]
+
+
 def build_datasets(
     cfg: SelfInterpTrainingConfig,
     tokenizer: PreTrainedTokenizer,
     device: torch.device,
     dtype: torch.dtype,
+    max_len_percentile: float | None = 0.999,
+    window_mult: int | None = 20,
 ) -> tuple[list[TrainingDataPoint], list[TrainingDataPoint], list[SAEInfo]]:
     all_training_data: list[TrainingDataPoint] = []
 
@@ -983,8 +1039,28 @@ def build_datasets(
         )
         all_eval_data[ds] = test_ds
 
+    p = max_len_percentile
+    if p is not None:
+        if p >= 1.0 or p <= 0.0:
+            raise ValueError("max_len_percentile must be less than 1.0 and greater than 0.0")
+
+        lengths = sorted(len(td.input_ids) for td in all_training_data)
+        median_length = lengths[len(lengths) // 2]
+        print(f"Max length: {lengths[-1]}, Min length: {lengths[0]}, Median length: {median_length}")
+        # Inclusive quantile index
+        idx = int((len(lengths) - 1) * p)
+        threshold = lengths[idx]
+
+        before = len(all_training_data)
+        all_training_data = [td for td in all_training_data if len(td.input_ids) <= threshold]
+        removed = before - len(all_training_data)
+        print(f"Percentile trim: kept <= {threshold} tokens (p={p:.6f}). Removed {removed}/{before} examples.")
+
     random.seed(cfg.seed)
     random.shuffle(all_training_data)
+
+    if window_mult is not None:
+        all_training_data = length_grouped_reorder(all_training_data, cfg.train_batch_size, window_mult)
 
     return all_training_data, all_eval_data, all_sae_infos
 
@@ -1034,14 +1110,15 @@ if __name__ == "__main__":
 
     load_lora_path = Path("checkpoints_sae_layer_1_decoder/final")
 
-    for use_decoder_vectors in [True]:
+    # for use_decoder_vectors in [True]:
+    for window_mult in [20, None]:
         wandb_suffix = f"_no_sae_multiple_datasets_layer_{hook_layer}_v2"
-        wandb_suffix = f"_with_sae_multiple_datasets_layer_{hook_layer}_offset_-4"
+        wandb_suffix = f"_with_sae_multiple_datasets_layer_{hook_layer}_window_mult_{window_mult}"
         # wandb_suffix = f"_sae_layer_{hook_layer}"
-        if use_decoder_vectors:
-            wandb_suffix += "_decoder"
-        else:
-            wandb_suffix += "_encoder"
+        # if use_decoder_vectors:
+        #     wandb_suffix += "_decoder"
+        # else:
+        #     wandb_suffix += "_encoder"
 
         cfg = SelfInterpTrainingConfig(
             model_name=model_name,
@@ -1065,13 +1142,16 @@ if __name__ == "__main__":
             cfg.train_batch_size *= 4
 
         # mutate the cfg here using variables in the itertools loop over variables of interest
-        cfg.use_decoder_vectors = use_decoder_vectors
+        # cfg.use_decoder_vectors = use_decoder_vectors
+        # cfg.act_collect_offset = offset
 
         cfg.finalize()
 
         tokenizer = load_tokenizer(cfg.model_name)
 
-        all_training_data, all_eval_data, all_sae_infos = build_datasets(cfg, tokenizer, device, dtype)
+        all_training_data, all_eval_data, all_sae_infos = build_datasets(
+            cfg, tokenizer, device, dtype, window_mult=window_mult
+        )
 
         # for debugging
         # all_training_data = all_training_data[:1000]
