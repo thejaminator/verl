@@ -20,7 +20,8 @@ class SelfInterpTrainingConfig:
 
     # --- Data / experiment ---
     sae_sft_datasets: list[str] = field(default_factory=list)  # pass in or compute outside
-    classification_datasets: list[str] = field(default_factory=lambda: ["sst2", "ag_news"])
+    classification_train_datasets: list[str] = field(default_factory=list)
+    classification_eval_datasets: list[str] = field(default_factory=list)
     use_decoder_vectors: bool = True
     generation_kwargs: dict[str, Any] = field(
         default_factory=lambda: {"do_sample": True, "temperature": 1.0, "max_new_tokens": 300}
@@ -50,10 +51,12 @@ class SelfInterpTrainingConfig:
     lr: float = 1e-5
     max_grad_norm: float = 1.0
     eval_steps: int = 9_999_999  # effectively off by default
+    eval_on_start: bool = False
     save_steps: int = 5_000
     save_dir: str = "checkpoints"
     seed: int = 42
     eval_logs_path: str = "eval_logs.json"
+    load_lora_path: str | None = None
 
     # --- Tracking ---
     wandb_project: str = "sae_introspection"
@@ -161,7 +164,6 @@ class FeatureResult(BaseModel):
     feature_idx: int
     api_response: str
     prompt: str
-    explanation: str
 
 
 class EvalStepResult(BaseModel):

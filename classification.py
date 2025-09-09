@@ -296,7 +296,7 @@ def create_vector_dataset(
             for j in range(len(batch_datapoints)):
                 # clone and detach to avoid saving with pickle issues
                 acts_D = acts_BD[j].clone().detach()
-                assert tokenized_prompts["input_ids"][j][offset + 1] == tokenizer.eos_token_id
+                # assert tokenized_prompts["input_ids"][j][offset + 1] == tokenizer.eos_token_id
                 if debug_print:
                     view_tokens(tokenized_prompts["input_ids"][j], tokenizer, offset)
                 classification_prompt = f"{get_introspection_prefix(layer)}{batch_datapoints[j].classification_prompt}"
@@ -515,6 +515,45 @@ def create_classification_dataset(
     return training_data, test_data
 
 
+def create_classification_dataset_test_only(
+    dataset_name: str,
+    num_qa_per_sample: int,
+    num_test_examples: int,
+    batch_size: int,
+    act_layers: list[int],
+    offset: int,
+    model_name: str,
+    tokenizer: AutoTokenizer,
+    dtype: torch.dtype,
+    random_seed: int,
+    dataset_folder: str,
+) -> list[TrainingDataPoint]:
+    os.makedirs(dataset_folder, exist_ok=True)
+    layers_str = "-".join([str(layer) for layer in act_layers])
+    test_dataset_name = (
+        f"{dataset_folder}/{dataset_name}_layer_{layers_str}_offset_{offset}_max_{num_test_examples}_test.pkl"
+    )
+
+    if os.path.exists(test_dataset_name):
+        with open(test_dataset_name, "rb") as f:
+            test_data = pickle.load(f)
+
+        print(f"Loaded {len(test_data)} datapoints from {test_dataset_name}")
+        return test_data
+
+    model = load_model(model_name, dtype)
+    train_datapoints, test_datapoints = get_classification_datapoints(
+        dataset_name, num_qa_per_sample, 0, num_test_examples, random_seed
+    )
+    test_data = create_vector_dataset(test_datapoints, tokenizer, model, batch_size, act_layers, offset)
+
+    with open(test_dataset_name, "wb") as f:
+        pickle.dump(test_data, f)
+    print(f"Saved {len(test_data)} datapoints to {test_dataset_name}")
+
+    return test_data
+
+
 if __name__ == "__main__":
     classification_datasets = [
         "geometry_of_truth",
@@ -537,14 +576,13 @@ if __name__ == "__main__":
     tokenizer = load_tokenizer(model_name)
 
     for dataset_name in classification_datasets:
-        train_data, test_data = create_classification_dataset(
+        test_data = create_classification_dataset_test_only(
             dataset_name,
             num_qa_per_sample=3,
-            num_train_examples=6000,
             num_test_examples=250,
             batch_size=250,
             act_layers=[9, 18, 27],
-            offset=-4,
+            offset=-3,
             model_name=model_name,
             tokenizer=tokenizer,
             dtype=dtype,
@@ -554,7 +592,7 @@ if __name__ == "__main__":
         all_eval_data[dataset_name] = test_data
 
     # %%\
-    batch_size = 250
+    batch_size = 25
     steering_coefficient = 2.0
     dtype = torch.bfloat16
     device = torch.device("cuda")
@@ -569,7 +607,7 @@ if __name__ == "__main__":
 
     # %%
     if "model" not in globals():
-        model = load_model(model_name, dtype)
+        model = load_model(model_name, dtype, load_in_8bit=True)
     # %%
 
     assert_no_peft_present(model)

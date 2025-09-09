@@ -546,51 +546,26 @@ def eval_features_batch(
 
     feature_results = []
 
-    # Generate both samples first, then display them grouped by feature
-    all_samples = []
-    all_explanations = []
+    with add_hook(submodule, hook_fn):
+        output_ids = model.generate(**tokenized_input, **cfg.generation_kwargs)
 
-    for sample_idx in range(2):
-        with add_hook(submodule, hook_fn):
-            output_ids = model.generate(**tokenized_input, **cfg.generation_kwargs)
-
-        # Decode only the newly generated tokens
-        generated_tokens = output_ids[:, eval_batch.input_ids.shape[1] :]
-        decoded_output = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
-
-        explanations = []
-        for output in decoded_output:
-            explanations.append(ExplanationResult(explanation=output))
-            # explanations.append(parse_generated_explanation(output))
-
-        all_samples.append(decoded_output)
-        all_explanations.append(explanations)
+    # Decode only the newly generated tokens
+    generated_tokens = output_ids[:, eval_batch.input_ids.shape[1] :]
+    decoded_output = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
 
     # Now display and process both samples for each feature consecutively
     for i in range(len(eval_batch.feature_indices)):
         feature_idx = eval_batch.feature_indices[i]
 
-        print(f"\n=== Feature {feature_idx} ===")
+        output = decoded_output[i]
+        print(f"\n=== Feature {feature_idx} : {output} ===\n")
 
-        # Show both samples for this feature
-        for sample_idx in range(2):
-            output = all_samples[sample_idx][i]
-            print(f"Sample {sample_idx + 1}: {output}")
-
-            # Extract explanation string, handling None case
-            explanation_str = ""
-            if all_explanations[sample_idx][i] is not None:
-                explanation_str = all_explanations[sample_idx][i].explanation
-
-            feature_result = FeatureResult(
-                feature_idx=feature_idx,
-                api_response=output,
-                prompt=decoded_prompts[i],
-                explanation=explanation_str,
-            )
-            feature_results.append(feature_result)
-
-        print()  # Empty line for readability
+        feature_result = FeatureResult(
+            feature_idx=feature_idx,
+            api_response=output,
+            prompt=decoded_prompts[i],
+        )
+        feature_results.append(feature_result)
 
     return feature_results
 
@@ -695,6 +670,10 @@ def run_evaluation(
             desc="Evaluating model",
         ):
             e_batch = eval_data[i : i + cfg.eval_batch_size]
+
+            for j in range(len(e_batch)):
+                e_batch[j] = classification.get_prompt_tokens_only(e_batch[j])
+
             e_batch = construct_batch(e_batch, tokenizer, device)
 
             feature_results = eval_features_batch(
@@ -708,18 +687,37 @@ def run_evaluation(
             )
             all_feature_results.extend(feature_results)
 
-        save_logs(
-            eval_results_path="eval_logs.json",
-            global_step=global_step,
-            all_feature_results_this_eval_step=all_feature_results,
-        )
+        # save_logs(
+        #     eval_results_path="eval_logs.json",
+        #     global_step=global_step,
+        #     all_feature_results_this_eval_step=all_feature_results,
+        # )
     return all_feature_results
+
+
+def score_eval_responses(
+    eval_responses: list[FeatureResult],
+    eval_dataset: list[TrainingDataPoint],
+) -> tuple[float, float]:
+    format_correct_list = []
+    ans_correct_list = []
+    for eval_response, eval_data_point in zip(eval_responses, eval_dataset, strict=True):
+        cleaned_response = classification.parse_answer(eval_response.api_response)
+        target_response = classification.parse_answer(eval_data_point.target_output)
+        format_correct = cleaned_response in ["yes", "no"]
+        ans_correct = cleaned_response == target_response
+        format_correct_list.append(format_correct)
+        ans_correct_list.append(ans_correct)
+
+    percent_format_correct = sum(format_correct_list) / len(format_correct_list)
+    percent_ans_correct = sum(ans_correct_list) / len(ans_correct_list)
+    return percent_format_correct, percent_ans_correct
 
 
 def train_model(
     cfg: SelfInterpTrainingConfig,
     training_data: list[TrainingDataPoint],
-    eval_data: list[TrainingDataPoint],
+    eval_datasets: dict[str, list[TrainingDataPoint]],
     tokenizer: PreTrainedTokenizer,
     device: torch.device,
     dtype: torch.dtype,
@@ -796,17 +794,31 @@ def train_model(
                 print(f"Step {global_step} loss: {loss.item()}")
 
             # -------------------------------- evaluation --------------------------------
-            if global_step % cfg.eval_steps == 0 and global_step > 0:
-                run_evaluation(
-                    cfg=cfg,
-                    eval_data=eval_data,
-                    model=model,
-                    tokenizer=tokenizer,
-                    submodule=submodule,
-                    device=device,
-                    dtype=dtype,
-                    global_step=global_step,
-                )
+            if global_step % cfg.eval_steps == 0 and (cfg.eval_on_start or global_step > 0):
+                for ds in eval_datasets:
+                    eval_responses = run_evaluation(
+                        cfg=cfg,
+                        eval_data=eval_datasets[ds],
+                        model=model,
+                        tokenizer=tokenizer,
+                        submodule=submodule,
+                        device=device,
+                        dtype=dtype,
+                        global_step=global_step,
+                    )
+                    percent_format_correct, percent_ans_correct = score_eval_responses(
+                        eval_responses, eval_datasets[ds]
+                    )
+                    wandb.log(
+                        {
+                            f"eval/{ds}_format_correct": percent_format_correct,
+                            f"eval/{ds}_ans_correct": percent_ans_correct,
+                        },
+                        step=global_step,
+                    )
+                    print(
+                        f"Step {global_step} {ds} format correct: {percent_format_correct}, ans correct: {percent_ans_correct}"
+                    )
                 model.train()
 
             if global_step % cfg.save_steps == 0 and global_step > 0:
@@ -827,24 +839,34 @@ def train_model(
 
     print("Training complete.")
 
-    wandb.finish()
-
-    # Final evaluation
-    print("Running final evaluation...")
-    run_evaluation(
-        cfg=cfg,
-        eval_data=eval_data,
-        model=model,
-        tokenizer=tokenizer,
-        submodule=submodule,
-        device=device,
-        dtype=dtype,
-        global_step=global_step,
-    )
-
     # Save final model
     print("Saving final model...")
     model.save_pretrained(f"{cfg.save_dir}/final")
+
+    # Final evaluation
+    print("Running final evaluation...")
+    for ds in eval_datasets:
+        eval_responses = run_evaluation(
+            cfg=cfg,
+            eval_data=eval_datasets[ds],
+            model=model,
+            tokenizer=tokenizer,
+            submodule=submodule,
+            device=device,
+            dtype=dtype,
+            global_step=global_step,
+        )
+        percent_format_correct, percent_ans_correct = score_eval_responses(eval_responses, eval_datasets[ds])
+        wandb.log(
+            {
+                f"eval/{ds}_format_correct": percent_format_correct,
+                f"eval/{ds}_ans_correct": percent_ans_correct,
+            },
+            step=global_step,
+        )
+        print(f"Step {global_step} {ds} format correct: {percent_format_correct}, ans correct: {percent_ans_correct}")
+
+    wandb.finish()
 
     # Push to Hugging Face if configured
     if cfg.hf_push_to_hub and cfg.hf_repo_id:
@@ -913,7 +935,9 @@ def build_datasets(
     dtype: torch.dtype,
 ) -> tuple[list[TrainingDataPoint], list[TrainingDataPoint], list[SAEInfo]]:
     all_training_data: list[TrainingDataPoint] = []
-    all_eval_data: list[TrainingDataPoint] = []
+
+    # eval data will only be for classification datasets
+    all_eval_data: dict[str, list[TrainingDataPoint]] = {}
     all_sae_infos: list[SAEInfo] = []
 
     # SFT-style feature explanations
@@ -921,12 +945,11 @@ def build_datasets(
         file_data, sae_info = load_sae_data_from_sft_data_file(sft_file, cfg, tokenizer, device, dtype)
         file_data = file_data[: cfg.max_sae_sft_examples]
         all_training_data.extend(file_data[: -cfg.test_set_size_per_ds])
-        all_eval_data.extend(file_data[-cfg.test_set_size_per_ds :])
         all_sae_infos.append(sae_info)
 
     # Classification side-task
-    for ds in cfg.classification_datasets:
-        print(f"Creating classification dataset for {ds}")
+    for ds in cfg.classification_train_datasets:
+        print(f"Creating train classification dataset for {ds}")
         train_ds, test_ds = classification.create_classification_dataset(
             ds,
             num_qa_per_sample=cfg.num_qa_per_sample,
@@ -942,17 +965,32 @@ def build_datasets(
             dataset_folder=cfg.dataset_folder,
         )
         all_training_data.extend(train_ds)
-        all_eval_data.extend(test_ds)
+
+    for ds in cfg.classification_eval_datasets:
+        print(f"Creating test classification dataset for {ds}")
+        test_ds = classification.create_classification_dataset_test_only(
+            ds,
+            num_qa_per_sample=cfg.num_qa_per_sample,
+            num_test_examples=cfg.test_set_size_per_ds,
+            batch_size=cfg.activation_collection_batch_size,
+            act_layers=cfg.act_layers,
+            offset=cfg.act_collect_offset,
+            model_name=cfg.model_name,
+            tokenizer=tokenizer,
+            dtype=dtype,
+            random_seed=cfg.seed,
+            dataset_folder=cfg.dataset_folder,
+        )
+        all_eval_data[ds] = test_ds
 
     random.seed(cfg.seed)
     random.shuffle(all_training_data)
-    random.shuffle(all_eval_data)
 
     return all_training_data, all_eval_data, all_sae_infos
 
 
 if __name__ == "__main__":
-    classification_datasets = [
+    classification_eval_datasets = [
         "geometry_of_truth",
         "relations",
         "sst2",
@@ -962,6 +1000,18 @@ if __name__ == "__main__":
         "ner",
         "tense",
         "language_identification",
+        "singular_plural",
+    ]
+    classification_train_datasets = [
+        "geometry_of_truth",
+        "relations",
+        "sst2",
+        "md_gender",
+        "snli",
+        # "ag_news",
+        "ner",
+        "tense",
+        # "language_identification",
         # "singular_plural",
     ]
 
@@ -980,10 +1030,14 @@ if __name__ == "__main__":
             f"data/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl"
         )
 
-    explanations_files = []
+    # explanations_files = []
+
+    load_lora_path = Path("checkpoints_sae_layer_1_decoder/final")
 
     for use_decoder_vectors in [True]:
-        wandb_suffix = f"_no_sae_multiple_datasets_layer_{hook_layer}"
+        wandb_suffix = f"_no_sae_multiple_datasets_layer_{hook_layer}_v2"
+        wandb_suffix = f"_with_sae_multiple_datasets_layer_{hook_layer}_offset_-4"
+        # wandb_suffix = f"_sae_layer_{hook_layer}"
         if use_decoder_vectors:
             wandb_suffix += "_decoder"
         else:
@@ -996,11 +1050,19 @@ if __name__ == "__main__":
             wandb_suffix=wandb_suffix,
             layer_percents=layer_percents,
             sae_sft_datasets=explanations_files,
-            classification_datasets=classification_datasets,
+            classification_train_datasets=classification_train_datasets,
+            classification_eval_datasets=classification_eval_datasets,
             max_classification_examples=6_000,
             test_set_size_per_ds=250,
             activation_collection_batch_size=64,
+            eval_steps=10000,
+            eval_on_start=False,
+            load_lora_path=str(load_lora_path),
+            act_collect_offset=-4,
         )
+
+        if len(explanations_files) == 0 or True:
+            cfg.train_batch_size *= 4
 
         # mutate the cfg here using variables in the itertools loop over variables of interest
         cfg.use_decoder_vectors = use_decoder_vectors
@@ -1016,7 +1078,7 @@ if __name__ == "__main__":
 
         print(f"training data: {len(all_training_data)}, eval data: {len(all_eval_data)}")
 
-        raise Exception("Stop here")
+        # raise Exception("Stop here")
 
         cfg.sae_infos = all_sae_infos
 
@@ -1025,7 +1087,7 @@ if __name__ == "__main__":
         train_model(
             cfg=cfg,
             training_data=all_training_data,
-            eval_data=all_eval_data,
+            eval_datasets=all_eval_data,
             tokenizer=tokenizer,
             device=device,
             dtype=dtype,
