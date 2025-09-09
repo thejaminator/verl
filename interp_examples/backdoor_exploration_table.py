@@ -1,10 +1,7 @@
 # %%
-`# %load_ext autoreload
-# %autoreload 2
-
-
-# %%
+import datetime
 import os
+from pathlib import Path
 
 from detection_eval.steering_hooks import get_hf_activation_steering_hook
 
@@ -152,14 +149,15 @@ for i, suspect_path in enumerate(SUSPECT_LORA):
 
 # %%
 import csv
+import pandas as pd
 
 tokenizer.padding_side = "left"
 STEERING_COEFFICIENT = 2.0
 ENABLE_THINKING = False
 # ACT_LAYERS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 35]
-# ACT_LAYERS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 35]
+ACT_LAYERS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 35]
 # odd only
-ACT_LAYERS = [0, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35]
+# ACT_LAYERS = [0, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35]
 # ACT_LAYERS = [0, 1]
 # ACT_LAYERS = [3 , 5, 7, 9, 11, 13]
 TEMPERATURE = 0.0
@@ -296,6 +294,7 @@ def run_activation_steering_experiment(
         token_str = tokenizer.decode([prompt_token_ids[pos_idx]], skip_special_tokens=False)
         rows.append({
             "token": token_str,
+            "pos_idx": pos_idx,
             "explanation": explanation,
             "layer": act_layer,
         })
@@ -303,10 +302,11 @@ def run_activation_steering_experiment(
     return rows
 
 
+from slist import Slist
 # Steer only at the trained layer 0.
 steer_layer = 0
 
-all_rows: list[dict[str, str | int]] = []
+all_rows: Slist[dict[str, str | int]] = Slist()
 
 # Run experiment for each suspect and each layer, aggregating to a single CSV
 for act_layer in ACT_LAYERS:
@@ -327,13 +327,22 @@ for act_layer in ACT_LAYERS:
 
         all_rows.extend(rows)
 
-import datetime
-# Save a single CSV with token | explanation | layer
-date = datetime.datetime.now().strftime("%Y%m%d")
-csv_path = f"backdoor_exploration_table_{date}.csv"
-with open(csv_path, "w", newline="") as f:
-    writer = csv.DictWriter(f, fieldnames=["token", "explanation", "layer"])
-    writer.writeheader()
-    writer.writerows(all_rows)
+grouped_by_layer = all_rows.group_by(lambda x: x['layer'])
+# rows shall be layer_idx | explanation_0 | explanation_1 | explanation_2 | ...
+output_rows: list[list[str | int]] = []
+for layer_idx, rows in grouped_by_layer:
+    output_row = [layer_idx] + [row['explanation'] for row in rows]
+    output_rows.append(output_row)
 
-print(f"\nSaved {len(all_rows)} rows to {csv_path}")
+# what are the columns names?
+first_layer = ACT_LAYERS[0]
+# get the tokens
+tokens = all_rows.filter(lambda x: x['layer'] == first_layer).map(lambda x: x['token'])
+col_names = ["layer"] + tokens
+
+# use pandas
+df = pd.DataFrame(output_rows, columns=col_names)
+today_date = datetime.datetime.now().strftime("%Y%m%d")
+path = Path(f'backdoor_exploration_table_{today_date}.csv')
+df.to_csv(path, index=False)
+print(f"Saved to {path}")
