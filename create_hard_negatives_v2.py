@@ -33,6 +33,7 @@ import torch
 import torch.nn.functional as F
 from pydantic import BaseModel
 from tqdm import tqdm
+from transformers import BitsAndBytesConfig
 
 from detection_eval.detection_basemodels import (
     SAEV2,
@@ -605,17 +606,38 @@ def find_most_similar_features(
 
     return similar_features
 
+
 def load_model(
     model_name: str,
     dtype: torch.dtype,
+    load_in_8bit: bool = False,
 ) -> AutoModelForCausalLM:
     print("🧠 Loading model...")
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=dtype,
-        device_map="auto",
-    )
+
+    # Gemma prefers eager attention; others use FA2
+    attn = "eager" if "gemma" in model_name.lower() else "flash_attention_2"
+
+    kwargs: dict = {
+        "device_map": "auto",
+        "attn_implementation": attn,
+    }
+
+    if load_in_8bit:
+        # Requires `bitsandbytes` to be installed
+        bnb_cfg = BitsAndBytesConfig(
+            load_in_8bit=True,
+            bnb_8bit_compute_dtype=dtype,
+            # llm_int8_threshold=6.0,
+            # llm_int8_has_fp16_weight=False,
+        )
+        kwargs["quantization_config"] = bnb_cfg
+        kwargs["torch_dtype"] = dtype  # used for compute layers
+    else:
+        kwargs["torch_dtype"] = dtype
+
+    model = AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
     return model
+
 
 def load_tokenizer(
     model_name: str,
@@ -781,7 +803,6 @@ def main(
     # how many features in sae?
     print(f"🔍 Number of features in SAE: {len(sae.W_dec)}")  # type: ignore
 
-
     # Process each feature index
     special_tokens = [tokenizer.eos_token_id, tokenizer.bos_token_id, tokenizer.pad_token_id]
     special_tokens = [tokenizer.decode(token_id, skip_special_tokens=False) for token_id in special_tokens]
@@ -930,9 +951,9 @@ if __name__ == "__main__":
     # to_100k = list(range(0, 100_000))
     # 100k to 100_200
     # target_features = list(range(0, 200))
-    min_idx = 0
+    min_idx = 50_000
     # max_idx = 20_000
-    max_idx = 30
+    max_idx = 50_500
     target_features = list(range(min_idx, max_idx))
 
     data_folder = "data"
