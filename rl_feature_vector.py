@@ -128,10 +128,10 @@ def load_and_convert_dataset(
         Number of samples processed
     """
     # Load all data
+    print(f"Loading dataset from: {dataset_path}")
     all_jsonl_items: Slist[SAEV2] = Slist(dataset_path).map(
         lambda path: read_jsonl_file_into_basemodel(path, SAEV2, limit=limit)
     ).flatten_list()
-    print(f"Loading dataset from: {dataset_path}")
     print(f"Total items loaded: {len(all_jsonl_items)}")
     
     # Step 1: Get all unique layers and their SAE info
@@ -437,7 +437,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         f"data.max_prompt_length={params.max_prompt_length}",
         f"data.max_response_length={params.max_response_length}",
         f"data.train_batch_size={params.prompt_batch_size}",
-        "data.shuffle=true",
+        "data.shuffle=false", # we manually shuffle
         "data.truncation=error",
         "data.filter_overlong_prompts=false",
         # Algorithm configuration
@@ -458,8 +458,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         f"actor_rollout_ref.model.enable_gradient_checkpointing={params.enable_gradient_checkpointing}",
         "actor_rollout_ref.model.trust_remote_code=false",
         "actor_rollout_ref.model.use_remove_padding=true",
-        "actor_rollout_ref.model.enable_activation_offload=true",
-        "actor_rollout_ref.actor.fsdp_config.forward_prefetch=true",
+
     ]
 
     cmd.append(f"data.val_files={eval_parquet}")
@@ -514,11 +513,13 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             "actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.0",
             f"actor_rollout_ref.actor.optim.total_training_steps={params.max_steps}",
             "actor_rollout_ref.actor.fsdp_config.wrap_policy.min_num_params=0",
-            "actor_rollout_ref.actor.fsdp_config.param_offload=true",
-            "actor_rollout_ref.actor.fsdp_config.optimizer_offload=true",
+            "actor_rollout_ref.actor.fsdp_config.param_offload=false",
+            "actor_rollout_ref.ref.fsdp_config.param_offload=false",
+            "actor_rollout_ref.actor.fsdp_config.optimizer_offload=false",
+            "actor_rollout_ref.model.enable_activation_offload=false",
+            "actor_rollout_ref.actor.fsdp_config.forward_prefetch=true",
             # Reference model configuration
             "actor_rollout_ref.ref.strategy=fsdp2",
-            "actor_rollout_ref.ref.fsdp_config.param_offload=true",
             "actor_rollout_ref.ref.fsdp_config.wrap_policy.min_num_params=0",
             # Rollout configuration
             "actor_rollout_ref.model.use_fused_kernels=true",
@@ -683,21 +684,21 @@ PARAMS = VerlParams(
     # sae_repo_id="google/gemma-scope-9b-it-res",
     model_name="thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
     train_path=[
-        "data/qwen_hard_negatives_20000_20500_layer_percent_25.jsonl",
-        "data/qwen_hard_negatives_20000_20500_layer_percent_50.jsonl",
-        "data/qwen_hard_negatives_20000_20500_layer_percent_75.jsonl",
+        "data/qwen_hard_negatives_20000_22000_layer_percent_25.jsonl",
+        "data/qwen_hard_negatives_20000_22000_layer_percent_50.jsonl",
+        "data/qwen_hard_negatives_20000_22000_layer_percent_75.jsonl",
     ],
     eval_path="data/qwen_hard_negatives_50000_50128_layer_percent_25.jsonl",
-    max_train_samples=500, # per file
+    max_train_samples=2000, # per file
     use_feature_vector=True,
     use_hf_rollout_instead_of_vllm=False,
     enable_thinking=False,  # Actually, this doesn't do anything, I hardcoded verl/utils/dataset/rl_dataset.py to disable it.
     max_seq_length=1100,
     max_prompt_length=300,
     max_response_length=8_00,
-    num_generations=16,  # Bigger group size since noisy explanations
-    prompt_batch_size=8,  # number of prompts in rollout batch. will be multiplied by num_generations.
-    split_into_grad_accum=4,  # prompt_batch_size * num_generations gets split by grad accum.
+    num_generations=32,  # Bigger group size since noisy explanations
+    prompt_batch_size=4,  # number of prompts in rollout batch. will be multiplied by num_generations.
+    split_into_grad_accum=2,  # prompt_batch_size * num_generations gets split by grad accum.
     vllm_split=2,  # prompt_batch_size * num_generations gets split by vllm split.
     # 8 * 8 = 64 is the effective batch size
     # Note: vllm implementation does not follow this batch size since it has its own scheduler.
@@ -721,7 +722,7 @@ PARAMS = VerlParams(
     layered_summon=False,
     max_steps=4000,
     output_dir="/workspace/verl_test",
-    save_steps=25,  # saving causes OOM. Why?
+    save_steps=50,  # saving causes OOM. Why?
     n_gpus=1,
     use_wandb=True,
     wandb_project="grpo-feature-vector",

@@ -8,6 +8,7 @@ from detection_eval.caller import (
     ChatHistory,
     InferenceConfig,
     load_openai_caller,
+    load_pooled_openai_caller,
     read_jsonl_file_into_basemodel,
 )
 from detection_eval.detection_basemodels import SAEV2, SAEVerlData, SAEVerlDataTypedDict
@@ -155,7 +156,7 @@ async def run_detection_with_verl_format(
 detection_config = InferenceConfig(
     model="gpt-5-mini-2025-08-07",
     max_completion_tokens=10_000,
-    reasoning_effort="medium",
+    reasoning_effort="minimal",
     temperature=1.0,
 )
 
@@ -196,12 +197,12 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
 
     # run detection
     detection_result: DetectionResult | None = await run_detection_with_verl_format(
-        sae_train_test, caller, InferenceConfig(model="gpt-4o-mini")
+        sae_train_test, caller, detection_config
     )
     return detection_result
 
 
-caller = load_openai_caller(cache_path="cache/detection_eval")
+caller = load_pooled_openai_caller(cache_path="cache/detection_eval")
 
 
 def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData]) -> list[float]:
@@ -238,12 +239,12 @@ def compute_score(
 
 if __name__ == "__main__":
     saes = (
-        read_jsonl_file_into_basemodel(path="data/hard_negatives_0_to_200.jsonl", basemodel=SAEV2)
+        read_jsonl_file_into_basemodel(path="data/qwen_hard_negatives_20000_22000_layer_percent_25.jsonl", basemodel=SAEV2, limit=2)
         .map(lambda x: SAEVerlData.from_sae(x, feature_vector=[0.0] * 100, position_id=0))
-        .take(2)
+
     )
     solution_str = [
-        "<explanation>Sentences about NHRA-style drag racing events and related specialized drag-racing terminology — e.g., four-wide competitions, Funny Car/Top Fuel races or exhibitions, specific dragstrips/venues (zMAX Dragway, Texas Motorplex, MIR), event promotions/shoots (PINKS All Out), televised or exhibition race details, and fan/competition descriptions. These are event-focused mentions of drag-racing competitions and their jargon, distinguishing them from unrelated sports, entertainment, or general topics.</explanation>",
-        "<explanation>Short noun phrases that characterize a human with an evaluative or descriptive adjective (or adjective-like phrase) immediately before or after a head like 'man' or 'person' — e.g., 'a kind man,' 'a quiet man,' 'a humble man,' 'a smart person,' 'John Parish has been a busy man.' These are attributive character descriptions (including proverb-like patterns 'A smart man...') rather than neutral references to people or more complex syntactic uses (e.g., 'the man who is serving as...' or factual/organizational mentions), which do not activate the feature.</explanation>",
+        "<explanation>Sentences sabouts NHRA-style drag racing events and related specialized drag-racing terminology — e.g., four-wide competitions, Funny Car/Top Fuel races or exhibitions, specific dragstrips/venues (zMAX Dragway, Texas Motorplex, MIR), event promotions/shoots (PINKS All Out), televised or exhibition race details, and fan/competition descriptions. These are event-focused mentions of drag-racing competitions and their jargon, distinguishing them from unrelated sports, entertainment, or general topics.</explanation>",
+        "<explanation>Short noun psshrases that characterize a human with an evaluative or descriptive adjective (or adjective-like phrase) immediately before or after a head like 'man' or 'person' — e.g., 'a kind man,' 'a quiet man,' 'a humble man,' 'a smart person,' 'John Parish has been a busy man.' These are attributive character descriptions (including proverb-like patterns 'A smart man...') rather than neutral references to people or more complex syntactic uses (e.g., 'the man who is serving as...' or factual/organizational mentions), which do not activate the feature.</explanation>",
     ]
     print(_compute_score(solution_str, saes))

@@ -43,7 +43,7 @@ MODEL_NAME = "thejaminator/qwen-hook-layer-9-step-1000-merged"
 DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
 CTX_LEN = 6000
-SAE_LAYER = 9  # Target layer for activation steering (matching lightweight_sft.py)
+STEER_AT = 1  # Target layer for activation steering (matching lightweight_sft.py)
 GENERATE_WAIT_SECONDS = 2
 # SAE Configuration
 # SAE_REPO_ID = "google/gemma-scope-9b-it-res"
