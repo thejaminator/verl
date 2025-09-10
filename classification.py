@@ -27,7 +27,14 @@ import classification_dataset_manager
 import wandb
 from create_hard_negatives_v2 import EarlyStopException, load_model, load_tokenizer
 from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prefix
-from sft_config import BatchData, EvalStepResult, FeatureResult, TrainingDataPoint, construct_batch
+from sft_config import (
+    BatchData,
+    EvalStepResult,
+    FeatureResult,
+    TrainingDataPoint,
+    construct_batch,
+    create_training_datapoint,
+)
 
 
 class ClassificationDatapoint(BaseModel):
@@ -151,67 +158,6 @@ def get_hf_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = F
         raise ValueError(f"Please add submodule for model {model_name}")
 
 
-def create_classification_training_datapoint(
-    classification_prompt: str, target_response: str, tokenizer: AutoTokenizer, acts_D: torch.Tensor
-) -> TrainingDataPoint | None:
-    input_messages = [{"role": "user", "content": classification_prompt}]
-
-    input_prompt_ids = tokenizer.apply_chat_template(
-        input_messages,
-        tokenize=True,
-        add_generation_prompt=True,
-        return_tensors=None,
-        padding=False,
-        enable_thinking=False,
-    )
-    if not isinstance(input_prompt_ids, list):
-        raise TypeError("Expected list of token ids from tokenizer")
-    x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
-
-    full_messages = input_messages + [{"role": "assistant", "content": target_response}]
-
-    full_prompt_ids = tokenizer.apply_chat_template(
-        full_messages,
-        tokenize=True,
-        add_generation_prompt=False,
-        return_tensors=None,
-        padding=False,
-        enable_thinking=False,
-    )
-    if not isinstance(full_prompt_ids, list):
-        raise TypeError("Expected list of token ids from tokenizer")
-
-    assistant_start_idx = len(input_prompt_ids)
-
-    labels = full_prompt_ids.copy()
-    for i in range(assistant_start_idx):
-        labels[i] = -100
-
-    positions = []
-    for i in range(assistant_start_idx):
-        if full_prompt_ids[i] == x_token_id:
-            positions.append(i)
-    if len(positions) != 1:
-        # TODO: Handle this in a more robust way
-        print(
-            f"Warning! Expected exactly one X token, got {len(positions)}, classifcation prompt: {classification_prompt}"
-        )
-        print("Skipping this datapoint")
-        return None
-    steering_vectors = [acts_D]
-
-    training_data_point = TrainingDataPoint(
-        input_ids=full_prompt_ids,
-        labels=labels,
-        steering_vectors=steering_vectors,
-        positions=positions,
-        feature_idx=-1,
-        target_output=target_response,
-    )
-
-    return training_data_point
-
-
 def get_classification_datapoints_from_context_qa_examples(
     examples: list[classification_dataset_manager.ContextQASample],
 ) -> list[ClassificationDatapoint]:
@@ -315,8 +261,8 @@ def create_vector_dataset(
                 if debug_print:
                     view_tokens(tokenized_prompts["input_ids"][j], tokenizer, offset)
                 classification_prompt = f"{get_introspection_prefix(layer)}{batch_datapoints[j].classification_prompt}"
-                training_data_point = create_classification_training_datapoint(
-                    classification_prompt, batch_datapoints[j].target_response, tokenizer, acts_D
+                training_data_point = create_training_datapoint(
+                    classification_prompt, batch_datapoints[j].target_response, tokenizer, acts_D, -1
                 )
                 if training_data_point is None:
                     continue
