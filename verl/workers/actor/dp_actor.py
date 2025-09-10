@@ -176,7 +176,7 @@ class DataParallelPPOActor(BasePPOActor):
 
             ### Prepare hook ####
             # get the gemma layer module
-            gemma_layer_module = get_gemma_layer_module(self.actor_module, 9)
+            gemma_layer_module = get_gemma_layer_module(self.actor_module, 1)
             # get sae feature vectors
             if "sae" not in micro_batch.keys():
                 breakpoint()

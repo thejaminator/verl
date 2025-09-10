@@ -951,9 +951,9 @@ if __name__ == "__main__":
     # to_100k = list(range(0, 100_000))
     # 100k to 100_200
     # target_features = list(range(0, 200))
-    min_idx = 50_000
+    min_idx = 20_000
     # max_idx = 20_000
-    max_idx = 50_500
+    max_idx = 20_500
     target_features = list(range(min_idx, max_idx))
 
     data_folder = "data"

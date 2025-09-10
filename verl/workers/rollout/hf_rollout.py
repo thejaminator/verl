@@ -111,7 +111,7 @@ class HFRollout(BaseRollout):
         device = torch.device(get_device_id())
         dtype = torch.bfloat16
         hook_args: HookArgs = verl_data_to_hook_args(sae_info, device=device)
-        layer_number = 9
+        layer_number = 1
         hook = get_hf_activation_steering_hook(
             vectors=hook_args.vectors,
             positions=hook_args.positions,

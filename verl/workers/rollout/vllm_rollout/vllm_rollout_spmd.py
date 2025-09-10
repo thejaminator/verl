@@ -362,7 +362,7 @@ class vLLMRollout(BaseRollout):
             dtype=dtype,
         )
         module_to_target = (
-            self.inference_engine.llm_engine.model_executor.driver_worker.model_runner.model.model.layers[9]
+            self.inference_engine.llm_engine.model_executor.driver_worker.model_runner.model.model.layers[1]
         )
 
         # users can customize different sampling_params at different run

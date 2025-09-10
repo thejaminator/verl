@@ -15,7 +15,7 @@ from transformers import AutoTokenizer, PreTrainedTokenizer
 from create_hard_negatives_v2 import get_sae_info, load_sae
 from detection_eval.caller import read_jsonl_file_into_basemodel
 from detection_eval.detection_basemodels import SAEV2, SAEVerlDataTypedDict, make_sae_verl_typed_dict
-from detection_eval.steering_hooks import X_PROMPT
+from detection_eval.steering_hooks import get_introspection_prompt
 
 # set HF_HOME to /workspace
 os.environ["HF_HOME"] = "/workspace"
@@ -171,7 +171,7 @@ def load_and_convert_dataset(
     # ---------------- build prompt and locate X position ----------------
     prompt_as_chat_dict = {
         "role": "user",
-        "content": X_PROMPT,
+        "content": get_introspection_prompt(sae_layer=9),
     }
     tokenized_prompt = tokenizer.apply_chat_template(
         [prompt_as_chat_dict],
@@ -742,7 +742,7 @@ PARAMS = VerlParams(
     wandb_project="grpo-feature-vector",
     # HuggingFace Hub configuration (like your current script)
     push_to_hub=True,
-    hub_repo_id="thejaminator/feature-vector-3sep-test",  # Updated with "_verl" suffix
+    hub_repo_id="thejaminator/10sep",  # Updated with "_verl" suffix
     hf_api_key=hf_api_key,
     reward_function_name="compute_score",
     reward_function_file="feature_vector_reward.py",
