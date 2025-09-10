@@ -27,7 +27,8 @@ class SelfInterpTrainingConfig:
         default_factory=lambda: {"do_sample": True, "temperature": 1.0, "max_new_tokens": 300}
     )
     steering_coefficient: float = 2.0
-    act_collect_offset: int = -4
+    min_act_collect_offset: int = -2
+    max_act_collect_offset: int = -7
     max_sae_sft_examples: int = 50_000
     max_classification_examples: int = 10_000
     test_set_size_per_ds: int = 25

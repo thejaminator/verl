@@ -1008,6 +1008,8 @@ def build_datasets(
         all_training_data.extend(file_data[: -cfg.test_set_size_per_ds])
         all_sae_infos.append(sae_info)
 
+    random.seed(cfg.seed)
+
     # Classification side-task
     for ds in cfg.classification_train_datasets:
         print(f"Creating train classification dataset for {ds}")
@@ -1018,7 +1020,8 @@ def build_datasets(
             num_test_examples=cfg.test_set_size_per_ds,
             batch_size=cfg.activation_collection_batch_size,
             act_layers=cfg.act_layers,
-            offset=cfg.act_collect_offset,
+            min_offset=cfg.min_act_collect_offset,
+            max_offset=cfg.max_act_collect_offset,
             model_name=cfg.model_name,
             tokenizer=tokenizer,
             dtype=dtype,
@@ -1035,7 +1038,8 @@ def build_datasets(
             num_test_examples=cfg.test_set_size_per_ds,
             batch_size=cfg.activation_collection_batch_size,
             act_layers=cfg.act_layers,
-            offset=cfg.act_collect_offset,
+            min_offset=cfg.min_act_collect_offset,
+            max_offset=cfg.max_act_collect_offset,
             model_name=cfg.model_name,
             tokenizer=tokenizer,
             dtype=dtype,
@@ -1116,11 +1120,12 @@ if __name__ == "__main__":
     load_lora_path = Path("checkpoints_sae_layer_1_decoder/final")
 
     iterations = [
-        {"lr": 2e-5},
-        {"lr": 5e-5},
-        {"act_collect_offset": -3},
-        {"act_collect_offset": -5},
-        {"num_epochs": 2},
+        # {"lr": 2e-5},
+        # {"lr": 5e-5},
+        # {"act_collect_offset": -3},
+        # {"act_collect_offset": -5},
+        # {"num_epochs": 2},
+        {"min_act_collect_offset": -2, "max_act_collect_offset": -7},
     ]
 
     # for use_decoder_vectors in [True]:

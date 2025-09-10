@@ -25,7 +25,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import classification_dataset_manager
 import wandb
-from create_hard_negatives_v2 import load_model, load_tokenizer
+from create_hard_negatives_v2 import EarlyStopException, load_model, load_tokenizer
 from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prefix
 from sft_config import BatchData, EvalStepResult, FeatureResult, TrainingDataPoint, construct_batch
 
@@ -86,21 +86,29 @@ def collect_activations_multiple_layers(
     model: AutoModelForCausalLM,
     submodules: dict[int, torch.nn.Module],
     inputs_BL: dict[str, torch.Tensor],
-    offset: int,
+    min_offset: int,
+    max_offset: int,
 ) -> dict[int, torch.Tensor]:
-    activations_BD_by_layer = {}
+    assert max_offset < min_offset, "max_offset must be less than min_offset"
+    assert min_offset < 0, "min_offset must be less than 0"
+    assert max_offset < 0, "max_offset must be less than 0"
+
+    activations_BLD_by_layer = {}
 
     module_to_layer = {submodule: layer for layer, submodule in submodules.items()}
 
+    max_layer = max(submodules.keys())
+
     def gather_target_act_hook(module, inputs, outputs):
-        nonlocal activations_BD_by_layer
-        nonlocal module_to_layer
         layer = module_to_layer[module]
 
         if isinstance(outputs, tuple):
-            activations_BD_by_layer[layer] = outputs[0][:, offset, :]
+            activations_BLD_by_layer[layer] = outputs[0][:, max_offset:min_offset, :]
         else:
-            activations_BD_by_layer[layer] = outputs[:, offset, :]
+            activations_BLD_by_layer[layer] = outputs[:, max_offset:min_offset, :]
+
+        if layer == max_layer:
+            raise EarlyStopException("Early stopping after capturing activations")
 
     handles = []
 
@@ -111,6 +119,8 @@ def collect_activations_multiple_layers(
         # Use the selected context manager
         with torch.no_grad():
             _ = model(**inputs_BL)
+    except EarlyStopException:
+        pass
     except Exception as e:
         print(f"Unexpected error during forward pass: {str(e)}")
         raise
@@ -118,7 +128,7 @@ def collect_activations_multiple_layers(
         for handle in handles:
             handle.remove()
 
-    return activations_BD_by_layer
+    return activations_BLD_by_layer
 
 
 def get_hf_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = False):
@@ -207,7 +217,7 @@ def get_classification_datapoints_from_context_qa_examples(
 ) -> list[ClassificationDatapoint]:
     datapoints = []
     for example in examples:
-        for question, answer in zip(example.questions, example.answers):
+        for question, answer in zip(example.questions, example.answers, strict=True):
             question = f"Answer with 'Yes' or 'No' only. {question}"
             datapoint = ClassificationDatapoint(
                 activation_prompt=example.context,
@@ -260,7 +270,8 @@ def create_vector_dataset(
     model: AutoModelForCausalLM,
     batch_size: int,
     act_layers: list[int],
-    offset: int,
+    min_offset: int,
+    max_offset: int,
     debug_print: bool = False,
 ) -> list[TrainingDataPoint]:
     training_data = []
@@ -282,20 +293,24 @@ def create_vector_dataset(
             padding=True,
         ).to(model.device)
 
-        acts_BD_by_layer_dict = collect_activations_multiple_layers(model, submodules, tokenized_prompts, offset)
+        acts_BLD_by_layer_dict = collect_activations_multiple_layers(
+            model, submodules, tokenized_prompts, min_offset, max_offset
+        )
 
         # Doing 2 for loops to try reduce gpu / cpu syncs
         for layer in act_layers:
-            acts_BD_by_layer_dict[layer] = acts_BD_by_layer_dict[layer].to("cpu", non_blocking=True)
+            acts_BLD_by_layer_dict[layer] = acts_BLD_by_layer_dict[layer].to("cpu", non_blocking=True)
 
-        all_acts.append((batch_datapoints, tokenized_prompts, acts_BD_by_layer_dict))
+        all_acts.append((batch_datapoints, tokenized_prompts, acts_BLD_by_layer_dict))
 
-    for batch_datapoints, tokenized_prompts, acts_BD_by_layer_dict in tqdm(all_acts, desc="Creating vector dataset"):
-        for layer in acts_BD_by_layer_dict.keys():
-            acts_BD = acts_BD_by_layer_dict[layer]
+    for batch_datapoints, tokenized_prompts, acts_BLD_by_layer_dict in tqdm(all_acts, desc="Creating vector dataset"):
+        for layer in acts_BLD_by_layer_dict.keys():
+            acts_BLD = acts_BLD_by_layer_dict[layer]
+            L = acts_BLD.shape[1]
             for j in range(len(batch_datapoints)):
+                offset = random.randint(0, L - 1)
                 # clone and detach to avoid saving with pickle issues
-                acts_D = acts_BD[j].clone().detach()
+                acts_D = acts_BLD[j, offset, :].clone().detach()
                 # assert tokenized_prompts["input_ids"][j][offset + 1] == tokenizer.eos_token_id
                 if debug_print:
                     view_tokens(tokenized_prompts["input_ids"][j], tokenizer, offset)
@@ -471,7 +486,8 @@ def create_classification_dataset(
     num_test_examples: int,
     batch_size: int,
     act_layers: list[int],
-    offset: int,
+    min_offset: int,
+    max_offset: int,
     model_name: str,
     tokenizer: AutoTokenizer,
     dtype: torch.dtype,
@@ -480,12 +496,8 @@ def create_classification_dataset(
 ) -> tuple[list[TrainingDataPoint], list[TrainingDataPoint]]:
     os.makedirs(dataset_folder, exist_ok=True)
     layers_str = "-".join([str(layer) for layer in act_layers])
-    train_dataset_name = (
-        f"{dataset_folder}/{dataset_name}_layer_{layers_str}_offset_{offset}_max_{num_train_examples}_train.pkl"
-    )
-    test_dataset_name = (
-        f"{dataset_folder}/{dataset_name}_layer_{layers_str}_offset_{offset}_max_{num_test_examples}_test.pkl"
-    )
+    train_dataset_name = f"{dataset_folder}/{dataset_name}_layer_{layers_str}_offset_{min_offset}_{max_offset}_max_{num_train_examples}_train.pkl"
+    test_dataset_name = f"{dataset_folder}/{dataset_name}_layer_{layers_str}_offset_{min_offset}_{max_offset}_max_{num_test_examples}_test.pkl"
 
     if os.path.exists(train_dataset_name) and os.path.exists(test_dataset_name):
         with open(train_dataset_name, "rb") as f:
@@ -502,8 +514,10 @@ def create_classification_dataset(
     train_datapoints, test_datapoints = get_classification_datapoints(
         dataset_name, num_qa_per_sample, num_train_examples, num_test_examples, random_seed
     )
-    training_data = create_vector_dataset(train_datapoints, tokenizer, model, batch_size, act_layers, offset)
-    test_data = create_vector_dataset(test_datapoints, tokenizer, model, batch_size, act_layers, offset)
+    training_data = create_vector_dataset(
+        train_datapoints, tokenizer, model, batch_size, act_layers, min_offset, max_offset
+    )
+    test_data = create_vector_dataset(test_datapoints, tokenizer, model, batch_size, act_layers, min_offset, max_offset)
 
     with open(train_dataset_name, "wb") as f:
         pickle.dump(training_data, f)
@@ -521,7 +535,8 @@ def create_classification_dataset_test_only(
     num_test_examples: int,
     batch_size: int,
     act_layers: list[int],
-    offset: int,
+    min_offset: int,
+    max_offset: int,
     model_name: str,
     tokenizer: AutoTokenizer,
     dtype: torch.dtype,
@@ -530,9 +545,7 @@ def create_classification_dataset_test_only(
 ) -> list[TrainingDataPoint]:
     os.makedirs(dataset_folder, exist_ok=True)
     layers_str = "-".join([str(layer) for layer in act_layers])
-    test_dataset_name = (
-        f"{dataset_folder}/{dataset_name}_layer_{layers_str}_offset_{offset}_max_{num_test_examples}_test.pkl"
-    )
+    test_dataset_name = f"{dataset_folder}/{dataset_name}_layer_{layers_str}_offset_{min_offset}_{max_offset}_max_{num_test_examples}_test.pkl"
 
     if os.path.exists(test_dataset_name):
         with open(test_dataset_name, "rb") as f:
@@ -545,7 +558,7 @@ def create_classification_dataset_test_only(
     train_datapoints, test_datapoints = get_classification_datapoints(
         dataset_name, num_qa_per_sample, 0, num_test_examples, random_seed
     )
-    test_data = create_vector_dataset(test_datapoints, tokenizer, model, batch_size, act_layers, offset)
+    test_data = create_vector_dataset(test_datapoints, tokenizer, model, batch_size, act_layers, min_offset, max_offset)
 
     with open(test_dataset_name, "wb") as f:
         pickle.dump(test_data, f)
