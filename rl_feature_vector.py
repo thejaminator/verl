@@ -255,8 +255,8 @@ def load_and_convert_dataset(
             "sae": sae_verl_data,
         }
         data.append(structured_data)
-    first_sample = data[0]
-    print(f"First sample:\n {first_sample}")
+    # first_sample = data[0]a
+    # print(f"First sample:\n {first_sample}")
 
     # Save as parquet for verl using pyarrow (no pandas)
     table = pa.Table.from_pylist(data)
@@ -701,9 +701,9 @@ PARAMS = VerlParams(
     # model_name="google/gemma-2-2b-it",
     # model_name="thejaminator/gemma-introspection-20250821-merged",  # loras don't get merged automatically
     # sae_repo_id="google/gemma-scope-9b-it-res",
-    model_name="adamkarvonen/checkpoints_multiple_datasets_layer_1_decoder",
+    model_name="thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
     train_path="data/qwen_hard_negatives_20000_20500_layer_percent_25.jsonl",
-    max_train_samples=500,
+    max_train_samples=50,
     sae_repo_id="adamkarvonen/qwen3-8b-saes",
     use_feature_vector=True,
     use_hf_rollout_instead_of_vllm=False,

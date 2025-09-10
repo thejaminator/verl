@@ -249,18 +249,31 @@ class FSDPEngine(BaseEngine):
             if config.model.get("enable_gradient_checkpointing", False):
                 module.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
 
+        # if self._is_lora:
+        #     print("Applying LoRA to the module")
+        #     module.enable_input_require_grads()
+        #     # Convert config to regular Python types before creating PEFT model
+        #     lora_config = {
+        #         "task_type": TaskType.CAUSAL_LM,
+        #         "r": self.config.model.lora_rank,
+        #         "lora_alpha": self.config.model.lora_alpha,
+        #         "target_modules": convert_to_regular_types(self.config.model.target_modules),
+        #         "bias": "none",
+        #     }
+        #     module = get_peft_model(module, LoraConfig(**lora_config))
+
         if self._is_lora:
-            print("Applying LoRA to the module")
+            print("Assuming the path is already a lora model")
             module.enable_input_require_grads()
-            # Convert config to regular Python types before creating PEFT model
-            lora_config = {
-                "task_type": TaskType.CAUSAL_LM,
-                "r": self.config.model.lora_rank,
-                "lora_alpha": self.config.model.lora_alpha,
-                "target_modules": convert_to_regular_types(self.config.model.target_modules),
-                "bias": "none",
-            }
-            module = get_peft_model(module, LoraConfig(**lora_config))
+        #     # Convert config to regular Python types before creating PEFT model
+        #     lora_config = {
+        #         "task_type": TaskType.CAUSAL_LM,
+        #         "r": self.config.model.lora_rank,
+        #         "lora_alpha": self.config.model.lora_alpha,
+        #         "target_modules": convert_to_regular_types(self.config.model.target_modules),
+        #         "bias": "none",
+        #     }
+        #     module = get_peft_model(module, LoraConfig(**lora_config))
 
         if self.rank == 0:
             print_model_size(module)

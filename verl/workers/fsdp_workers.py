@@ -29,7 +29,7 @@ import torch.distributed
 import torch.distributed as dist
 from codetiming import Timer
 from omegaconf import DictConfig, OmegaConf, open_dict
-from peft import LoraConfig, TaskType, get_peft_model
+from peft import LoraConfig, PeftModel, TaskType, get_peft_model
 from safetensors.torch import save_file
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -284,8 +284,14 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             else:
                 actor_module_class = AutoModelForCausalLM
 
+            if local_path != "Qwen/Qwen3-8B":
+                print(f"Assuming that {local_path} is a lora model.")
+                model_path = local_path
+            else:
+                model_path = "Qwen/Qwen3-8B"
+
             actor_module = actor_module_class.from_pretrained(
-                pretrained_model_name_or_path=local_path,
+                pretrained_model_name_or_path=model_path,
                 torch_dtype=torch_dtype,
                 config=actor_model_config,
                 trust_remote_code=trust_remote_code,
@@ -315,19 +321,24 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
             if enable_gradient_checkpointing:
                 actor_module.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+            # if self._is_lora:
+            #     print("Applying LoRA to actor module")
+            #     actor_module.enable_input_require_grads()
+            #     # Convert config to regular Python types before creating PEFT model
+            #     lora_config = {
+            #         "task_type": TaskType.CAUSAL_LM,
+            #         "r": self.config.model.lora_rank,
+            #         "lora_alpha": self.config.model.lora_alpha,
+            #         "target_modules": convert_to_regular_types(self.config.model.target_modules),
+            #         "exclude_modules": convert_to_regular_types(self.config.model.exclude_modules),
+            #         "bias": "none",
+            #     }
+                # actor_module = get_peft_model(actor_module, LoraConfig(**lora_config))
             if self._is_lora:
-                print("Applying LoRA to actor module")
+                print(f"Assuming the path is already a lora model: {local_path}")
                 actor_module.enable_input_require_grads()
-                # Convert config to regular Python types before creating PEFT model
-                lora_config = {
-                    "task_type": TaskType.CAUSAL_LM,
-                    "r": self.config.model.lora_rank,
-                    "lora_alpha": self.config.model.lora_alpha,
-                    "target_modules": convert_to_regular_types(self.config.model.target_modules),
-                    "exclude_modules": convert_to_regular_types(self.config.model.exclude_modules),
-                    "bias": "none",
-                }
-                actor_module = get_peft_model(actor_module, LoraConfig(**lora_config))
+                new_module = PeftModel.from_pretrained(actor_module, local_path)
+                actor_module = new_module
         torch.distributed.barrier()
 
         if self.rank == 0:
@@ -505,15 +516,23 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             from verl.workers.rollout.vllm_rollout import vLLMAsyncRollout
 
             vllm_rollout_cls = vLLMRollout if self.config.rollout.mode == "sync" else vLLMAsyncRollout
-            rollout = vllm_rollout_cls(
-                model_path=local_path,
-                config=self.config.rollout,
-                tokenizer=self.tokenizer,
-                model_hf_config=self.actor_model_config,
-                device_mesh=rollout_device_mesh,
-                trust_remote_code=trust_remote_code,
-                **lora_kwargs,
-            )
+            model_path = local_path
+            if local_path != "Qwen/Qwen3-8B":
+                print(f"Assuming that {local_path} is a lora model. Will hardcode to load vllm with Qwen/Qwen3-8B")
+                model_path = "Qwen/Qwen3-8B"
+            try:
+                rollout = vllm_rollout_cls(
+                    model_path=model_path,
+                    config=self.config.rollout,
+                    tokenizer=self.tokenizer,
+                    model_hf_config=self.actor_model_config,
+                    device_mesh=rollout_device_mesh,
+                    trust_remote_code=trust_remote_code,
+                    **lora_kwargs,
+                )
+            except Exception as e:
+                breakpoint()
+                raise e
 
             log_gpu_memory_usage(f"After building {rollout_name} rollout", logger=logger)
             full_params = torch.distributed.get_world_size() == 1

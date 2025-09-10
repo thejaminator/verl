@@ -173,15 +173,15 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
     Returns:
         Float reward score for this single example
     """
-    explanation_parsed = parse_explanation(explanation)
-    if explanation_parsed is None:
-        print(f"WARNING: No parsed explanation for {sae.sae_id}. Explanation: {explanation}")
-        return None
+    # explanation_parsed = parse_explanation(explanation)
+    # if explanation_parsed is None:
+    #     print(f"WARNING: No parsed explanation for {sae.sae_id}. Explanation: {explanation}")
+    #     return None
 
     # turn into SAETrainTestWithExplanation
     sae_train_test = verl_sample_sentences(
         sae=sae,
-        explanation=explanation_parsed,
+        explanation=explanation,
         test_target_activating_sentences=Slist([4, 5, 6, 7, 8]),
         train_activating_sentences=1,
         train_hard_negative_sentences=1,
@@ -206,8 +206,11 @@ caller = load_openai_caller(cache_path="cache/detection_eval")
 
 def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData]) -> list[float]:
     assert len(solution_str) == len(parsed_sae)
-    first_str = solution_str[0]
-    print(f"First string: {first_str}")
+    print_strings = min(len(solution_str), 4)
+    for i in range(print_strings):
+        print(f"String {i}: {solution_str[i]}")
+
+    #
     explanation_sae = Slist(solution_str).zip(parsed_sae)
 
     # Run the async function in a synchronous context
