@@ -51,9 +51,10 @@ dtype = torch.bfloat16
 
 model_name = "Qwen/Qwen3-8B"
 
-model, tokenizer, sae, submodule = load_model_and_sae(
-    model_name, sae_repo_id, sae_info.sae_filename, sae_info.sae_layer
+model, tokenizer, sae = load_model_and_sae(
+    model_name, sae_repo_id, sae_info.sae_filename, sae_info.sae_layer, device, dtype
 )
+submodule = get_submodule(model, sae_info.sae_layer)  # type: ignore
 # %%
 max_acts_data = load_max_acts_data(
     model_name=model_name,
