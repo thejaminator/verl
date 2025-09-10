@@ -126,6 +126,10 @@ class BatchDetectionRewardManager:
                 )
 
         data.batch["acc"] = torch.tensor(rewards, dtype=torch.float32, device=prompt_ids.device)
+        
+        # Add table data to non_tensor_batch for wandb logging (only if we have data)
+        if table_data:
+            data.non_tensor_batch["table_data"] = table_data
 
         if return_dict:
             return {"reward_tensor": reward_tensor, "reward_extra_info": reward_extra_info}
