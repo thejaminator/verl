@@ -36,6 +36,7 @@ from pydantic import BaseModel
 class VerlParams(BaseModel):
     # Dataset paths
     train_path: str
+    use_hf_rollout_instead_of_vllm: bool = False
     enable_gradient_checkpointing: bool = True
     eval_path: str | None = None
     reward_function_name: str = "compute_score"
@@ -44,6 +45,7 @@ class VerlParams(BaseModel):
     use_feature_vector: bool = True
     # Model configuration
     model_name: str = "google/gemma-2-9b-it"
+    enable_thinking: bool = True
 
     # Training configuration
     max_seq_length: int = 2048
@@ -102,7 +104,7 @@ def load_sae_params_for_model(
     model_name: str,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Download and load SAE params (W_enc, W_dec) for the tokenizer's model family."""
-    sae_info = get_sae_info(sae_repo_id, sae_width, sae_layer)
+    sae_info = get_sae_info(sae_repo_id=sae_repo_id, sae_layer_percent=25)
     filename = sae_info.sae_filename
     # just load on cpu, since going to dump
     device = torch.device("cuda")
@@ -138,6 +140,7 @@ def load_and_convert_dataset(
     sae_width: int,
     use_decoder_vectors: bool,
     sae_repo_id: str,
+    enable_thinking: bool,
     limit: int | None = None,
 ) -> int:
     """
@@ -176,7 +179,7 @@ def load_and_convert_dataset(
         add_generation_prompt=True,
         return_tensors=None,
         padding=False,
-        enable_thinking=True,
+        enable_thinking=enable_thinking,
     )
     x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
     # find positional index of the 'X' token within the prompt token ids
@@ -420,10 +423,9 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
     # https://verl.readthedocs.io/en/latest/perf/perf_tuning.html
     # ensures that prefill batch size fits the micro batch
     # max_num_batched_tokens = (params.max_prompt_length * params.num_generations * params.micro_batch_size_per_gpu * 1.5)
-    assert params.prompt_batch_size % params.split_into_grad_accum == 0, "prompt batch size must be divisible by grad accum"
-    micro_batch_size_per_gpu = params.prompt_batch_size // params.split_into_grad_accum
+    assert (params.prompt_batch_size * params.num_generations) % params.split_into_grad_accum == 0, "prompt batch size must be diviasible by grad accum"
     max_num_batched_tokens = 80_000  # approx number before we oom. if OOM, adjust micro batch size per gpu.
-    predicted_tokens = params.max_prompt_length * params.num_generations * micro_batch_size_per_gpu
+    predicted_tokens = params.max_prompt_length * (params.num_generations * params.prompt_batch_size  // params.vllm_split)
     assert predicted_tokens < max_num_batched_tokens, (
         "predicted tokens should be less than max num batched tokens. pls reduce micro batch size per gpu."
     )
@@ -434,7 +436,6 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
     else:
         load_format = "dummy_dtensor"
 
-    bs = params.micro_batch_size_per_gpu * params.split_into_grad_accum
 
     cmd = [
         sys.executable,
@@ -446,7 +447,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         "data.prompt_key=prompt",
         f"data.max_prompt_length={params.max_prompt_length}",
         f"data.max_response_length={params.max_response_length}",
-        f"data.train_batch_size={bs}",
+        f"data.train_batch_size={params.prompt_batch_size}",
         "data.shuffle=true",
         "data.truncation=error",
         "data.filter_overlong_prompts=false",
@@ -468,12 +469,12 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         f"actor_rollout_ref.model.enable_gradient_checkpointing={params.enable_gradient_checkpointing}",
         "actor_rollout_ref.model.trust_remote_code=false",
         "actor_rollout_ref.model.use_remove_padding=true",
-        # prevent kabooms when dumping state dict with fsdp?
         "actor_rollout_ref.model.enable_activation_offload=true",
+        "actor_rollout_ref.actor.fsdp_config.forward_prefetch=true",
     ]
 
     cmd.append(f"data.val_files={eval_parquet}")
-    cmd.append(f"data.val_batch_size={bs}")
+    cmd.append(f"data.val_batch_size={params.prompt_batch_size}")
 
     if params.use_feature_vector:
         # use FeatureVectorRolloutRefWorker if we want to use feature vector steering.
@@ -494,21 +495,24 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             ]
         )
 
-    # Continue with actor configuration
+    # Somewhere in fsdp workers, they do self.config.actor.ppo_mini_batch_size *= self.config.rollout.n. So the mini batch is multipled
+    # wtf? So then we should do it manually for micro batch so that we scale by gradient accumulation accordingly.
+    micro_bs = (params.prompt_batch_size * params.num_generations) // params.split_into_grad_accum
+    print(f"Micro batch size: {micro_bs}")
     cmd.extend(
         [
             # Actor configuration
             "actor_rollout_ref.actor.strategy=fsdp2",
             # should be a multiple of micro_batch_size_per_gpu for grad accumulation. grad accum = mini batch size / micro batch size per gpu
             # self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size_per_gpu
-            f"actor_rollout_ref.actor.ppo_mini_batch_size={micro_batch_size_per_gpu * params.split_into_grad_accum}",
+            f"actor_rollout_ref.actor.ppo_mini_batch_size={params.prompt_batch_size}",
+             # why does one use ppo_micro_batch_size and the other use micro_batch_size? no fking clue.
             # Somewhere in fsdp workers, they do self.config.actor.ppo_mini_batch_size *= self.config.rollout.n. So the mini batch is multipled
             # wtf? So then we should do it manually for micro batch so that we scale by gradient accumulation accordingly.
-            # IF you are confused, so am I
-            # potentialy, just set grad acc to 1, it can fit 512 seq in mem? maybe 2.
-            f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu={micro_batch_size_per_gpu * params.num_generations}",
-            f"actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu={micro_batch_size_per_gpu * params.num_generations}",
-            f"actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu={micro_batch_size_per_gpu * params.num_generations}",
+            # IF you are confused, so am I.
+            f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu={micro_bs}",
+            f"actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu={micro_bs}",
+            f"actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu={micro_bs}",
             "actor_rollout_ref.actor.ppo_epochs=1",
             "actor_rollout_ref.actor.grad_clip=0.5",
             "actor_rollout_ref.actor.clip_ratio=0.2",
@@ -573,6 +577,8 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         cmd.append('trainer.logger=["console","wandb"]')
     else:
         cmd.append("trainer.logger=console")
+    if params.use_hf_rollout_instead_of_vllm:
+        cmd.append("actor_rollout_ref.rollout.name=hf")
 
     # Set environment variables
     env = os.environ.copy()
@@ -635,6 +641,7 @@ def verl_main(params: VerlParams):
         tokenizer,
         params.train_path,
         train_parquet,
+        enable_thinking=params.enable_thinking,
         sae_layer=params.sae_layer,
         sae_width=params.sae_width,
         use_decoder_vectors=params.use_decoder_vectors,
@@ -659,6 +666,7 @@ def verl_main(params: VerlParams):
         load_and_convert_dataset(
             params.model_name,
             tokenizer,
+            enable_thinking=params.enable_thinking,
             dataset_path=params.train_path,
             output_path=eval_parquet,
             sae_layer=params.sae_layer,
@@ -691,18 +699,20 @@ PARAMS = VerlParams(
     # model_name="google/gemma-2-2b-it",
     # model_name="thejaminator/gemma-introspection-20250821-merged",  # loras don't get merged automatically
     # sae_repo_id="google/gemma-scope-9b-it-res",
-    model_name="thejaminator/qwen-hook-layer-9-step-1000-merged",
+    model_name="thejaminator/qwen-hook-layer-9-posneg-merged",
     train_path="data/qwen_hard_negatives_0_to_30_000.jsonl",
-    max_train_samples=20_000,
+    max_train_samples=8_0,
     sae_repo_id="adamkarvonen/qwen3-8b-saes",
-    use_feature_vector=True,  # debugging logprobs
-    max_seq_length=2000,
+    use_feature_vector=True,
+    use_hf_rollout_instead_of_vllm=True,
+    enable_thinking=False, # Actually, this doesn't do anything, I hardcoded verl/utils/dataset/rl_dataset.py to disable it.
+    max_seq_length=1100,
     max_prompt_length=300,
-    max_response_length=1_500,
+    max_response_length=8_00,
     num_generations=16,  # Bigger group size since noisy explanations
     prompt_batch_size=8,  # number of prompts in rollout batch. will be multiplied by num_generations.
-    split_into_grad_accum=64, # prompt_batch_size * num_generations gets split by grad accum.
-    vllm_split=4, # prompt_batch_size * num_generations gets split by vllm split.
+    split_into_grad_accum=8, # prompt_batch_size * num_generations gets split by grad accum.
+    vllm_split=2, # prompt_batch_size * num_generations gets split by vllm split.
     # 8 * 8 = 64 is the effective batch size
     # Note: vllm implementation does not follow this batch size since it has its own scheduler.
     # May need to experiment with implementing our own split for vllm.
@@ -716,7 +726,7 @@ PARAMS = VerlParams(
     # micro_batch_size_per_gpu=8,
     warmup_steps=5,
     learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
-    entropy_coeff=0.01,
+    entropy_coeff=0.000,
     loss_kl_penalty=0.002,
     lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
     lora_alpha=128.0,  # Typically 2x lora_rank
@@ -724,7 +734,7 @@ PARAMS = VerlParams(
     use_shm=False,
     layered_summon=False,
     max_steps=4000,
-    output_dir="/workspace/verl_31_aug_act_low_kl_try_2",
+    output_dir="/workspace/verl_test",
     eval_path=None,
     save_steps=25,  # saving causes OOM. Why?
     n_gpus=1,
@@ -732,7 +742,7 @@ PARAMS = VerlParams(
     wandb_project="grpo-feature-vector",
     # HuggingFace Hub configuration (like your current script)
     push_to_hub=True,
-    hub_repo_id="thejaminator/feature-vector-31aug-low-kl",  # Updated with "_verl" suffix
+    hub_repo_id="thejaminator/feature-vector-3sep-test",  # Updated with "_verl" suffix
     hf_api_key=hf_api_key,
     reward_function_name="compute_score",
     reward_function_file="feature_vector_reward.py",
