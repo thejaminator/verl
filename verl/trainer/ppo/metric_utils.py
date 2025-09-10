@@ -496,7 +496,10 @@ def log_reward_manager_table(batch: DataProto, step: int, existing_table: Any | 
         return existing_table
 
     if "table_data" not in batch.non_tensor_batch:
+        print("No table data to log")
         return existing_table
+    else:
+        print(f"Logging table data")
 
     # Extract table data from batch (list of individual row dictionaries)
     table_data_list = batch.non_tensor_batch["table_data"]

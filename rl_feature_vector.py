@@ -10,11 +10,12 @@ Based on the verl documentation and examples.
 
 import os
 
+from slist import Slist
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from create_hard_negatives_v2 import get_sae_info, load_sae
 from detection_eval.caller import read_jsonl_file_into_basemodel
-from detection_eval.detection_basemodels import SAEV2, SAEVerlDataTypedDict, make_sae_verl_typed_dict
+from detection_eval.detection_basemodels import SAEV2, SAEVerlDataTypedDict, make_sae_verl_typed_dict, SAEInfo
 from detection_eval.steering_hooks import get_introspection_prompt
 
 # set HF_HOME to /workspace
@@ -35,7 +36,7 @@ from pydantic import BaseModel
 
 class VerlParams(BaseModel):
     # Dataset paths
-    train_path: str
+    train_path: list[str]
     use_hf_rollout_instead_of_vllm: bool = False
     enable_gradient_checkpointing: bool = True
     eval_path: str | None = None
@@ -65,12 +66,9 @@ class VerlParams(BaseModel):
     vllm_split: int = 2
     warmup_steps: int = 10
     loss_kl_penalty: float = 0.001  # KL coefficient
-    entropy_coeff: float = 0.0 # higher is entropy boost, try 0.01
+    entropy_coeff: float = 0.0  # higher is entropy boost, try 0.01
 
     # SAE feature-vector config
-    sae_repo_id: str = "google/gemma-scope-9b-it-res"
-    sae_layer: int = 9
-    sae_width: int = 131
     use_decoder_vectors: bool
 
     # LoRA configuration
@@ -97,31 +95,6 @@ class VerlParams(BaseModel):
     wandb_api_key: str | None = None
 
 
-def load_sae_params_for_model(
-    sae_layer: int,
-    sae_width: int,
-    sae_repo_id: str,
-    model_name: str,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Download and load SAE params (W_enc, W_dec) for the tokenizer's model family."""
-    sae_info = get_sae_info(sae_repo_id=sae_repo_id, sae_layer_percent=25)
-    filename = sae_info.sae_filename
-    # just load on cpu, since going to dump
-    device = torch.device("cuda")
-    dtype = torch.bfloat16
-    sae = load_sae(
-        sae_repo_id=sae_repo_id,
-        sae_filename=filename,
-        sae_layer=sae_layer,
-        model_name=model_name,
-        device=device,
-        dtype=dtype,
-    )
-    W_enc = sae.W_enc.data
-    W_dec = sae.W_dec.data
-    return W_enc, W_dec
-
-
 def extract_answer(text: str) -> str:
     """Extract answer from <answer> tags"""
     if "<answer>" in text and "</answer>" in text:
@@ -134,114 +107,125 @@ def extract_answer(text: str) -> str:
 def load_and_convert_dataset(
     model: str,
     tokenizer: PreTrainedTokenizer,
-    dataset_path: str,
+    dataset_path: list[str],
     output_path: str,
-    sae_layer: int,
-    sae_width: int,
     use_decoder_vectors: bool,
-    sae_repo_id: str,
     enable_thinking: bool,
     limit: int | None = None,
 ) -> int:
     """
     Load dataset from JSONL and convert to verl format (parquet).
+    Now handles multiple datasets with potentially different SAE layers.
 
     Args:
-        dataset_path: Path to input JSONL file
+        dataset_path: List of paths to input JSONL files
         output_path: Path to output parquet file
-        data_source: Source identifier for the dataset
+        use_decoder_vectors: Whether to use decoder or encoder vectors
+        enable_thinking: Whether to enable thinking mode
+        limit: Maximum number of samples per file
 
     Returns:
         Number of samples processed
-
-
-    class SAE(BaseModel):
-        sae_id: int
-        activations: SAEActivations
-        # Sentences that do not activate for the given sae_id. But come from a similar SAE
-        # Here the sae_id correspond to different similar SAEs.
-        # The activations are the activations w.r.t this SAE. And should be low.
-        hard_negatives: list[SAEActivations]
-
     """
-    # Each line in jsonl should be SAE object
-
+    # Load all data
+    all_jsonl_items: Slist[SAEV2] = Slist(dataset_path).map(
+        lambda path: read_jsonl_file_into_basemodel(path, SAEV2, limit=limit)
+    ).flatten_list()
     print(f"Loading dataset from: {dataset_path}")
-    prompt_content = get_introspection_prompt(sae_layer=9)
+    print(f"Total items loaded: {len(all_jsonl_items)}")
+    
+    # Step 1: Get all unique layers and their SAE info
+    unique_sae_infos: dict[int, SAEInfo] = {}
+    for item in all_jsonl_items:
+        layer = item.sae_info.sae_layer
+        if layer not in unique_sae_infos:
+            unique_sae_infos[layer] = item.sae_info
+        # else:
+            # Verify all items with same layer have same SAE info
+            # assert unique_sae_infos[layer] == item.sae_info, f"Conflicting SAE info for layer {layer}"
+    
+    print(f"Found {len(unique_sae_infos)} unique layers: {list(unique_sae_infos.keys())}")
+    
+    # Step 2: Load SAE parameters for each layer
+    layer_to_sae_params: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
+    for layer, sae_info in unique_sae_infos.items():
+        print(f"Loading SAE parameters for layer {layer} with sae repo id {sae_info.sae_repo_id}, width {sae_info.sae_width}, filename {sae_info.sae_filename}")
+        sae = load_sae(
+            sae_layer=sae_info.sae_layer,
+            sae_filename=sae_info.sae_filename,
+            sae_repo_id=sae_info.sae_repo_id,
+            device=torch.device("cuda"),
+            dtype=torch.bfloat16,
+            model_name=model,
+        )
+        W_enc = sae.W_enc.data
+        W_dec = sae.W_dec.data
+        layer_to_sae_params[layer] = (W_enc, W_dec)
 
-    # ---------------- build prompt and locate X position ----------------
-    prompt_as_chat_dict = {
-        "role": "user",
-        "content": prompt_content,
-    }
-    tokenized_prompt = tokenizer.apply_chat_template(
-        [prompt_as_chat_dict],
-        tokenize=True,
-        add_generation_prompt=True,
-        return_tensors=None,
-        padding=False,
-        enable_thinking=enable_thinking,
-    )
-    x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
-    # find positional index of the 'X' token within the prompt token ids
-    try:
-        position_idx = next(i for i, tid in enumerate(tokenized_prompt) if tid == x_token_id)
-    except StopIteration:
-        raise ValueError("Could not find token 'X' in the tokenized prompt")
-    print(f"X token id: {x_token_id}; position index in prompt: {position_idx}")
-
-    # ---------------- feature-vector params (loaded once) ----------------
-    W_enc, W_dec = load_sae_params_for_model(
-        sae_layer=sae_layer,
-        sae_width=sae_width,
-        sae_repo_id=sae_repo_id,
-        model_name=model,
-    )
-
-    # ---------------- build rows ----------------
+    # Step 3: Process each item
     testing_hack = False
     if model == "google/gemma-2-2b-it":
         print("WARNING: WE DON'T HAVE SAES FOR 2B, WILL USE 9B SAES")
         testing_hack = True
 
-    data = []
-    jsonl_items = read_jsonl_file_into_basemodel(dataset_path, SAEV2, limit=limit)
-    sae_ids: list[int] = jsonl_items.map(lambda x: x.sae_id)
-    sae_id_to_idx: dict[int, int] = {sae_id: idx for idx, sae_id in enumerate(sae_ids)}
-    if use_decoder_vectors:
-        feature_vector_list: list[list[float]] = W_dec[sae_ids].tolist()
-    else:
-        # uhhh not sure if this is correct? but using decoder vectors for now.
-        feature_vector_list: list[list[float]] = W_enc[:, sae_ids].T.tolist()
-
+    data = Slist()
     REQUIRE_SAE_HAS_HARD_NEGATIVES = 11
     REQUIRE_SAE_NEGATIVE_SENTENCES = 8
-    for sae in jsonl_items:
-        sample_dict = sae.model_dump()
-        # Load the SAE train info. Should conform to SAE basemodel.
-        sample = SAEV2.model_validate(sample_dict)
-        valid_test_hard_negs = [neg for neg in sae.hard_negatives if len(neg.sentences) >= REQUIRE_SAE_NEGATIVE_SENTENCES]
+    x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
+    
+    for sae in all_jsonl_items:
+        layer = sae.sae_info.sae_layer
+        
+        # Get prompt for this layer
+        prompt_content = get_introspection_prompt(sae_layer=layer)
+        prompt_as_chat_dict = [{"role": "user", "content": prompt_content}]
+        
+        # Get X token position for this layer's prompt
+        tokenized_prompt = tokenizer.apply_chat_template(
+            prompt_as_chat_dict,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_tensors=None,
+            padding=False,
+            enable_thinking=enable_thinking,
+        )
+        try:
+            position_idx = next(i for i, tid in enumerate(tokenized_prompt) if tid == x_token_id)
+        except StopIteration:
+            raise ValueError(f"Could not find token 'X' in the tokenized prompt for layer {layer}")
+        
+        # Check if we have enough hard negatives
+        valid_test_hard_negs = [
+            neg for neg in sae.hard_negatives if len(neg.sentences) >= REQUIRE_SAE_NEGATIVE_SENTENCES
+        ]
         if len(valid_test_hard_negs) <= REQUIRE_SAE_HAS_HARD_NEGATIVES:
             print(
-                f"WARNING: SAE {sae.sae_id} has {len(valid_test_hard_negs)} hard negatives. This is less than {REQUIRE_SAE_HAS_HARD_NEGATIVES}. Not enough to test on. Skipping."
+                f"WARNING: SAE {sae.sae_id} has {len(valid_test_hard_negs)} hard negatives. "
+                f"This is less than {REQUIRE_SAE_HAS_HARD_NEGATIVES}. Not enough to test on. Skipping."
             )
             continue
-        # IMPORTANT: need to fetch the correct idx for the feature vector.
-        feature = feature_vector_list[sae_id_to_idx[sae.sae_id]]
+        
+        # Get feature vector for this SAE
+        W_enc, W_dec = layer_to_sae_params[layer]
+        if use_decoder_vectors:
+            feature = W_dec[sae.sae_id].tolist()
+        else:
+            feature = W_enc[:, sae.sae_id].tolist()
 
         if testing_hack:
             # ndim 2304 for 2b
             feature = feature[:2304]
 
         sae_verl_data: SAEVerlDataTypedDict = make_sae_verl_typed_dict(
-            sample,
+            sae,
             position_idx,
             feature,
         )
+        
         # Create structured data following the pattern
         structured_data = {
             "data_source": "custom",
-            "prompt": [prompt_as_chat_dict],
+            "prompt": prompt_as_chat_dict,
             "ability": "explanations",
             "reward_model": {
                 "style": "rule",
@@ -250,13 +234,14 @@ def load_and_convert_dataset(
             "extra_info": {
                 "prompt": prompt_content,
                 "index": sae.sae_id,
+                "sae_layer": layer,  # Add layer info for debugging
             },
             # sae information which we modify the PPO trainer to pass during rollouts
             "sae": sae_verl_data,
         }
         data.append(structured_data)
-    # first_sample = data[0]a
-    # print(f"First sample:\n {first_sample}")
+
+    data = data.shuffle("42")
 
     # Save as parquet for verl using pyarrow (no pandas)
     table = pa.Table.from_pylist(data)
@@ -424,9 +409,13 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
     # https://verl.readthedocs.io/en/latest/perf/perf_tuning.html
     # ensures that prefill batch size fits the micro batch
     # max_num_batched_tokens = (params.max_prompt_length * params.num_generations * params.micro_batch_size_per_gpu * 1.5)
-    assert (params.prompt_batch_size * params.num_generations) % params.split_into_grad_accum == 0, "prompt batch size must be diviasible by grad accum"
+    assert (params.prompt_batch_size * params.num_generations) % params.split_into_grad_accum == 0, (
+        "prompt batch size must be diviasible by grad accum"
+    )
     max_num_batched_tokens = 80_000  # approx number before we oom. if OOM, adjust micro batch size per gpu.
-    predicted_tokens = params.max_prompt_length * (params.num_generations * params.prompt_batch_size  // params.vllm_split)
+    predicted_tokens = params.max_prompt_length * (
+        params.num_generations * params.prompt_batch_size // params.vllm_split
+    )
     assert predicted_tokens < max_num_batched_tokens, (
         "predicted tokens should be less than max num batched tokens. pls reduce micro batch size per gpu."
     )
@@ -436,7 +425,6 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         load_format = "safetensors"
     else:
         load_format = "dummy_dtensor"
-
 
     cmd = [
         sys.executable,
@@ -458,7 +446,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         "algorithm.adv_estimator=grpo",
         "algorithm.use_kl_in_reward=false",
         "algorithm.kl_ctrl.type=fixed",
-        f"algorithm.kl_ctrl.kl_coef=0", # token level kl coefficient
+        f"algorithm.kl_ctrl.kl_coef=0",  # token level kl coefficient
         # dr grpo settings to prevent long rollouts due to bias
         "actor_rollout_ref.actor.use_kl_loss=false",
         "actor_rollout_ref.actor.loss_agg_mode=seq-mean-token-sum-norm",
@@ -507,7 +495,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             # should be a multiple of micro_batch_size_per_gpu for grad accumulation. grad accum = mini batch size / micro batch size per gpu
             # self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size_per_gpu
             f"actor_rollout_ref.actor.ppo_mini_batch_size={params.prompt_batch_size}",
-             # why does one use ppo_micro_batch_size and the other use micro_batch_size? no fking clue.
+            # why does one use ppo_micro_batch_size and the other use micro_batch_size? no fking clue.
             # Somewhere in fsdp workers, they do self.config.actor.ppo_mini_batch_size *= self.config.rollout.n. So the mini batch is multipled
             # wtf? So then we should do it manually for micro batch so that we scale by gradient accumulation accordingly.
             # IF you are confused, so am I.
@@ -643,11 +631,8 @@ def verl_main(params: VerlParams):
         tokenizer,
         params.train_path,
         train_parquet,
-        enable_thinking=params.enable_thinking,
-        sae_layer=params.sae_layer,
-        sae_width=params.sae_width,
         use_decoder_vectors=params.use_decoder_vectors,
-        sae_repo_id=params.sae_repo_id,
+        enable_thinking=params.enable_thinking,
         limit=params.max_train_samples,
     )
 
@@ -656,25 +641,20 @@ def verl_main(params: VerlParams):
         load_and_convert_dataset(
             params.model_name,
             tokenizer,
-            dataset_path=params.eval_path,
+            dataset_path=[params.eval_path],
             output_path=eval_parquet,
-            sae_layer=params.sae_layer,
-            sae_width=params.sae_width,
             use_decoder_vectors=params.use_decoder_vectors,
-            sae_repo_id=params.sae_repo_id,
+            enable_thinking=params.enable_thinking,
         )
     else:
         eval_parquet = os.path.join(params.output_dir, "eval.parquet")
         load_and_convert_dataset(
             params.model_name,
             tokenizer,
-            enable_thinking=params.enable_thinking,
             dataset_path=params.train_path,
             output_path=eval_parquet,
-            sae_layer=params.sae_layer,
-            sae_width=params.sae_width,
             use_decoder_vectors=params.use_decoder_vectors,
-            sae_repo_id=params.sae_repo_id,
+            enable_thinking=params.enable_thinking,
             limit=1,
         )
 
@@ -702,19 +682,22 @@ PARAMS = VerlParams(
     # model_name="thejaminator/gemma-introspection-20250821-merged",  # loras don't get merged automatically
     # sae_repo_id="google/gemma-scope-9b-it-res",
     model_name="thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
-    train_path="data/qwen_hard_negatives_20000_20500_layer_percent_25.jsonl",
+    train_path=[
+        "data/qwen_hard_negatives_20000_20500_layer_percent_25.jsonl",
+        "data/qwen_hard_negatives_20000_20500_layer_percent_50.jsonl",
+        "data/qwen_hard_negatives_20000_20500_layer_percent_75.jsonl",
+    ],
     max_train_samples=50,
-    sae_repo_id="adamkarvonen/qwen3-8b-saes",
     use_feature_vector=True,
     use_hf_rollout_instead_of_vllm=False,
-    enable_thinking=False, # Actually, this doesn't do anything, I hardcoded verl/utils/dataset/rl_dataset.py to disable it.
+    enable_thinking=False,  # Actually, this doesn't do anything, I hardcoded verl/utils/dataset/rl_dataset.py to disable it.
     max_seq_length=1100,
     max_prompt_length=300,
     max_response_length=8_00,
     num_generations=16,  # Bigger group size since noisy explanations
     prompt_batch_size=8,  # number of prompts in rollout batch. will be multiplied by num_generations.
-    split_into_grad_accum=8, # prompt_batch_size * num_generations gets split by grad accum.
-    vllm_split=2, # prompt_batch_size * num_generations gets split by vllm split.
+    split_into_grad_accum=8,  # prompt_batch_size * num_generations gets split by grad accum.
+    vllm_split=2,  # prompt_batch_size * num_generations gets split by vllm split.
     # 8 * 8 = 64 is the effective batch size
     # Note: vllm implementation does not follow this batch size since it has its own scheduler.
     # May need to experiment with implementing our own split for vllm.
@@ -729,7 +712,7 @@ PARAMS = VerlParams(
     warmup_steps=5,
     learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
     entropy_coeff=0.000,
-    loss_kl_penalty=0.002,
+    loss_kl_penalty=0.001,  # Note: we are calculating KL w.r.t to the base model without SFT, which is weird.
     lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
     lora_alpha=128.0,  # Typically 2x lora_rank
     target_modules="all-linear",  # Apply LoRA to all linear layers
@@ -750,8 +733,6 @@ PARAMS = VerlParams(
     reward_function_file="feature_vector_reward.py",
     wandb_api_key=wandb_key,
     use_decoder_vectors=True,
-    sae_layer=9,
-    sae_width=131,
     enable_gradient_checkpointing=False,
 )
 

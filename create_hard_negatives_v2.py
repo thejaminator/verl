@@ -344,7 +344,7 @@ def load_dictionary_learning_batch_topk_sae(
         config = json.load(f)
 
     if layer is not None:
-        assert layer == config["trainer"]["layer"]
+        assert layer == config["trainer"]["layer"], f"Layer {layer} not in config {config['trainer']['layer']}, repo id {repo_id}, filename {filename}"
     else:
         layer = config["trainer"]["layer"]
 

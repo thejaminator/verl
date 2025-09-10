@@ -108,8 +108,19 @@ class BatchDetectionRewardManager:
             reward_tensor[i, length - 1] = reward
 
             data_source = data_sources[i]
+            
+            # Always collect table data for logging (separate from printing logic)
+            response_str = self.tokenizer.decode(data.batch["responses"][i][:length], skip_special_tokens=True)
+            table_data.append(
+                {
+                    "sae": data.non_tensor_batch["sae"][i]["sae_id"],
+                    "explanation": response_str,
+                    "score": scores[i],
+                }
+            )
+            
+            # Only print if within num_examine limit
             if already_printed.get(data_source, 0) < self.num_examine:
-                response_str = self.tokenizer.decode(data.batch["responses"][i][:length], skip_special_tokens=True)
                 prompt_str = self.tokenizer.decode(data.batch["prompts"][i], skip_special_tokens=True)
                 # ground_truth = data[i].non_tensor_batch["reward_model"].get("ground_truth", None)
                 print("[prompt]", prompt_str)
@@ -117,19 +128,13 @@ class BatchDetectionRewardManager:
                 # print("[ground_truth]", ground_truth)
                 print("[score]", scores[i])
                 already_printed[data_source] = already_printed.get(data_source, 0) + 1
-                table_data.append(
-                    {
-                        "sae": data.non_tensor_batch["sae"][i]["sae_id"],
-                        "explanation": response_str,
-                        "score": scores[i],
-                    }
-                )
 
         data.batch["acc"] = torch.tensor(rewards, dtype=torch.float32, device=prompt_ids.device)
         
-        # Add table data to non_tensor_batch for wandb logging (only if we have data)
+        # Add table data to reward_extra_info for logging (like NaiveRewardManager does)
+        # This will get automatically converted to np.array by the trainer
         if table_data:
-            data.non_tensor_batch["table_data"] = table_data
+            reward_extra_info["table_data"] = table_data
 
         if return_dict:
             return {"reward_tensor": reward_tensor, "reward_extra_info": reward_extra_info}
