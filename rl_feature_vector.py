@@ -687,7 +687,8 @@ PARAMS = VerlParams(
         "data/qwen_hard_negatives_20000_20500_layer_percent_50.jsonl",
         "data/qwen_hard_negatives_20000_20500_layer_percent_75.jsonl",
     ],
-    max_train_samples=50,
+    eval_path="data/qwen_hard_negatives_50000_50128_layer_percent_25.jsonl",
+    max_train_samples=500, # per file
     use_feature_vector=True,
     use_hf_rollout_instead_of_vllm=False,
     enable_thinking=False,  # Actually, this doesn't do anything, I hardcoded verl/utils/dataset/rl_dataset.py to disable it.
@@ -696,7 +697,7 @@ PARAMS = VerlParams(
     max_response_length=8_00,
     num_generations=16,  # Bigger group size since noisy explanations
     prompt_batch_size=8,  # number of prompts in rollout batch. will be multiplied by num_generations.
-    split_into_grad_accum=8,  # prompt_batch_size * num_generations gets split by grad accum.
+    split_into_grad_accum=4,  # prompt_batch_size * num_generations gets split by grad accum.
     vllm_split=2,  # prompt_batch_size * num_generations gets split by vllm split.
     # 8 * 8 = 64 is the effective batch size
     # Note: vllm implementation does not follow this batch size since it has its own scheduler.
@@ -720,7 +721,6 @@ PARAMS = VerlParams(
     layered_summon=False,
     max_steps=4000,
     output_dir="/workspace/verl_test",
-    eval_path=None,
     save_steps=25,  # saving causes OOM. Why?
     n_gpus=1,
     use_wandb=True,
