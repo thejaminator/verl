@@ -1,3 +1,3 @@
 from rl_feature_vector import PARAMS, convert_verl_to_hf_and_push
 
-convert_verl_to_hf_and_push(PARAMS, step=100)
+convert_verl_to_hf_and_push(PARAMS)

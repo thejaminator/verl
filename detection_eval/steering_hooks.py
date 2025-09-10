@@ -6,7 +6,13 @@ import torch
 
 from detection_eval.detection_basemodels import SAEVerlDataTypedDict
 
-X_PROMPT = "Can you explain to me the concept of what 'X' means? Give positive and negative examples of what the concept would activate on. Format your final answer with <explanation>."
+
+def get_introspection_prefix(sae_layer: int) -> str:
+    return f"Layer: {sae_layer}, Concept: <<X>>.\n"
+
+
+def get_introspection_prompt(sae_layer: int) -> str:
+    return f"{get_introspection_prefix(sae_layer)}Can you explain to me what this concept means?"
 
 
 def get_vllm_steering_hook(

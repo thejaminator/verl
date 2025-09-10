@@ -33,10 +33,12 @@ import torch
 import torch.nn.functional as F
 from pydantic import BaseModel
 from tqdm import tqdm
+from transformers import BitsAndBytesConfig
 
 from detection_eval.detection_basemodels import (
     SAEV2,
     SAEActivationsV2,
+    SAEInfo,
     SentenceInfoV2,
     TokenActivationV2,
 )
@@ -53,13 +55,6 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 from huggingface_hub import hf_hub_download
-
-
-class SAEInfo(NamedTuple):
-    sae_width: int
-    sae_layer: int
-    sae_layer_percent: int
-    sae_filename: str
 
 
 def get_sae_info(sae_repo_id: str, sae_layer_percent: int = 25, sae_width: int | None = None) -> SAEInfo:
@@ -110,6 +105,7 @@ def get_sae_info(sae_repo_id: str, sae_layer_percent: int = 25, sae_width: int |
         sae_layer=sae_layer,
         sae_layer_percent=sae_layer_percent,
         sae_filename=sae_filename,
+        sae_repo_id=sae_repo_id,
     )
 
 
@@ -447,7 +443,7 @@ def get_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = Fals
     if use_lora:
         if "pythia" in model_name:
             raise ValueError("Need to determine how to get submodule for LoRA")
-        elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name or "qwen" in model_name.lower():
+        elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name or "Qwen" in model_name:
             return model.base_model.model.model.layers[layer]  # type: ignore
         else:
             raise ValueError(f"Please add submodule for model {model_name}")
@@ -611,36 +607,68 @@ def find_most_similar_features(
     return similar_features
 
 
+def load_model(
+    model_name: str,
+    dtype: torch.dtype,
+    load_in_8bit: bool = False,
+) -> AutoModelForCausalLM:
+    print("🧠 Loading model...")
+
+    # Gemma prefers eager attention; others use FA2
+    attn = "eager" if "gemma" in model_name.lower() else "flash_attention_2"
+
+    kwargs: dict = {
+        "device_map": "auto",
+        "attn_implementation": attn,
+    }
+
+    if load_in_8bit:
+        # Requires `bitsandbytes` to be installed
+        bnb_cfg = BitsAndBytesConfig(
+            load_in_8bit=True,
+            bnb_8bit_compute_dtype=dtype,
+            # llm_int8_threshold=6.0,
+            # llm_int8_has_fp16_weight=False,
+        )
+        kwargs["quantization_config"] = bnb_cfg
+        kwargs["torch_dtype"] = dtype  # used for compute layers
+    else:
+        kwargs["torch_dtype"] = dtype
+
+    model = AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
+    return model
+
+
+def load_tokenizer(
+    model_name: str,
+) -> AutoTokenizer:
+    # Load tokenizer
+    print("📦 Loading tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer.padding_side = "left"
+
+    if not tokenizer.pad_token_id:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+    if not tokenizer.bos_token_id:
+        tokenizer.bos_token_id = tokenizer.eos_token_id
+    return tokenizer
+
+
 def load_model_and_sae(
     model_name: str,
     sae_repo_id: str,
     sae_filename: str,
     sae_layer: int,
-) -> tuple[AutoModelForCausalLM, AutoTokenizer, object, torch.nn.Module]:
-    """Load the Gemma 9B model, tokenizer, SAE, and submodule."""
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[AutoModelForCausalLM, AutoTokenizer, object]:
+    """Load the Gemma 9B model, tokenizer, and SAE."""
 
-    # Load tokenizer
-    print("📦 Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-    # Load model
-    print("🧠 Loading model...")
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=dtype,
-        device_map="auto" if torch.cuda.is_available() else None,
-    )
-
-    # Load SAE
-    print("🔧 Loading SAE...")
+    model = load_model(model_name, dtype)
+    tokenizer = load_tokenizer(model_name)
     sae = load_sae(sae_repo_id, sae_filename, sae_layer, model_name, device, dtype)
 
-    # Get submodule for activation collection
-    submodule = get_submodule(model, sae_layer)  # type: ignore
-
-    return model, tokenizer, sae, submodule  # type: ignore
+    return model, tokenizer, sae
 
 
 def compute_sae_activations_for_sentences(
@@ -733,8 +761,15 @@ def main(
         print(f"🔍 Output file {output} already exists. Not going to overwrite it.")
         return
 
+    device = torch.device("cuda")
+    dtype = torch.bfloat16
+
     # Get SAE info
-    sae_width, sae_layer, sae_layer_percent, sae_filename = get_sae_info(sae_repo_id, sae_layer_percent)
+    sae_info = get_sae_info(sae_repo_id, sae_layer_percent)
+    sae_width = sae_info.sae_width
+    sae_layer = sae_info.sae_layer
+    sae_layer_percent = sae_info.sae_layer_percent
+    sae_filename = sae_info.sae_filename
 
     print("🔧 Configuration:")
     print(f"   Model: {model_name}")
@@ -763,14 +798,10 @@ def main(
 
     # Load model, tokenizer, and SAE
     print("🚀 Loading model and SAE...")
-    model, tokenizer, sae, submodule = load_model_and_sae(model_name, sae_repo_id, sae_filename, sae_layer)
+    model, tokenizer, sae = load_model_and_sae(model_name, sae_repo_id, sae_filename, sae_layer, device, dtype)
+    submodule = get_submodule(model, sae_layer)  # type: ignore
     # how many features in sae?
     print(f"🔍 Number of features in SAE: {len(sae.W_dec)}")  # type: ignore
-
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-    if tokenizer.bos_token_id is None:
-        tokenizer.bos_token_id = tokenizer.eos_token_id
 
     # Process each feature index
     special_tokens = [tokenizer.eos_token_id, tokenizer.bos_token_id, tokenizer.pad_token_id]
@@ -902,7 +933,7 @@ def main(
                 hard_negatives.append(hard_negative_sae_activations)
 
             sae_result = SAEV2(
-                sae_id=feature_idx, sae_layer=sae_layer, activations=pos_sae_activations, hard_negatives=hard_negatives
+                sae_id=feature_idx, sae_info=sae_info, activations=pos_sae_activations, hard_negatives=hard_negatives
             )
             f.write(sae_result.model_dump_json(exclude_none=True) + "\n")
 
@@ -920,26 +951,25 @@ if __name__ == "__main__":
     # to_100k = list(range(0, 100_000))
     # 100k to 100_200
     # target_features = list(range(0, 200))
-    min_idx = 30_000
-    max_idx = 60_000
-    # max_idx = 30
+    min_idx = 50_000
+    # max_idx = 20_000
+    max_idx = 50_500
     target_features = list(range(min_idx, max_idx))
 
     data_folder = "data"
     os.makedirs(data_folder, exist_ok=True)
 
-    # for sae_layer_percent in [25, 50, 75]:
-    sae_layer_percent = 25
-    main(
-        # model_name="google/gemma-2-9b-it",a
-        # sae_repo_id="google/gemma-scope-9b-it-res",
-        model_name="Qwen/Qwen3-8B",
-        sae_repo_id="adamkarvonen/qwen3-8b-saes",
-        target_features=target_features,
-        top_k_similar_features=34,
-        batch_size=1024,
-        target_sentences=32,
-        output=f"{data_folder}/qwen_hard_negatives_{min_idx}_{max_idx}_layer_percent_{sae_layer_percent}.jsonl",
-        sae_layer_percent=sae_layer_percent,
-        verbose=False,
-    )
+    for sae_layer_percent in [25, 50, 75]:
+        main(
+            # model_name="google/gemma-2-9b-it",
+            # sae_repo_id="google/gemma-scope-9b-it-res",
+            model_name="Qwen/Qwen3-8B",
+            sae_repo_id="adamkarvonen/qwen3-8b-saes",
+            target_features=target_features,
+            top_k_similar_features=34,
+            batch_size=1024,
+            target_sentences=32,
+            output=f"{data_folder}/qwen_hard_negatives_{min_idx}_{max_idx}_layer_percent_{sae_layer_percent}.jsonl",
+            sae_layer_percent=sae_layer_percent,
+            verbose=False,
+        )

@@ -18,7 +18,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Set
 
 import torch
 import uvicorn
@@ -38,8 +38,8 @@ os.environ["NVTE_ALLOW_NONDETERMINISTIC_ALGO"] = "1"
 # Configuration
 # MODEL_NAME = "google/gemma-2-9b-it"
 # MODEL_NAME = "Qwen/Qwen3-8B"
-MODEL_NAME = "thejaminator/qwen-hook-layer-9-posneg-merged"
-# MODEL_NAME = "thejaminator/qwen-hook-layer-9"
+# MODEL_NAME = "thejaminator/qwen-hook-layer-9-merged"
+MODEL_NAME = "thejaminator/qwen-hook-layer-9-step-1000-merged"
 DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
 CTX_LEN = 6000
@@ -68,11 +68,10 @@ gemma_loras = [
     # "thejaminator/gemma-posneg-cot",
 ]
 qwen_loras = [
-    # "thejaminator/feature-vector-31aug-low-kl-step-100",
+    "thejaminator/feature-vector-31aug-low-kl-step-100",
     # "thejaminator/feature-vector-31aug-low-kl-step-50",
     # "thejaminator/grpo-feature-vector-step-100",
     # "thejaminator/qwen-hook-layer-9"
-    "thejaminator/feature-vector-31aug-entropy-step-125",
     # "thejaminator/grpo-feature-vector-step-100"
 ]
 load_loras = qwen_loras
@@ -155,8 +154,8 @@ class VLLMServer:
             gpu_memory_utilization=gpu_memory_utilization,
             enable_lora=True,
             max_lora_rank=64,
-            # Maybe ok?
-            disable_async_output_proc=False,
+            # Important to disable async output proc otherwise our hook breaks.
+            disable_async_output_proc=True,
             # Otherwise hook does not get applied.
             enforce_eager=True,
             # Since our prompts are all the same, we need to disable this.
@@ -192,8 +191,6 @@ class VLLMServer:
 
     def get_model_key(self, model_name: str, hook_onto_layer: int) -> str:
         """Get the key for queue management based on model name."""
-        if model_name == MODEL_NAME:
-            return "base"
         return model_name + str(hook_onto_layer)
 
     async def add_to_queue(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
@@ -320,7 +317,10 @@ class VLLMServer:
                 dtype=DTYPE,
             )
             # get the layer number from the hook_onto_layer
-            layer_number = batch_requests[0].request.hook_onto_layer
+            layer_numbers: Set[int] = {b.request.hook_onto_layer for b in batch_requests}
+            # assert all the layer numbers are the same
+            assert len(layer_numbers) == 1, f"Layer numbers are not the same: {layer_numbers}"
+            layer_number: int = layer_numbers.pop()
 
             # Generate batch with steering
             target_layer = self.model.model.layers[layer_number]
