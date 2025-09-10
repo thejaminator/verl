@@ -754,8 +754,9 @@ def train_model(
 ):
     model = load_model(cfg.model_name, dtype)
 
-    model.use_cache = False
-    model.gradient_checkpointing_enable()
+    if cfg.gradient_checkpointing:
+        model.use_cache = False
+        model.gradient_checkpointing_enable()
 
     submodule = get_submodule(model, cfg.hook_onto_layer)
 
@@ -921,6 +922,7 @@ def load_sae_data_from_sft_data_file(
     tokenizer: PreTrainedTokenizer,
     device: torch.device,
     dtype: torch.dtype,
+    add_sae_yes_no_examples: bool,
 ) -> tuple[list[TrainingDataPoint], SAEInfo]:
     explanations: list[SAEExplained] = load_explanations_from_jsonl(sft_data_file)
     orig_sae_info = explanations[0].sae_info
@@ -987,6 +989,7 @@ def build_datasets(
     tokenizer: PreTrainedTokenizer,
     device: torch.device,
     dtype: torch.dtype,
+    add_sae_yes_no_examples: bool = True,
     max_len_percentile: float | None = 0.999,
     window_mult: int | None = 20,
 ) -> tuple[list[TrainingDataPoint], list[TrainingDataPoint], list[SAEInfo]]:
@@ -998,7 +1001,9 @@ def build_datasets(
 
     # SFT-style feature explanations
     for sft_file in cfg.sae_sft_datasets:
-        file_data, sae_info = load_sae_data_from_sft_data_file(sft_file, cfg, tokenizer, device, dtype)
+        file_data, sae_info = load_sae_data_from_sft_data_file(
+            sft_file, cfg, tokenizer, device, dtype, add_sae_yes_no_examples=add_sae_yes_no_examples
+        )
         file_data = file_data[: cfg.max_sae_sft_examples]
         all_training_data.extend(file_data[: -cfg.test_set_size_per_ds])
         all_sae_infos.append(sae_info)
@@ -1110,10 +1115,21 @@ if __name__ == "__main__":
 
     load_lora_path = Path("checkpoints_sae_layer_1_decoder/final")
 
+    iterations = [
+        {"lr": 2e-5},
+        {"lr": 5e-5},
+        {"act_collect_offset": -3},
+        {"act_collect_offset": -5},
+        {"num_epochs": 2},
+    ]
+
     # for use_decoder_vectors in [True]:
-    for window_mult in [20, None]:
+    for hyperparam_override in iterations:
         wandb_suffix = f"_no_sae_multiple_datasets_layer_{hook_layer}_v2"
-        wandb_suffix = f"_with_sae_multiple_datasets_layer_{hook_layer}_window_mult_{window_mult}"
+        # wandb_suffix = f"_with_sae_multiple_datasets_layer_{hook_layer}_window_mult_{window_mult}"
+        hyperparam_suffix = f"_{list(hyperparam_override.keys())[0]}_{list(hyperparam_override.values())[0]}"
+        wandb_suffix += hyperparam_suffix
+        print(wandb_suffix)
         # wandb_suffix = f"_sae_layer_{hook_layer}"
         # if use_decoder_vectors:
         #     wandb_suffix += "_decoder"
@@ -1131,15 +1147,14 @@ if __name__ == "__main__":
             classification_eval_datasets=classification_eval_datasets,
             max_classification_examples=6_000,
             test_set_size_per_ds=250,
+            train_batch_size=16,
             activation_collection_batch_size=64,
             eval_steps=10000,
             eval_on_start=False,
             load_lora_path=str(load_lora_path),
-            act_collect_offset=-4,
+            # act_collect_offset=-4,
+            **hyperparam_override,
         )
-
-        if len(explanations_files) == 0 or True:
-            cfg.train_batch_size *= 4
 
         # mutate the cfg here using variables in the itertools loop over variables of interest
         # cfg.use_decoder_vectors = use_decoder_vectors
@@ -1150,7 +1165,7 @@ if __name__ == "__main__":
         tokenizer = load_tokenizer(cfg.model_name)
 
         all_training_data, all_eval_data, all_sae_infos = build_datasets(
-            cfg, tokenizer, device, dtype, window_mult=window_mult
+            cfg, tokenizer, device, dtype, window_mult=cfg.window_mult
         )
 
         # for debugging

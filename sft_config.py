@@ -27,7 +27,7 @@ class SelfInterpTrainingConfig:
         default_factory=lambda: {"do_sample": True, "temperature": 1.0, "max_new_tokens": 300}
     )
     steering_coefficient: float = 2.0
-    act_collect_offset: int = -3
+    act_collect_offset: int = -4
     max_sae_sft_examples: int = 50_000
     max_classification_examples: int = 10_000
     test_set_size_per_ds: int = 25
@@ -52,6 +52,8 @@ class SelfInterpTrainingConfig:
     max_grad_norm: float = 1.0
     eval_steps: int = 9_999_999  # effectively off by default
     eval_on_start: bool = False
+    gradient_checkpointing: bool = False
+    window_mult: int = 20
     save_steps: int = 5_000
     save_dir: str = "checkpoints"
     seed: int = 42
