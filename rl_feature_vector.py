@@ -167,11 +167,12 @@ def load_and_convert_dataset(
     # Each line in jsonl should be SAE object
 
     print(f"Loading dataset from: {dataset_path}")
+    prompt_content = get_introspection_prompt(sae_layer=9)
 
     # ---------------- build prompt and locate X position ----------------
     prompt_as_chat_dict = {
         "role": "user",
-        "content": get_introspection_prompt(sae_layer=9),
+        "content": prompt_content,
     }
     tokenized_prompt = tokenizer.apply_chat_template(
         [prompt_as_chat_dict],
@@ -247,7 +248,7 @@ def load_and_convert_dataset(
                 "ground_truth": "no ground truth",
             },
             "extra_info": {
-                "prompt": X_PROMPT,
+                "prompt": prompt_content,
                 "index": sae.sae_id,
             },
             # sae information which we modify the PPO trainer to pass during rollouts
@@ -632,7 +633,8 @@ def verl_main(params: VerlParams):
 
     # Load tokenizer once and pass down
     print("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(params.model_name)
+    # Todo: Get adam to dump the config.json too so we don't hardcode this
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")
 
     # Convert datasets to parquet format
     train_parquet = os.path.join(params.output_dir, "train.parquet")
@@ -699,12 +701,12 @@ PARAMS = VerlParams(
     # model_name="google/gemma-2-2b-it",
     # model_name="thejaminator/gemma-introspection-20250821-merged",  # loras don't get merged automatically
     # sae_repo_id="google/gemma-scope-9b-it-res",
-    model_name="thejaminator/qwen-hook-layer-9-posneg-merged",
-    train_path="data/qwen_hard_negatives_0_to_30_000.jsonl",
-    max_train_samples=8_0,
+    model_name="adamkarvonen/checkpoints_multiple_datasets_layer_1_decoder",
+    train_path="data/qwen_hard_negatives_20000_20500_layer_percent_25.jsonl",
+    max_train_samples=500,
     sae_repo_id="adamkarvonen/qwen3-8b-saes",
     use_feature_vector=True,
-    use_hf_rollout_instead_of_vllm=True,
+    use_hf_rollout_instead_of_vllm=False,
     enable_thinking=False, # Actually, this doesn't do anything, I hardcoded verl/utils/dataset/rl_dataset.py to disable it.
     max_seq_length=1100,
     max_prompt_length=300,
@@ -742,7 +744,7 @@ PARAMS = VerlParams(
     wandb_project="grpo-feature-vector",
     # HuggingFace Hub configuration (like your current script)
     push_to_hub=True,
-    hub_repo_id="thejaminator/10sep",  # Updated with "_verl" suffix
+    hub_repo_id="thejaminator/10sep_layer_1_hook",  # Updated with "_verl" suffix
     hf_api_key=hf_api_key,
     reward_function_name="compute_score",
     reward_function_file="feature_vector_reward.py",
