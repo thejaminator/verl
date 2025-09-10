@@ -27,8 +27,11 @@ from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import GenerationConfig
 
+from create_hard_negatives_v2 import get_submodule
+from detection_eval.detection_basemodels import SAEVerlDataTypedDict
+from detection_eval.steering_hooks import HookArgs, add_hook, get_hf_activation_steering_hook, verl_data_to_hook_args
 from verl import DataProto
-from verl.utils.device import get_device_name, get_torch_device
+from verl.utils.device import get_device_id, get_device_name, get_torch_device
 from verl.utils.torch_functional import get_response_mask
 
 from .base import BaseRollout
@@ -44,8 +47,13 @@ class HFRollout(BaseRollout):
 
     def generate_sequences(self, prompts: DataProto) -> DataProto:
         batch_size = prompts.batch.batch_size[0]
-        num_chunks = max(batch_size // self.config.get("micro_batch_size", batch_size), 1)
+        # num_chunks = max(batch_size // self.config.get("micro_batch_size", batch_size), 1)
+        # assume batch size 128.
+        # i can't find the yaml for this, so i hardcoded it.
+        micro_batch_size = 32
+        num_chunks = max(batch_size // micro_batch_size, 1)
         batch_prompts = prompts.chunk(chunks=num_chunks)
+        print(f"HFRollout: Splitting batch of size {batch_size} into {num_chunks} chunks")
         output = [self._generate_minibatch(p) for p in batch_prompts]
         output = DataProto.concat(output)
         return output
@@ -99,6 +107,19 @@ class HFRollout(BaseRollout):
         # used to construct attention_mask
         eos_token_id = prompts.meta_info["eos_token_id"]
         pad_token_id = prompts.meta_info["pad_token_id"]
+        sae_info: list[SAEVerlDataTypedDict] = prompts.non_tensor_batch["sae"]
+        device = torch.device(get_device_id())
+        dtype = torch.bfloat16
+        hook_args: HookArgs = verl_data_to_hook_args(sae_info, device=device)
+        layer_number = 9
+        hook = get_hf_activation_steering_hook(
+            vectors=hook_args.vectors,
+            positions=hook_args.positions,
+            steering_coefficient=hook_args.steering_coefficient,
+            device=device,
+            dtype=dtype,
+        )
+
 
         self.module.eval()
         param_ctx = contextlib.nullcontext()
@@ -107,6 +128,13 @@ class HFRollout(BaseRollout):
             # recurse need to set to False according to https://github.com/pytorch/pytorch/issues/100069
             param_ctx = FSDP.summon_full_params(self.module, writeback=False, recurse=False)
         with param_ctx, torch.autocast(device_type=get_device_name(), dtype=torch.bfloat16):
+            # Qwen3ForCausalLM
+            try:
+                target_layer = get_submodule(self.module, layer_number, use_lora=True)
+            except Exception as e:
+                breakpoint()
+                raise e
+            # with add_hook(target_layer, hook):
             output = self.module.generate(
                 input_ids=idx,
                 attention_mask=attention_mask,
