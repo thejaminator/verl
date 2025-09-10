@@ -1202,6 +1202,29 @@ class RayPPOTrainer:
                         entropy_agg = agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
                         old_log_prob_metrics = {"actor/entropy": entropy_agg.detach().item()}
                         metrics.update(old_log_prob_metrics)
+                        # Inter-group entropy: compute token-mean entropy per sample, then average within prompt-groups (same uid)
+                        try:
+                            per_sample_entropy = masked_mean(entropys, response_masks, axis=-1)  # (batch,)
+                            uids = batch.non_tensor_batch.get("uid", None)
+                            if uids is not None:
+                                uid_to_vals = defaultdict(list)
+                                for uid, val in zip(uids, per_sample_entropy.detach().to("cpu").tolist(), strict=False):
+                                    uid_to_vals[uid].append(float(val))
+                                if uid_to_vals:
+                                    group_means = [float(np.mean(v)) for v in uid_to_vals.values()]
+                                    group_sizes = [len(v) for v in uid_to_vals.values()]
+                                    metrics.update(
+                                        {
+                                            "actor/group_entropy_mean": float(np.mean(group_means)),
+                                            "actor/group_entropy_std": float(np.std(group_means)),
+                                            "actor/group_entropy_min": float(np.min(group_means)),
+                                            "actor/group_entropy_max": float(np.max(group_means)),
+                                            "actor/group_size": int(np.mean(group_sizes)),
+                                        }
+                                    )
+                        except Exception:
+                            # best-effort metric; avoid training interruption
+                            pass
                         old_log_prob.batch.pop("entropys")
                         batch = batch.union(old_log_prob)
 
