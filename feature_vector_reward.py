@@ -204,8 +204,20 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
 
 caller = load_pooled_openai_caller(cache_path="cache/detection_eval")
 
+def bin_score(score: float) -> float:
+    if score < 0.2:
+        return 0.0
+    elif score < 0.4:
+        return 0.2
+    elif score < 0.6:
+        return 0.4
+    elif score < 0.8:
+        return 0.6
+    else:
+        return 0.8
 
-def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData]) -> list[float]:
+
+def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData], bin_scores: bool = True) -> list[float]:
     assert len(solution_str) == len(parsed_sae)
     print_strings = min(len(solution_str), 4)
     for i in range(print_strings):
@@ -227,6 +239,12 @@ def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData]) -> li
         print(f"Eval log: {last_message.content}")
 
     to_rewards = result.map(lambda x: x.f1_score if x is not None else 0.0)
+    # discretize into 0.2
+    if bin_scores:
+        # Discretize scores into bins of 0.2
+        to_rewards = to_rewards.map(bin_score)
+        
+        
     return to_rewards
 
 

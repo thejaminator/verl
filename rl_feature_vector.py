@@ -462,7 +462,8 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
     ]
 
     cmd.append(f"data.val_files={eval_parquet}")
-    cmd.append(f"data.val_batch_size={params.prompt_batch_size}")
+    # can use bigger batch size since we rollout once only
+    cmd.append(f"data.val_batch_size={params.prompt_batch_size * params.num_generations}")
 
     if params.use_feature_vector:
         # use FeatureVectorRolloutRefWorker if we want to use feature vector steering.
@@ -646,6 +647,7 @@ def verl_main(params: VerlParams):
             output_path=eval_parquet,
             use_decoder_vectors=params.use_decoder_vectors,
             enable_thinking=params.enable_thinking,
+            limit=1,
         )
     else:
         eval_parquet = os.path.join(params.output_dir, "eval.parquet")
@@ -693,13 +695,13 @@ PARAMS = VerlParams(
     use_feature_vector=True,
     use_hf_rollout_instead_of_vllm=False,
     enable_thinking=False,  # Actually, this doesn't do anything, I hardcoded verl/utils/dataset/rl_dataset.py to disable it.
-    max_seq_length=1100,
+    max_seq_length=900,
     max_prompt_length=300,
-    max_response_length=8_00,
-    num_generations=32,  # Bigger group size since noisy explanations
-    prompt_batch_size=4,  # number of prompts in rollout batch. will be multiplied by num_generations.
-    split_into_grad_accum=2,  # prompt_batch_size * num_generations gets split by grad accum.
-    vllm_split=2,  # prompt_batch_size * num_generations gets split by vllm split.
+    max_response_length=600,
+    num_generations=64,  # Bigger group size since noisy explanations
+    prompt_batch_size=16,  # number of prompts in rollout batch. will be multiplied by num_generations.
+    split_into_grad_accum=64,  # prompt_batch_size * num_generations gets split by grad accum.
+    vllm_split=16,  # prompt_batch_size * num_generations gets split by vllm split.
     # 8 * 8 = 64 is the effective batch size
     # Note: vllm implementation does not follow this batch size since it has its own scheduler.
     # May need to experiment with implementing our own split for vllm.
@@ -708,7 +710,7 @@ PARAMS = VerlParams(
     # num_generations=16,  # Bigger group size since noisy explanations
     # max_seq_length=8_000,  # More reasonable for math problems
     # max_prompt_length=2_000,  # Reduced from 6000, matching reference
-    # max_response_length=6_000,  # Reduced from 6000, matching reference
+    # mqax_response_length=6_000,  # Reduced from 6000, matching reference
     # micro_batch=8,
     # micro_batch_size_per_gpu=8,
     warmup_steps=5,
@@ -721,14 +723,14 @@ PARAMS = VerlParams(
     use_shm=False,
     layered_summon=False,
     max_steps=4000,
-    output_dir="/workspace/verl_test",
-    save_steps=50,  # saving causes OOM. Why?
+    output_dir="/workspace/verl_11sep_discrete",
+    save_steps=5,  # saving causes OOM. Why?
     n_gpus=1,
     use_wandb=True,
     wandb_project="grpo-feature-vector",
     # HuggingFace Hub configuration (like your current script)
     push_to_hub=True,
-    hub_repo_id="thejaminator/10sep_layer_1_hook",  # Updated with "_verl" suffix
+    hub_repo_id="thejaminator/11sep_discrete",  # Updated with "_verl" suffix
     hf_api_key=hf_api_key,
     reward_function_name="compute_score",
     reward_function_file="feature_vector_reward.py",
