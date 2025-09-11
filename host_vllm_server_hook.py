@@ -37,9 +37,9 @@ os.environ["NVTE_ALLOW_NONDETERMINISTIC_ALGO"] = "1"
 
 # Configuration
 # MODEL_NAME = "google/gemma-2-9b-it"
-# MODEL_NAME = "Qwen/Qwen3-8B"
+MODEL_NAME = "Qwen/Qwen3-8B"
 # MODEL_NAME = "thejaminator/qwen-hook-layer-9-merged"
-MODEL_NAME = "thejaminator/qwen-hook-layer-9-step-1000-merged"
+# MODEL_NAME = "thejaminator/qwen-hook-layer-9-step-1000-merged"
 DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
 CTX_LEN = 6000
@@ -68,7 +68,8 @@ gemma_loras = [
     # "thejaminator/gemma-posneg-cot",
 ]
 qwen_loras = [
-    "thejaminator/feature-vector-31aug-low-kl-step-100",
+    # "thejaminator/feature-vector-31aug-low-kl-step-100",
+    "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
     # "thejaminator/feature-vector-31aug-low-kl-step-50",
     # "thejaminator/grpo-feature-vector-step-100",
     # "thejaminator/qwen-hook-layer-9"
@@ -85,7 +86,7 @@ gpu_memory_utilization = 0.6
 # Max batch size that we call .generate with. See vllm logs for the max it can take.
 # IMPORTANT SHOULD BE >20%? THAN THE MAX PARALLELISM THAT VLLM WILL RUN.
 # OTHERWISE VLLM WILL DO WEIRD THINGS THAT MESSS UP THE HOOK?
-MAX_PARALLEL_REQUESTS = 36
+MAX_PARALLEL_REQUESTS = 40
 
 
 class Message(BaseModel):
@@ -155,7 +156,7 @@ class VLLMServer:
             enable_lora=True,
             max_lora_rank=64,
             # Important to disable async output proc otherwise our hook breaks.
-            disable_async_output_proc=True,
+            disable_async_output_proc=False,
             # Otherwise hook does not get applied.
             enforce_eager=True,
             # Since our prompts are all the same, we need to disable this.
