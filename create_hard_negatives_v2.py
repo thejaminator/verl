@@ -884,7 +884,9 @@ def main(
                         continue
                     act = acts_L[j]
                     max_act = max(max_act, act)
-                    token_activations.append(TokenActivationV2.model_construct(s=token, act=act, pos=j))
+                    # only save if act > 0
+                    if act > 0.0:
+                        token_activations.append(TokenActivationV2.model_construct(s=token, act=act, pos=j))
 
                 tokens = [act.s for act in token_activations]
                 pos_sentence_infos.append(
