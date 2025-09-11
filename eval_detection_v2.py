@@ -147,6 +147,7 @@ class SAETrainTest(BaseModel):
     # The activations are the activations w.r.t this SAE. And should be low.
     train_hard_negatives: list[SAEActivationsV2]
     test_hard_negatives: list[SAEActivationsV2]
+    sae_info: SAEInfo
 
     @staticmethod
     def from_sae(
@@ -246,6 +247,7 @@ class SAETrainTest(BaseModel):
             test_activations=test_activations,
             train_hard_negatives=train_hard_negatives,
             test_hard_negatives=test_hard_negatives,
+            sae_info=sae.sae_info,
         )
 
 
@@ -850,7 +852,7 @@ async def run_gemma_steering(
     """
     Run gemma steering for a single SAE.
     """
-    history = ChatHistory.from_user(get_introspection_prompt(sae_layer=9)) # TODO: FIX
+    history = ChatHistory.from_user(get_introspection_prompt(sae_layer=sae.sae_info.sae_layer))
     response = await gemma_caller.call(
         messages=history,
         config=InferenceConfig(
@@ -1007,7 +1009,7 @@ async def main(
     if len(steering_models) > 0:
         # Run gemma steering
         print("Running gemma steering")
-        RUN_POD_URL = "https://728qdkul8ii0j5-8000.proxy.runpod.net/v1"
+        RUN_POD_URL = "https://iv81p9jffx500i-8000.proxy.runpod.net/v1"
         # RUN_POD_URL = "http://0.0.0.0:8000/v1"
         gemma_client = AsyncOpenAI(api_key="dummy api key", base_url=RUN_POD_URL)
         width = 131  # not cached by api call yet, so manually add to cache path
@@ -1032,14 +1034,14 @@ async def main(
     if add_random_explanations:
         name = "Random<br>explanation"
         all_explanations = all_explanations + make_random_explanation(non_gemma_explanations, name)
-        explainer_models = explainer_models + [ModelInfo(model=name, display_name=name, reasoning_effort="low")]
+        explainer_models = explainer_models + [ModelInfo(model=name, display_name=name)]
 
     # Run evaluations for each model's explanations
     detection_config = InferenceConfig(
         model="gpt-5-mini-2025-08-07",
         # model="gpt-5-nano-2025-08-07",
         max_completion_tokens=10_000,
-        reasoning_effort="low",  # seems good enough
+        reasoning_effort="minimal",  # seems good enough
         # reasoning_effort="medium",
         temperature=1.0,
     )
@@ -1133,13 +1135,13 @@ async def main(
         write_jsonl_file_from_basemodel(path=sae_explanations_output_file, basemodels=sft_data)
         print(f"  SAE explanations saved to {sae_explanations_output_file}")
 
-        num_perfect_f1 = 0
-        for evaluation_result in evaluation_results:
-            if evaluation_result.f1_score == 1.0:
-                num_perfect_f1 += 1
-        print(
-            f"Total perfect F1 scores: {num_perfect_f1:,} out of {len(evaluation_results)}, {num_perfect_f1 / len(evaluation_results):.2f}%"
-        )
+        # num_perfect_f1 = 0
+        # for evaluation_result in evaluation_results:
+        #     if evaluation_result.f1_score == 1.0:
+        #         num_perfect_f1 += 1
+        # print(
+        #     f"Total perfect F1 scores: {num_perfect_f1:,} out of {len(evaluation_results)}, {num_perfect_f1 / len(evaluation_results):.2f}%"
+        # )
 
     # Plot F1 scores by model
     # rename_map = {m.model: m.display_name for m in explainer_models}
@@ -1155,20 +1157,20 @@ if __name__ == "__main__":
     # Define explainer models to test
     explainer_models = Slist(
         [
-            ModelInfo(
-                model="gpt-5-mini-2025-08-07",
-                display_name="GPT-5-mini<br>(extrospecting<br>sentences)",
-                reasoning_effort="low",
-                # reasoning_effort="medium",
-            ),
-            # "thejaminator/qwen-hook-layer-9"
             # ModelInfo(
-            #     model="thejaminator/qwen-hook-layer-9",
-            #     display_name="No-CoT Qwen-3-8B<br>(extrospecting<br>sentences)",
-            #     use_steering=True,
-            #     hook_onto_layer=9,
-            #     enable_thinking=False,
+            #     model="gpt-5-mini-2025-08-07",
+            #     display_name="GPT-5-mini<br>(extrospecting<br>sentences)",
+            #     reasoning_effort="low",
+            #     # reasoning_effort="medium",
             # ),
+            # "thejaminator/qwen-hook-layer-9"
+            ModelInfo(
+                model="thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
+                display_name="No-CoT Qwen-3-8B<br>(Introspecting<br>sentences)",
+                use_steering=True,
+                hook_onto_layer=1,
+                enable_thinking=False,
+            ),
             # ModelInfo(
             #     model="thejaminator/qwen-hook-layer-9",
             #     display_name="CoT Qwen-3-8B<br>(extrospecting<br>sentences)",
@@ -1183,63 +1185,6 @@ if __name__ == "__main__":
             #     use_steering=True,
             #     enable_thinking=True,
             # ),
-            # ModelInfo(
-            #     model="meta-llama/llama-3-70b-instruct",
-            #     display_name="Llama-3-70b<br>(extrospecting<br>sentences)",
-            # ),
-            # ModelInfo(
-            #     model="thejaminator/gemma-introspection-20250821-step-250",
-            #     display_name="SFT 1000<br>Gemma<br>(introspecting)",
-            #     use_steering=True,
-            # ),
-            # ModelInfo(
-            #     model="thejaminator/gemma-introspection-20250821-step-500",
-            #     display_name="SFT 2000",
-            #     use_steering=True,
-            # ),
-            # ModelInfo(
-            #     model="thejaminator/gemma-introspection-20250821-step-1000",
-            #     display_name="SFT 4000",
-            #     use_steering=True,
-            # ),
-            # ModelInfo(
-            #     model="thejaminator/gemma-introspection-20250821",
-            #     display_name="SFT 8000, layer 9",
-            #     use_steering=True,
-            #     hook_onto_layer=9,
-            # ),
-            # # thejaminator/gemma-hook-layer-0
-            # ModelInfo(
-            #     model="thejaminator/gemma-hook-layer-0",
-            #     display_name="SFT 8000, layer 0",
-            #     use_steering=True,
-            #     hook_onto_layer=0,
-            # ),
-            # ModelInfo(
-            #     model="thejaminator/gemma-multiepoch",
-            #     display_name="SFT 8000 * 4 epochs",
-            #     use_steering=True,
-            # ),
-            # thejaminator/grpo-feature-vector-step-55
-            # ModelInfo(
-            #     model="thejaminator/grpo-feature-vector-step-55", display_name="SFT + RL 200 steps", use_steering=True
-            # ),
-            # ModelInfo(
-            #     model="thejaminator/gemma-introspection-20250821-merged",
-            #     display_name="SFT 8000 samples",
-            #     use_steering=True,
-            # ),
-            # ModelInfo(model="gpt-5-mini-2025-08-07", display_name="GPT-5-mini", reasoning_effort="low"),
-            # meta-llama/llama-3-70b-instruct
-            # ModelInfo(model="gpt-4.1-2025-04-14", display_name="GPT-4.1"),
-            # ModelInfo(model="gpt-4o-2024-08-06", display_name="GPT-4o"),
-            # ModelInfo(model="claude-sonnet-4-20250514", display_name="Claude-3.5-Sonnet"),
-            # # google/gemma-2-9b-it
-            # ModelInfo(model="google/gemma-2-9b-it", display_name="Gemma-2-9b-it"),
-            # # google/gemma-3-12b-it
-            # ModelInfo(model="google/gemma-3-12b-it", display_name="Gemma-3-12b-it"),
-            # qwen/qwen3-30b-a3b-instruct-2507
-            # ModelInfo(model="qwen/qwen3-30b-a3b-instruct-2507", display_name="Qwen-3-30b-a3b-instruct-2507"),
         ]
     )
 
@@ -1255,15 +1200,16 @@ if __name__ == "__main__":
     sae_files = []
     sae_layer_percents = [25, 50, 75]
 
-    for sae_layer_percent in sae_layer_percents:
-        sae_files.append(f"data/qwen_hard_negatives_0_20000_layer_percent_{sae_layer_percent}.jsonl")
+    # for sae_layer_percent in sae_layer_percents:
+    #     sae_files.append(f"data/qwen_hard_negatives_0_20000_layer_percent_{sae_layer_percent}.jsonl")
+    sae_files.append(f"data/qwen_hard_negatives_50000_50500_layer_percent_50.jsonl")
 
     for sae_file in sae_files:
         # sae_file = "data/qwen_hard_negatives_0_to_30_000.jsonl"
         # sae_file = "hard_negatives_0_to_82000.jsonl"
         # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
         # Which to use for constructing explanations vs testing detection?
-        saes_to_test = 30
+        saes_to_test = 100
         sae_start_index = 0
         # sae_start_index = 20_000  # not in train set for the trained model
 
@@ -1284,8 +1230,10 @@ if __name__ == "__main__":
         eight_positive_examples_config = hard_negatives_config.replace(train_activating_sentences=8)
         four_positive_examples_config = hard_negatives_config.replace(train_activating_sentences=4)
         two_positive_examples = hard_negatives_config.replace(train_activating_sentences=2)
-        best_of_8_config = hard_negatives_config.replace(best_of_n=8)
         best_of_4_config = hard_negatives_config.replace(best_of_n=4)
+        best_of_8_config = hard_negatives_config.replace(best_of_n=8)
+        best_of_16_config = hard_negatives_config.replace(best_of_n=16)
+        best_of_32_config = hard_negatives_config.replace(best_of_n=32)
 
         # You can run the full pipeline with configurable parameters
         # Full pipeline:
@@ -1299,11 +1247,12 @@ if __name__ == "__main__":
                 add_random_explanations=False,
                 # config=hard_negatives_config,
                 # config=best_of_8_config,
-                config=best_of_4_config,
+                # config=best_of_4_config,
+                config=best_of_32_config,
                 # config=no_train_hard_negatives_config,
                 # config=eight_positive_examples_config,
                 # config=two_positive_examples,
                 # config=four_positive_examples_config,
-                max_par=100,
+                max_par=40,
             )
         )

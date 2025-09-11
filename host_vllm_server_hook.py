@@ -43,11 +43,11 @@ MODEL_NAME = "Qwen/Qwen3-8B"
 DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
 CTX_LEN = 6000
-STEER_AT = 1  # Target layer for activation steering (matching lightweight_sft.py)
 GENERATE_WAIT_SECONDS = 2
 # SAE Configuration
 # SAE_REPO_ID = "google/gemma-scope-9b-it-res"
 SAE_REPO_ID = "adamkarvonen/qwen3-8b-saes"
+SAE_LAYER_PERCENT = 50
 
 gemma_loras = [
     # "thejaminator/sae-introspection-lora",
@@ -86,7 +86,7 @@ gpu_memory_utilization = 0.6
 # Max batch size that we call .generate with. See vllm logs for the max it can take.
 # IMPORTANT SHOULD BE >20%? THAN THE MAX PARALLELISM THAT VLLM WILL RUN.
 # OTHERWISE VLLM WILL DO WEIRD THINGS THAT MESSS UP THE HOOK?
-MAX_PARALLEL_REQUESTS = 40
+MAX_PARALLEL_REQUESTS = 60
 
 
 class Message(BaseModel):
@@ -173,7 +173,9 @@ class VLLMServer:
                 self.llm.llm_engine.add_lora(lora_request)
 
         print("Loading SAE...")
-        sae_info = get_sae_info(SAE_REPO_ID)
+        # layer 9
+        print(f"Loading SAE for sae layer percent {SAE_LAYER_PERCENT}")
+        sae_info = get_sae_info(SAE_REPO_ID, sae_layer_percent=SAE_LAYER_PERCENT)
         self.sae = load_sae(
             sae_repo_id=SAE_REPO_ID,
             sae_filename=sae_info.sae_filename,
@@ -322,6 +324,7 @@ class VLLMServer:
             # assert all the layer numbers are the same
             assert len(layer_numbers) == 1, f"Layer numbers are not the same: {layer_numbers}"
             layer_number: int = layer_numbers.pop()
+            print(f"Layer number to steer at: {layer_number}")
 
             # Generate batch with steering
             target_layer = self.model.model.layers[layer_number]

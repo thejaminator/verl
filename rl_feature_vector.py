@@ -39,6 +39,7 @@ class VerlParams(BaseModel):
     train_path: list[str]
     use_hf_rollout_instead_of_vllm: bool = False
     enable_gradient_checkpointing: bool = True
+    use_remove_padding: bool = True
     eval_path: str | None = None
     reward_function_name: str = "compute_score"
     reward_function_file: str = "math_reward_function.py"
@@ -448,16 +449,16 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         "algorithm.kl_ctrl.type=fixed",
         f"algorithm.kl_ctrl.kl_coef=0",  # token level kl coefficient
         # dr grpo settings to prevent long rollouts due to bias
-        "actor_rollout_ref.actor.use_kl_loss=false",
-        "actor_rollout_ref.actor.loss_agg_mode=seq-mean-token-sum-norm",
-        "algorithm.norm_adv_by_std_in_grpo=false",
+        # "actor_rollout_ref.actor.use_kl_loss=false",
+        # "actor_rollout_ref.actor.loss_agg_mode=seq-mean-token-sum-norm",
+        # "algorithm.norm_adv_by_std_in_grpo=false",
         # end dr grpo settings
         # Model configuration
         "actor_rollout_ref.hybrid_engine=true",
         f"actor_rollout_ref.model.path={params.model_name}",
         f"actor_rollout_ref.model.enable_gradient_checkpointing={params.enable_gradient_checkpointing}",
         "actor_rollout_ref.model.trust_remote_code=false",
-        "actor_rollout_ref.model.use_remove_padding=true",
+        f"actor_rollout_ref.model.use_remove_padding={params.use_remove_padding}",
 
     ]
 
@@ -553,7 +554,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             # Trainer configuration
             "trainer.total_epochs=1",
             f"trainer.project_name={params.wandb_project}",
-            f"trainer.experiment_name=grpo-{params.model_name.split('/')[-1]}",
+            f"trainer.experiment_name=grpo-{params.output_dir.split('/')[-1]}",
             "trainer.nnodes=1",
             f"trainer.n_gpus_per_node={params.n_gpus}",
             f"trainer.save_freq={params.save_steps}",
@@ -695,12 +696,13 @@ PARAMS = VerlParams(
     use_feature_vector=True,
     use_hf_rollout_instead_of_vllm=False,
     enable_thinking=False,  # Actually, this doesn't do anything, I hardcoded verl/utils/dataset/rl_dataset.py to disable it.
-    max_seq_length=900,
+    max_seq_length=800,
     max_prompt_length=300,
-    max_response_length=600,
+    max_response_length=500,
     num_generations=64,  # Bigger group size since noisy explanations
     prompt_batch_size=16,  # number of prompts in rollout batch. will be multiplied by num_generations.
-    split_into_grad_accum=64,  # prompt_batch_size * num_generations gets split by grad accum.
+    # split_into_grad_accum=64,  # prompt_batch_size * num_generations gets split by grad accum.
+    split_into_grad_accum=128, # need for no padding
     vllm_split=16,  # prompt_batch_size * num_generations gets split by vllm split.
     # 8 * 8 = 64 is the effective batch size
     # Note: vllm implementation does not follow this batch size since it has its own scheduler.
@@ -715,22 +717,29 @@ PARAMS = VerlParams(
     # micro_batch_size_per_gpu=8,
     warmup_steps=5,
     learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
+    # learning_rate=5e-4,  # Increased by order of magnitude for LoRA (was 5e-6)
     entropy_coeff=0.000,
     loss_kl_penalty=0.001,  # Note: we are calculating KL w.r.t to the base model without SFT, which is weird.
-    lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
+    lora_rank=128,  # Recommended >=32 for good convergence, using 64 for 4B model
     lora_alpha=128.0,  # Typically 2x lora_rank
     target_modules="all-linear",  # Apply LoRA to all linear layers
     use_shm=False,
     layered_summon=False,
     max_steps=4000,
-    output_dir="/workspace/verl_11sep_discrete",
-    save_steps=5,  # saving causes OOM. Why?
+    output_dir="/workspace/11sep_discrete_no_dr_no_scale",
+    # output_dir="/workspace/11sep_discrete_no_dr_lr_4",
+    # output_dir="/workspace/11sep_discrete_no_dr_no_remove_padding",
+    save_steps=10,  # saving causes OOM. Why?
     n_gpus=1,
     use_wandb=True,
     wandb_project="grpo-feature-vector",
     # HuggingFace Hub configuration (like your current script)
     push_to_hub=True,
-    hub_repo_id="thejaminator/11sep_discrete",  # Updated with "_verl" suffix
+    hub_repo_id="thejaminator/11sep_discrete_no_dr_no_scale",  # Updated with "_verl" suffix
+    # hub_repo_id="thejaminator/11sep_discrete_no_dr_lr_4",  # Updated with "_verl" suffix
+    # hub_repo_id="thejaminator/11sep_discrete_no_dr_no_remove_padding",  # Updated with "_verl" suffix
+    # use_remove_padding=False,
+    use_remove_padding=True,
     hf_api_key=hf_api_key,
     reward_function_name="compute_score",
     reward_function_file="feature_vector_reward.py",

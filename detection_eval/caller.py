@@ -585,6 +585,12 @@ class OpenAICaller(Caller):
         return self.cache_by_model.get_log_probs_cache(model)
 
     @retry(
+        stop=(stop_after_attempt(2)),
+        wait=(wait_fixed(2)),
+        retry=(retry_if_exception_type((openai.NotFoundError))),
+        reraise=True,
+    )
+    @retry(
         stop=(stop_after_attempt(5)),
         wait=(wait_fixed(5)),
         retry=(retry_if_exception_type((ValidationError, JSONDecodeError, InternalServerError))),

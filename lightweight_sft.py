@@ -384,7 +384,8 @@ def construct_eval_dataset(
     )
     if not isinstance(input_prompt_ids, list):
         raise TypeError("Expected list of token ids from tokenizer")
-    labels = input_prompt_ids.copy()
+    # For evaluation data, we mark all tokens as -100 since we're only doing generation, not training
+    labels = [-100] * len(input_prompt_ids)
 
     orig_prompt_length = len(input_prompt_ids)
 
@@ -415,6 +416,7 @@ def construct_eval_dataset(
             first_position = positions[0]
         else:
             assert positions[0] == first_position, "Expected all positions to be the same"
+        assert len(input_prompt_ids) > 0
 
         eval_data_point = TrainingDataPoint(
             input_ids=input_prompt_ids,
@@ -610,7 +612,6 @@ def run_evaluation(
     submodule: torch.nn.Module,
     device: torch.device,
     dtype: torch.dtype,
-    global_step: int,
 ) -> list[FeatureResult]:
     """Run evaluation and save results."""
     model.eval()
