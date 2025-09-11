@@ -285,10 +285,8 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 actor_module_class = AutoModelForCausalLM
 
             if local_path != "Qwen/Qwen3-8B":
-                print(f"Assuming that {local_path} is a lora model.")
-                model_path = local_path
-            else:
-                model_path = "Qwen/Qwen3-8B"
+                print(f"Assuming that {local_path} is a lora model. Hardcoding loaded model to Qwen/Qwen3-8B, will load LORA later.")
+            model_path = "Qwen/Qwen3-8B"
 
             actor_module = actor_module_class.from_pretrained(
                 pretrained_model_name_or_path=model_path,
@@ -337,7 +335,8 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             if self._is_lora:
                 print(f"Assuming the path is already a lora model: {local_path}")
                 actor_module.enable_input_require_grads()
-                new_module = PeftModel.from_pretrained(actor_module, local_path)
+                new_module = PeftModel.from_pretrained(actor_module, local_path, is_trainable=True)
+                new_module.print_trainable_parameters()
                 actor_module = new_module
         torch.distributed.barrier()
 
@@ -892,9 +891,10 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             if dist.get_rank() == 0:
                 os.makedirs(lora_save_path, exist_ok=True)
                 peft_config = asdict(peft_model.peft_config.get("default", {}))
-                peft_config["task_type"] = peft_config["task_type"].value
-                peft_config["peft_type"] = peft_config["peft_type"].value
-                peft_config["target_modules"] = list(peft_config["target_modules"])
+                if not isinstance(peft_config["task_type"], str):
+                    peft_config["task_type"] = peft_config["task_type"].value
+                    peft_config["peft_type"] = peft_config["peft_type"].value
+                    peft_config["target_modules"] = list(peft_config["target_modules"])
             try:
                 if fsdp_version(self.actor_module_fsdp) > 0:
                     self.actor_module_fsdp = self.actor_module_fsdp.to(get_device_name())
