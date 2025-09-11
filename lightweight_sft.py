@@ -26,6 +26,7 @@ import contextlib
 import datetime
 import gc
 import json
+import pickle
 import random
 
 # All necessary imports are now included above
@@ -67,6 +68,8 @@ from sft_config import (
     TrainingDataPoint,
     TrainingExample,
     construct_batch,
+    create_training_datapoint,
+    load_explanations_from_jsonl,
 )
 
 
@@ -310,18 +313,6 @@ def parse_generated_explanation(text: str) -> Optional[ExplanationResult]:
     )
 
 
-def load_explanations_from_jsonl(filepath: str) -> list[SAEExplained]:
-    """Load SAE explanations from a JSONL file."""
-    explanations = []
-    with open(filepath) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                data = json.loads(line)
-                explanations.append(SAEExplained(**data))
-    return explanations
-
-
 # ==============================================================================
 # 3. HOOKING MECHANISM FOR ACTIVATION STEERING
 # ==============================================================================
@@ -336,45 +327,11 @@ def construct_train_dataset(
     sae: BaseSAE,
     tokenizer: PreTrainedTokenizer,
 ) -> list[TrainingDataPoint]:
-    input_messages = [{"role": "user", "content": input_prompt}]
-
-    input_prompt_ids = tokenizer.apply_chat_template(
-        input_messages,
-        tokenize=True,
-        add_generation_prompt=True,
-        return_tensors=None,
-        padding=False,
-        enable_thinking=False,
-    )
-    if not isinstance(input_prompt_ids, list):
-        raise TypeError("Expected list of token ids from tokenizer")
-    x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
-
     training_data = []
 
     for i in tqdm(range(dataset_size), desc="Constructing training dataset"):
         target_response = training_examples[i].explanation
-
-        full_messages = input_messages + [{"role": "assistant", "content": target_response}]
-
-        if i == 0:
-            # Fully print the first example
-            print("First training example:")
-            print(full_messages)
-            print("-" * 100)
-
-        full_prompt_ids = tokenizer.apply_chat_template(
-            full_messages,
-            tokenize=True,
-            add_generation_prompt=False,
-            return_tensors=None,
-            padding=False,
-            enable_thinking=False,
-        )
-        if not isinstance(full_prompt_ids, list):
-            raise TypeError("Expected list of token ids from tokenizer")
         target_feature_idx = training_examples[i].feature_idx
-
         # 2. Prepare feature vectors for steering
         # We use decoder weights (W_dec) as they map from the feature space back to the residual stream.
         # .clone() because otherwise we will save the entire W_dec in pickle for each training example
@@ -383,26 +340,20 @@ def construct_train_dataset(
         else:
             feature_vector = sae.W_enc[:, target_feature_idx].clone()
 
-        assistant_start_idx = len(input_prompt_ids)
-
-        labels = full_prompt_ids.copy()
-        for i in range(assistant_start_idx):
-            labels[i] = -100
-
-        positions = []
-        for i in range(assistant_start_idx):
-            if full_prompt_ids[i] == x_token_id:
-                positions.append(i)
-        assert len(positions) == 1, "Expected exactly one X token"
-
-        training_data_point = TrainingDataPoint(
-            input_ids=full_prompt_ids,
-            labels=labels,
-            steering_vectors=[feature_vector],
-            positions=positions,
+        training_data_point = create_training_datapoint(
+            prompt=input_prompt,
+            target_response=target_response,
+            tokenizer=tokenizer,
+            acts_D=feature_vector,
             feature_idx=target_feature_idx,
-            target_output=target_response,
         )
+
+        if i == 0:
+            # Fully print the first example
+            print("First training example:")
+            print(f"prompt: {input_prompt}")
+            print(f"target_response: {target_response}")
+            print("-" * 100)
 
         training_data.append(training_data_point)
 
@@ -754,8 +705,9 @@ def train_model(
 ):
     model = load_model(cfg.model_name, dtype)
 
-    model.use_cache = False
-    model.gradient_checkpointing_enable()
+    if cfg.gradient_checkpointing:
+        model.use_cache = False
+        model.gradient_checkpointing_enable()
 
     submodule = get_submodule(model, cfg.hook_onto_layer)
 
@@ -1003,6 +955,13 @@ def build_datasets(
         all_training_data.extend(file_data[: -cfg.test_set_size_per_ds])
         all_sae_infos.append(sae_info)
 
+    for sft_file in cfg.additional_train_dataset_filenames:
+        with open(sft_file, "rb") as f:
+            file_data = pickle.load(f)
+        all_training_data.extend(file_data)
+
+    random.seed(cfg.seed)
+
     # Classification side-task
     for ds in cfg.classification_train_datasets:
         print(f"Creating train classification dataset for {ds}")
@@ -1013,7 +972,8 @@ def build_datasets(
             num_test_examples=cfg.test_set_size_per_ds,
             batch_size=cfg.activation_collection_batch_size,
             act_layers=cfg.act_layers,
-            offset=cfg.act_collect_offset,
+            min_offset=cfg.min_act_collect_offset,
+            max_offset=cfg.max_act_collect_offset,
             model_name=cfg.model_name,
             tokenizer=tokenizer,
             dtype=dtype,
@@ -1030,7 +990,8 @@ def build_datasets(
             num_test_examples=cfg.test_set_size_per_ds,
             batch_size=cfg.activation_collection_batch_size,
             act_layers=cfg.act_layers,
-            offset=cfg.act_collect_offset,
+            min_offset=cfg.min_act_collect_offset,
+            max_offset=cfg.max_act_collect_offset,
             model_name=cfg.model_name,
             tokenizer=tokenizer,
             dtype=dtype,
@@ -1106,14 +1067,39 @@ if __name__ == "__main__":
             f"data/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl"
         )
 
+    additional_explanations_files = []
+
+    for layer_percent in layer_percents:
+        act_examples_filename = (
+            f"sft_training_data/act_examples_Qwen_Qwen3-8B_layer_percent_{layer_percent}_width_2_num_features_60000.pkl"
+        )
+        sae_yes_no_filename = f"sft_training_data/yes_no_sae_data_Qwen_Qwen3-8B_layer_percent_{layer_percent}_width_2_max_features_None.pkl"
+        additional_explanations_files.append(act_examples_filename)
+        additional_explanations_files.append(sae_yes_no_filename)
+
     # explanations_files = []
 
     load_lora_path = Path("checkpoints_sae_layer_1_decoder/final")
 
+    iterations = [
+        # {"lr": 2e-5},
+        # {"lr": 5e-5},
+        # {"act_collect_offset": -3},
+        # {"act_collect_offset": -5},
+        # {"num_epochs": 2},
+        {"min_act_collect_offset": -2, "max_act_collect_offset": -5},
+        # {}
+    ]
+
     # for use_decoder_vectors in [True]:
-    for window_mult in [20, None]:
-        wandb_suffix = f"_no_sae_multiple_datasets_layer_{hook_layer}_v2"
-        wandb_suffix = f"_with_sae_multiple_datasets_layer_{hook_layer}_window_mult_{window_mult}"
+    for hyperparam_override in iterations:
+        wandb_suffix = f"_no_sae_multiple_datasets_layer_{hook_layer}_larger_pretrain"
+        # wandb_suffix = f"_with_sae_multiple_datasets_layer_{hook_layer}_window_mult_{window_mult}"
+        hyperparam_suffix = ""
+        for key, value in hyperparam_override.items():
+            hyperparam_suffix += f"_{key}_{value}"
+        wandb_suffix += hyperparam_suffix
+        print(wandb_suffix)
         # wandb_suffix = f"_sae_layer_{hook_layer}"
         # if use_decoder_vectors:
         #     wandb_suffix += "_decoder"
@@ -1129,17 +1115,17 @@ if __name__ == "__main__":
             sae_sft_datasets=explanations_files,
             classification_train_datasets=classification_train_datasets,
             classification_eval_datasets=classification_eval_datasets,
+            additional_train_dataset_filenames=additional_explanations_files,
             max_classification_examples=6_000,
             test_set_size_per_ds=250,
+            train_batch_size=16,
             activation_collection_batch_size=64,
             eval_steps=10000,
             eval_on_start=False,
             load_lora_path=str(load_lora_path),
-            act_collect_offset=-4,
+            # act_collect_offset=-4,
+            **hyperparam_override,
         )
-
-        if len(explanations_files) == 0 or True:
-            cfg.train_batch_size *= 4
 
         # mutate the cfg here using variables in the itertools loop over variables of interest
         # cfg.use_decoder_vectors = use_decoder_vectors
@@ -1150,7 +1136,7 @@ if __name__ == "__main__":
         tokenizer = load_tokenizer(cfg.model_name)
 
         all_training_data, all_eval_data, all_sae_infos = build_datasets(
-            cfg, tokenizer, device, dtype, window_mult=window_mult
+            cfg, tokenizer, device, dtype, window_mult=cfg.window_mult
         )
 
         # for debugging

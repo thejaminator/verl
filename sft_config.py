@@ -1,4 +1,5 @@
 import datetime
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,12 +23,14 @@ class SelfInterpTrainingConfig:
     sae_sft_datasets: list[str] = field(default_factory=list)  # pass in or compute outside
     classification_train_datasets: list[str] = field(default_factory=list)
     classification_eval_datasets: list[str] = field(default_factory=list)
+    additional_train_dataset_filenames: list[str] = field(default_factory=list)
     use_decoder_vectors: bool = True
     generation_kwargs: dict[str, Any] = field(
         default_factory=lambda: {"do_sample": True, "temperature": 1.0, "max_new_tokens": 300}
     )
     steering_coefficient: float = 2.0
-    act_collect_offset: int = -3
+    min_act_collect_offset: int = -2
+    max_act_collect_offset: int = -7
     max_sae_sft_examples: int = 50_000
     max_classification_examples: int = 10_000
     test_set_size_per_ds: int = 25
@@ -52,6 +55,8 @@ class SelfInterpTrainingConfig:
     max_grad_norm: float = 1.0
     eval_steps: int = 9_999_999  # effectively off by default
     eval_on_start: bool = False
+    gradient_checkpointing: bool = False
+    window_mult: int = 20
     save_steps: int = 5_000
     save_dir: str = "checkpoints"
     seed: int = 42
@@ -292,3 +297,93 @@ def construct_batch(
         positions=batch_positions,
         feature_indices=batch_feature_indices,
     )
+
+
+def find_pattern_in_tokens(token_ids: list[int], pattern: str, tokenizer: AutoTokenizer) -> int | None:
+    """
+    Find the starting position of a pattern in a list of token IDs.
+
+    Returns the index of the first token of the pattern, or None if not found.
+    """
+    start_idx = 0
+    end_idx = len(token_ids)
+
+    x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
+
+    for i in range(start_idx, end_idx):
+        if token_ids[i] == x_token_id:
+            surrounding_tokens = token_ids[i - 2 : i + 2]
+            surrounding_text = tokenizer.decode(surrounding_tokens)
+            assert pattern in surrounding_text, (
+                f"Expected pattern {pattern} in {surrounding_text}, got {surrounding_text}"
+            )
+            return i
+
+    return None
+
+
+def create_training_datapoint(
+    prompt: str, target_response: str, tokenizer: AutoTokenizer, acts_D: torch.Tensor, feature_idx: int
+) -> TrainingDataPoint:
+    input_messages = [{"role": "user", "content": prompt}]
+
+    input_prompt_ids = tokenizer.apply_chat_template(
+        input_messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_tensors=None,
+        padding=False,
+        enable_thinking=False,
+    )
+    if not isinstance(input_prompt_ids, list):
+        raise TypeError("Expected list of token ids from tokenizer")
+
+    full_messages = input_messages + [{"role": "assistant", "content": target_response}]
+
+    full_prompt_ids = tokenizer.apply_chat_template(
+        full_messages,
+        tokenize=True,
+        add_generation_prompt=False,
+        return_tensors=None,
+        padding=False,
+        enable_thinking=False,
+    )
+    if not isinstance(full_prompt_ids, list):
+        raise TypeError("Expected list of token ids from tokenizer")
+
+    assistant_start_idx = len(input_prompt_ids)
+
+    labels = full_prompt_ids.copy()
+    for i in range(assistant_start_idx):
+        labels[i] = -100
+
+    position = find_pattern_in_tokens(full_prompt_ids, "<<X>>", tokenizer)
+    if position is None:
+        print(f"Warning! Expected exactly one X token, got {position}, classification prompt: {prompt}")
+        raise ValueError("Expected exactly one X token")
+    # May want to support multiple X tokens in the future
+    positions = [position]
+    steering_vectors = [acts_D]
+
+    training_data_point = TrainingDataPoint(
+        input_ids=full_prompt_ids,
+        labels=labels,
+        steering_vectors=steering_vectors,
+        positions=positions,
+        feature_idx=feature_idx,
+        target_output=target_response,
+    )
+
+    return training_data_point
+
+
+def load_explanations_from_jsonl(filepath: str) -> list[SAEExplained]:
+    """Load SAE explanations from a JSONL file."""
+    explanations = []
+    with open(filepath) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                data = json.loads(line)
+                explanations.append(SAEExplained(**data))
+    return explanations
