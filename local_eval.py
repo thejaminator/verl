@@ -55,7 +55,6 @@ def run_evaluation(
     submodule: torch.nn.Module,
     device: torch.device,
     dtype: torch.dtype,
-    global_step: int,
 ):
     """Run evaluation and save results."""
     model.eval()
@@ -85,7 +84,7 @@ def load_eval_data(
     selected_eval_features: list[int],
     sae_info: SAEInfo,
     tokenizer: PreTrainedTokenizer,
-) -> tuple[lightweight_sft.TrainingDataPoint]:
+) -> list[lightweight_sft.TrainingDataPoint]:
 
     sae = load_sae(sae_info.sae_repo_id, sae_info.sae_filename, sae_info.sae_layer, cfg.model_name, device, dtype)
 
@@ -118,7 +117,7 @@ def create_sae_train_test_eval_data(sae: SAEV2) -> eval_detection_v2.SAETrainTes
 
 def create_detection_eval_data(eval_data_file: str, eval_data_start_index: int, sae_ids: list[int], cfg: lightweight_sft.SelfInterpTrainingConfig) -> tuple[list[eval_detection_v2.SAETrainTest], SAEInfo]:
 
-    sae_hard_negatives = eval_detection_v2.read_sae_file(eval_data_file, start_index=eval_data_start_index, limit=cfg.eval_set_size)
+    sae_hard_negatives = eval_detection_v2.read_sae_file(eval_data_file, start_index=eval_data_start_index, limit=500)
     sae_info = sae_hard_negatives[0].sae_info
 
     for sae_hard_negative in sae_hard_negatives:
@@ -139,7 +138,7 @@ def create_detection_eval_data(eval_data_file: str, eval_data_start_index: int, 
 # %%
 
 model_name = "Qwen/Qwen3-8B"
-hook_layer = 0
+hook_layer = 1
 
 cfg = lightweight_sft.SelfInterpTrainingConfig(
     # Model settings
@@ -149,10 +148,10 @@ cfg = lightweight_sft.SelfInterpTrainingConfig(
     # SAE
     # settings
     hook_onto_layer=hook_layer,
-    sae_infos=[],
+    # sae_infos=[],
     # Experiment settings
-    eval_set_size=250,
-    eval_features=[],
+    # eval_set_size=250,
+    # eval_features=[],
     use_decoder_vectors=True,
     generation_kwargs={
         "do_sample": True,
@@ -185,13 +184,11 @@ cfg = lightweight_sft.SelfInterpTrainingConfig(
 # %%
 
 
-layer_percents = [25, 50, 75]
-layer_percents = [25]
 layer_percent = 25
 
 eval_detection_data_file = f"data/qwen_hard_negatives_50000_50500_layer_percent_{layer_percent}.jsonl"
 
-eval_sae_ids = list(range(50_000, 50_000 + cfg.eval_set_size))
+eval_sae_ids = list(range(50_000, 50_000 + 500))
     
 
 tokenizer = load_tokenizer(model_name)
@@ -212,9 +209,6 @@ print(len(eval_sae_ids))
 
 assert len(all_eval_data) == len(all_detection_data) == len(eval_sae_ids)
 
-print(cfg.eval_features)
-print(eval_sae_ids)
-
 # %%
 model = load_model(model_name, dtype)
 # %%
@@ -225,13 +219,15 @@ model = load_model(model_name, dtype)
 # lora_path = "checkpoints_simple/step_1000"
 # lora_path = "checkpoints_simple_layer_9/final"
 
-lora_path = "checkpoints_simple_multi_layer_longer/final"
+lora_path = "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed"
 
 adapter_name = lora_path
 
 model.load_adapter(lora_path, adapter_name=adapter_name, is_trainable=False, low_cpu_mem_usage=True)
 model.set_adapter(adapter_name)
 
+#%%
+print(all_eval_data[0])
 # %%
 submodule = get_submodule(model, hook_layer)
 # %%
@@ -243,26 +239,13 @@ eval_results = lightweight_sft.run_evaluation(
     submodule=submodule,
     device=device,
     dtype=dtype,
-    global_step=-1,
 )
-# %%
-
-
-new_eval_results = []
-
-for i,eval_result in enumerate(eval_results):
-    if i % 2 == 0:
-        new_eval_results.append(eval_result)
-
-eval_results = new_eval_results
-print(len(eval_results))
-print(len(eval_sae_ids))
-
 
 # %%
-for idx in range(10):
+# all_detection_data[2].sae_id
+eval_results[1].feature_idx
 
-    print(f"\n\n\nidx: {idx}, eval_results[idx].api_response: {eval_results[idx].api_response}\n")
+
 # %%
 
 import detection_eval.caller as caller
@@ -309,7 +292,7 @@ detection_config = eval_detection_v2.InferenceConfig(
     model="gpt-5-mini-2025-08-07",
     # model="gpt-5-nano-2025-08-07",
     max_completion_tokens=10_000,
-    reasoning_effort="low",  # seems good enough
+    reasoning_effort="minimal",  # seems good enough
     # reasoning_effort="medium",
     temperature=1.0,
 )

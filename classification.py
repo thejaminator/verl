@@ -288,9 +288,10 @@ def get_prompt_tokens_only(
                 raise ValueError("Response token seen before prompt tokens")
             prompt_tokens.append(training_data_point.input_ids[i])
             prompt_labels.append(training_data_point.labels[i])
-    training_data_point.input_ids = prompt_tokens
-    training_data_point.labels = prompt_labels
-    return training_data_point
+    new = training_data_point.model_copy()
+    new.input_ids = prompt_tokens
+    new.labels = prompt_labels
+    return new
 
 
 def run_classification(
