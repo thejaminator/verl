@@ -384,7 +384,8 @@ def construct_eval_dataset(
     )
     if not isinstance(input_prompt_ids, list):
         raise TypeError("Expected list of token ids from tokenizer")
-    labels = input_prompt_ids.copy()
+    # Set [-100] for user prompts
+    labels = [-100] * len(input_prompt_ids)
 
     orig_prompt_length = len(input_prompt_ids)
 
