@@ -51,7 +51,6 @@ from create_hard_negatives_v2 import (
     BaseSAE,
     JumpReluSAE,
     get_sae_info,
-    get_submodule,
     load_model,
     load_sae,
     load_tokenizer,
@@ -69,6 +68,7 @@ from sft_config import (
     TrainingExample,
     construct_batch,
     create_training_datapoint,
+    get_hf_submodule,
     load_explanations_from_jsonl,
 )
 
@@ -702,7 +702,6 @@ def train_model(
     device: torch.device,
     dtype: torch.dtype,
     verbose: bool = False,
-    load_lora_path: Optional[Path] = None,
 ):
     model = load_model(cfg.model_name, dtype)
 
@@ -710,9 +709,9 @@ def train_model(
         model.use_cache = False
         model.gradient_checkpointing_enable()
 
-    submodule = get_submodule(model, cfg.hook_onto_layer)
+    submodule = get_hf_submodule(model, cfg.hook_onto_layer)
 
-    if cfg.use_lora and load_lora_path is None:
+    if cfg.use_lora and cfg.load_lora_path is None:
         lora_config = LoraConfig(
             r=cfg.lora_r,
             lora_alpha=cfg.lora_alpha,
@@ -724,7 +723,8 @@ def train_model(
 
         model = get_peft_model(model, lora_config)
         model.print_trainable_parameters()
-    elif load_lora_path is not None:
+    elif cfg.load_lora_path is not None:
+        load_lora_path = Path(cfg.load_lora_path)
         assert load_lora_path.exists()
         model = PeftModel.from_pretrained(model, load_lora_path, is_trainable=True)
         model.print_trainable_parameters()
@@ -1078,9 +1078,11 @@ if __name__ == "__main__":
         additional_explanations_files.append(act_examples_filename)
         additional_explanations_files.append(sae_yes_no_filename)
 
-    # explanations_files = []
-
-    load_lora_path = Path("checkpoints_sae_layer_1_decoder/final")
+    explanations_files = []
+    additional_explanations_files = []
+    additional_explanations_files = [
+        "sft_training_data/past_lens_data_Qwen_Qwen3-8B_layers_9-18-27_num_datapoints_200000_min_k_3_max_k_20.pkl"
+    ]
 
     iterations = [
         # {"lr": 2e-5},
@@ -1088,51 +1090,54 @@ if __name__ == "__main__":
         # {"act_collect_offset": -3},
         # {"act_collect_offset": -5},
         # {"num_epochs": 2},
-        {"min_act_collect_offset": -2, "max_act_collect_offset": -5},
+        # {
+        #     "load_lora_path": "checkpoints_no_sae_multiple_datasets_layer_1_larger_pretrain_min_act_collect_offset_-2_max_act_collect_offset_-5/final"
+        # },
+        {
+            "load_lora_path": None,
+            "sae_sft_datasets": [],
+            "additional_train_dataset_filenames": additional_explanations_files,
+            "wandb_suffix": "_act_pretrain",
+        },
+        {
+            "load_lora_path": "checkpoints_act_pretrain/final",
+            "sae_sft_datasets": [],
+            "additional_train_dataset_filenames": [],
+            "wandb_suffix": "_act_pretrain_and_posttrain",
+        },
+        # {
+        # "load_lora_path": "checkpoints_no_sae_multiple_datasets_layer_1_larger_pretrain_min_act_collect_offset_-2_max_act_collect_offset_-5/final",
+        # "num_epochs": 2,
+        # },
+        # {"load_lora_path": None},
+        # {"load_lora_path": None, "num_epochs": 2},
         # {}
     ]
 
     # for use_decoder_vectors in [True]:
     for hyperparam_override in iterations:
-        wandb_suffix = f"_no_sae_multiple_datasets_layer_{hook_layer}_larger_pretrain"
-        # wandb_suffix = f"_with_sae_multiple_datasets_layer_{hook_layer}_window_mult_{window_mult}"
-        hyperparam_suffix = ""
-        for key, value in hyperparam_override.items():
-            hyperparam_suffix += f"_{key}_{value}"
-        wandb_suffix += hyperparam_suffix
-        print(wandb_suffix)
-        # wandb_suffix = f"_sae_layer_{hook_layer}"
-        # if use_decoder_vectors:
-        #     wandb_suffix += "_decoder"
-        # else:
-        #     wandb_suffix += "_encoder"
-
         cfg = SelfInterpTrainingConfig(
             model_name=model_name,
             hook_onto_layer=hook_layer,
             hf_repo_name=hf_repo_name,
-            wandb_suffix=wandb_suffix,
+            # wandb_suffix=wandb_suffix,
             layer_percents=layer_percents,
-            sae_sft_datasets=explanations_files,
+            # sae_sft_datasets=explanations_files,
             classification_train_datasets=classification_train_datasets,
             classification_eval_datasets=classification_eval_datasets,
-            additional_train_dataset_filenames=additional_explanations_files,
+            # additional_train_dataset_filenames=additional_explanations_files,
             max_classification_examples=6_000,
             test_set_size_per_ds=250,
             train_batch_size=16,
             activation_collection_batch_size=64,
             eval_steps=10000,
             eval_on_start=False,
-            load_lora_path=str(load_lora_path),
-            # act_collect_offset=-4,
             **hyperparam_override,
         )
 
-        # mutate the cfg here using variables in the itertools loop over variables of interest
-        # cfg.use_decoder_vectors = use_decoder_vectors
-        # cfg.act_collect_offset = offset
-
         cfg.finalize()
+
+        print(f"save dir: {cfg.save_dir}")
 
         tokenizer = load_tokenizer(cfg.model_name)
 

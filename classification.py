@@ -25,15 +25,17 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import classification_dataset_manager
 import wandb
-from create_hard_negatives_v2 import EarlyStopException, load_model, load_tokenizer
+from create_hard_negatives_v2 import load_model, load_tokenizer
 from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prefix
 from sft_config import (
     BatchData,
     EvalStepResult,
     FeatureResult,
     TrainingDataPoint,
+    collect_activations_multiple_layers,
     construct_batch,
     create_training_datapoint,
+    get_hf_submodule,
 )
 
 
@@ -77,85 +79,6 @@ def assert_no_peft_present(model, check_for_active_adapter_only=False):
     assert not active_adapters, (
         f"PEFT check failed! Found active adapters: {active_adapters}. Model should be running in base mode."
     )
-
-
-def find_x_positions(formatted_prompt: str, tokenizer) -> list[int]:
-    """Find positions of 'X' tokens in the formatted prompt."""
-    positions = []
-    tokens = tokenizer.encode(formatted_prompt, add_special_tokens=False)
-    for i, token_id in enumerate(tokens):
-        if tokenizer.decode([token_id]) == "X":
-            positions.append(i)
-    return positions
-
-
-def collect_activations_multiple_layers(
-    model: AutoModelForCausalLM,
-    submodules: dict[int, torch.nn.Module],
-    inputs_BL: dict[str, torch.Tensor],
-    min_offset: int,
-    max_offset: int,
-) -> dict[int, torch.Tensor]:
-    assert max_offset < min_offset, "max_offset must be less than min_offset"
-    assert min_offset < 0, "min_offset must be less than 0"
-    assert max_offset < 0, "max_offset must be less than 0"
-
-    activations_BLD_by_layer = {}
-
-    module_to_layer = {submodule: layer for layer, submodule in submodules.items()}
-
-    max_layer = max(submodules.keys())
-
-    def gather_target_act_hook(module, inputs, outputs):
-        layer = module_to_layer[module]
-
-        if isinstance(outputs, tuple):
-            activations_BLD_by_layer[layer] = outputs[0][:, max_offset:min_offset, :]
-        else:
-            activations_BLD_by_layer[layer] = outputs[:, max_offset:min_offset, :]
-
-        if layer == max_layer:
-            raise EarlyStopException("Early stopping after capturing activations")
-
-    handles = []
-
-    for layer, submodule in submodules.items():
-        handles.append(submodule.register_forward_hook(gather_target_act_hook))
-
-    try:
-        # Use the selected context manager
-        with torch.no_grad():
-            _ = model(**inputs_BL)
-    except EarlyStopException:
-        pass
-    except Exception as e:
-        print(f"Unexpected error during forward pass: {str(e)}")
-        raise
-    finally:
-        for handle in handles:
-            handle.remove()
-
-    return activations_BLD_by_layer
-
-
-def get_hf_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = False):
-    """Gets the residual stream submodule for HF transformers"""
-    model_name = model.config._name_or_path
-
-    if use_lora:
-        if "pythia" in model_name:
-            raise ValueError("Need to determine how to get submodule for LoRA")
-        elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name or "Qwen" in model_name:
-            return model.base_model.model.model.layers[layer]
-        else:
-            raise ValueError(f"Please add submodule for model {model_name}")
-
-    if "pythia" in model_name:
-        return model.gpt_neox.layers[layer]
-    elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name or "Qwen" in model_name:
-        return model.model.layers[layer]
-    else:
-        raise ValueError(f"Please add submodule for model {model_name}")
 
 
 def get_classification_datapoints_from_context_qa_examples(
