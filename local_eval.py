@@ -1,50 +1,26 @@
 # %%
-%load_ext autoreload
-%autoreload 2
+# %load_ext autoreload
+# %autoreload 2
 # %%
 import os
 
-from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prompt
-
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-import contextlib
-import datetime
-import gc
-import json
-import random
-
-# All necessary imports are now included above
-from dataclasses import asdict, dataclass, field
-from typing import Any, Optional
-
 import torch
-import wandb
-from huggingface_hub import login, whoami
-from peft import LoraConfig, get_peft_model
-from pydantic import BaseModel
-from torch.nn.utils import clip_grad_norm_
+from slist import Slist
 from tqdm import tqdm
 from transformers.models.auto.modeling_auto import AutoModelForCausalLM
-from transformers.models.auto.tokenization_auto import AutoTokenizer
-from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.tokenization_utils import PreTrainedTokenizer
-
-from slist import Slist
-from create_hard_negatives_v2 import (
-    BaseSAE,
-    JumpReluSAE,
-    get_sae_info,
-    get_submodule,
-    load_sae,
-    load_model,
-    load_tokenizer,
-)
 
 import eval_detection_v2
 import lightweight_sft
-
-from detection_eval.detection_basemodels import SAEInfo, SAEV2
+from create_hard_negatives_v2 import (
+    get_submodule,
+    load_model,
+    load_sae,
+    load_tokenizer,
+)
+from detection_eval.detection_basemodels import SAEV2, SAEInfo
 
 
 def run_evaluation(
@@ -55,7 +31,6 @@ def run_evaluation(
     submodule: torch.nn.Module,
     device: torch.device,
     dtype: torch.dtype,
-    global_step: int,
 ):
     """Run evaluation and save results."""
     model.eval()
@@ -85,8 +60,7 @@ def load_eval_data(
     selected_eval_features: list[int],
     sae_info: SAEInfo,
     tokenizer: PreTrainedTokenizer,
-) -> tuple[lightweight_sft.TrainingDataPoint]:
-
+) -> list[lightweight_sft.TrainingDataPoint]:
     sae = load_sae(sae_info.sae_repo_id, sae_info.sae_filename, sae_info.sae_layer, cfg.model_name, device, dtype)
 
     train_eval_prompt = lightweight_sft.build_training_prompt(cfg.positive_negative_examples, sae_info.sae_layer)
@@ -103,6 +77,7 @@ def load_eval_data(
 
     return eval_data
 
+
 def create_sae_train_test_eval_data(sae: SAEV2) -> eval_detection_v2.SAETrainTest | None:
     # Sample deterministically from test_target_activating_sentences using SAE ID as seed
     sampled_test_sentences = 5
@@ -116,30 +91,35 @@ def create_sae_train_test_eval_data(sae: SAEV2) -> eval_detection_v2.SAETrainTes
         test_hard_negative_sentences=4,
     )
 
-def create_detection_eval_data(eval_data_file: str, eval_data_start_index: int, sae_ids: list[int], cfg: lightweight_sft.SelfInterpTrainingConfig) -> tuple[list[eval_detection_v2.SAETrainTest], SAEInfo]:
 
-    sae_hard_negatives = eval_detection_v2.read_sae_file(eval_data_file, start_index=eval_data_start_index, limit=cfg.eval_set_size)
+def create_detection_eval_data(
+    eval_data_file: str, eval_data_start_index: int, sae_ids: list[int], cfg: lightweight_sft.SelfInterpTrainingConfig
+) -> tuple[list[eval_detection_v2.SAETrainTest], SAEInfo]:
+    sae_hard_negatives = eval_detection_v2.read_sae_file(eval_data_file, start_index=eval_data_start_index, limit=500)
     sae_info = sae_hard_negatives[0].sae_info
 
     for sae_hard_negative in sae_hard_negatives:
-        assert sae_hard_negative.sae_info == sae_info, f"sae_hard_negative.sae_info: {sae_hard_negative.sae_info} does not match sae_info: {sae_info}"
+        assert sae_hard_negative.sae_info == sae_info, (
+            f"sae_hard_negative.sae_info: {sae_hard_negative.sae_info} does not match sae_info: {sae_info}"
+        )
 
     split_sae_activations = sae_hard_negatives.map(create_sae_train_test_eval_data)
     split_sae_activations = split_sae_activations.flatten_option()
 
-
     result: list[eval_detection_v2.SAETrainTest] = []
     for sae_activation in split_sae_activations:
-        assert sae_activation.sae_id in sae_ids, f"sae_activation.sae_id: {sae_activation.sae_id} not in sae_ids: {sae_ids}"
+        assert sae_activation.sae_id in sae_ids, (
+            f"sae_activation.sae_id: {sae_activation.sae_id} not in sae_ids: {sae_ids}"
+        )
         result.append(sae_activation)
 
-
     return result, sae_info
+
 
 # %%
 
 model_name = "Qwen/Qwen3-8B"
-hook_layer = 0
+hook_layer = 1
 
 cfg = lightweight_sft.SelfInterpTrainingConfig(
     # Model settings
@@ -149,15 +129,15 @@ cfg = lightweight_sft.SelfInterpTrainingConfig(
     # SAE
     # settings
     hook_onto_layer=hook_layer,
-    sae_infos=[],
+    # sae_infos=[],
     # Experiment settings
-    eval_set_size=250,
-    eval_features=[],
+    # eval_set_size=250,
+    # eval_features=[],
     use_decoder_vectors=True,
     generation_kwargs={
         "do_sample": True,
-        "temperature": 0.5,
-        "max_new_tokens": 200,
+        "temperature": 1.0,
+        "max_new_tokens": 400,
     },
     steering_coefficient=2.0,
     # LoRA settings
@@ -185,14 +165,12 @@ cfg = lightweight_sft.SelfInterpTrainingConfig(
 # %%
 
 
-layer_percents = [25, 50, 75]
-layer_percents = [25]
-layer_percent = 25
+layer_percent = 50
 
 eval_detection_data_file = f"data/qwen_hard_negatives_50000_50500_layer_percent_{layer_percent}.jsonl"
 
-eval_sae_ids = list(range(50_000, 50_000 + cfg.eval_set_size))
-    
+eval_sae_ids = list(range(50_000, 50_000 + 500))
+
 
 tokenizer = load_tokenizer(model_name)
 device = torch.device("cuda")
@@ -212,9 +190,6 @@ print(len(eval_sae_ids))
 
 assert len(all_eval_data) == len(all_detection_data) == len(eval_sae_ids)
 
-print(cfg.eval_features)
-print(eval_sae_ids)
-
 # %%
 model = load_model(model_name, dtype)
 # %%
@@ -225,13 +200,17 @@ model = load_model(model_name, dtype)
 # lora_path = "checkpoints_simple/step_1000"
 # lora_path = "checkpoints_simple_layer_9/final"
 
-lora_path = "checkpoints_simple_multi_layer_longer/final"
+lora_path = "adamkarvonen/checkpoints_multiple_datasets_layer_1_decoder"
+# lora_path = "thejaminator/12sep_grp16_1e5_lr-step-60"
+# lora_path = "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed"
 
 adapter_name = lora_path
 
 model.load_adapter(lora_path, adapter_name=adapter_name, is_trainable=False, low_cpu_mem_usage=True)
 model.set_adapter(adapter_name)
 
+# %%
+print(all_eval_data[0])
 # %%
 submodule = get_submodule(model, hook_layer)
 # %%
@@ -243,26 +222,13 @@ eval_results = lightweight_sft.run_evaluation(
     submodule=submodule,
     device=device,
     dtype=dtype,
-    global_step=-1,
 )
-# %%
-
-
-new_eval_results = []
-
-for i,eval_result in enumerate(eval_results):
-    if i % 2 == 0:
-        new_eval_results.append(eval_result)
-
-eval_results = new_eval_results
-print(len(eval_results))
-print(len(eval_sae_ids))
-
 
 # %%
-for idx in range(10):
+# all_detection_data[2].sae_id
+eval_results[1].feature_idx
 
-    print(f"\n\n\nidx: {idx}, eval_results[idx].api_response: {eval_results[idx].api_response}\n")
+
 # %%
 
 import detection_eval.caller as caller
@@ -279,43 +245,46 @@ for detection_data, eval_result in zip(all_detection_data, eval_results):
     eval_sae_id = eval_result.feature_idx
     eval_explanation = eval_result.api_response
 
-    assert eval_sae_id == detection_data.sae_id, f"eval_sae_id: {eval_sae_id} does not match detection_data.sae_id: {detection_data.sae_id}"
+    assert eval_sae_id == detection_data.sae_id, (
+        f"eval_sae_id: {eval_sae_id} does not match detection_data.sae_id: {detection_data.sae_id}"
+    )
 
     chat_history = caller.ChatHistory().add_user(content=train_eval_prompt)
 
-
-    
     detection_prompt = eval_detection_v2.SAETrainTestWithExplanation(
-                    sae_id=detection_data.sae_id,
-                    # feature_vector=activation.feature_vector,
-                    train_activations=detection_data.train_activations,
-                    test_activations=detection_data.test_activations,
-                    train_hard_negatives=detection_data.train_hard_negatives,
-                    test_hard_negatives=detection_data.test_hard_negatives,
-                    explanation=chat_history.add_assistant(content=eval_explanation),
-                    explainer_model=lora_path,
-                )
+        sae_id=detection_data.sae_id,
+        # feature_vector=activation.feature_vector,
+        train_activations=detection_data.train_activations,
+        test_activations=detection_data.test_activations,
+        train_hard_negatives=detection_data.train_hard_negatives,
+        test_hard_negatives=detection_data.test_hard_negatives,
+        explanation=chat_history.add_assistant(content=eval_explanation),
+        explainer_model=lora_path,
+    )
     all_detection_prompts.append(detection_prompt)
 
 # %%
 
-import eval_detection_v2
-import detection_eval.caller as caller
 import asyncio
+
 from slist import Group, Slist
+
+import detection_eval.caller as caller
+import eval_detection_v2
 
 # Run evaluations for each model's explanations
 detection_config = eval_detection_v2.InferenceConfig(
     model="gpt-5-mini-2025-08-07",
     # model="gpt-5-nano-2025-08-07",
     max_completion_tokens=10_000,
-    reasoning_effort="low",  # seems good enough
+    reasoning_effort="minimal",  # seems good enough
     # reasoning_effort="medium",
     temperature=1.0,
 )
 caller_for_eval = caller.load_multi_caller(cache_path="cache/sae_evaluations")
 
 all_detection_prompts = Slist(all_detection_prompts)
+
 
 # Define an async function to wrap the asynchronous logic
 async def run_async_evaluation():
@@ -332,8 +301,11 @@ async def run_async_evaluation():
         )
         return evaluation_results
 
+
 # Now, you can 'await' the async function directly in the notebook cell
-evaluation_results = await run_async_evaluation()
+import asyncio
+
+evaluation_results = asyncio.run(run_async_evaluation())
 # print(evaluation_results)
 
 # %%
@@ -364,4 +336,3 @@ print(
 # %%
 print("FFFF")
 # %%
-

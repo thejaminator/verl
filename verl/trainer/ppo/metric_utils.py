@@ -93,6 +93,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
     Returns:
         A dictionary of metrics including:
             - critic/score/mean, max, min: Statistics about sequence scores
+            - critic/score/max_vs_average_gap: Max score minus average score for each uid group
             - critic/rewards/mean, max, min: Statistics about sequence rewards
             - critic/advantages/mean, max, min: Statistics about advantages
             - critic/returns/mean, max, min: Statistics about returns
@@ -128,11 +129,33 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         return_diff_var = torch.var(valid_returns - valid_values)
         return_var = torch.var(valid_returns)
 
+    # Compute max_vs_average_gap for scores grouped by uid
+    score_max_vs_average_gap = 0.0
+    assert "uid" in batch.non_tensor_batch
+    uids = batch.non_tensor_batch["uid"]
+    uid_to_scores = defaultdict(list)
+    for uid, score in zip(uids, sequence_score.detach().to("cpu").tolist(), strict=True):
+        uid_to_scores[uid].append(float(score))
+    
+    # For each uid group, compute max - average
+    group_gaps = []
+    for uid_scores in uid_to_scores.values():
+        if len(uid_scores) > 1:  # Only compute gap if there are multiple scores in the group
+            max_score = max(uid_scores)
+            avg_score = np.mean(uid_scores)
+            gap = max_score - avg_score
+            group_gaps.append(gap)
+    
+    # Average the gaps across all groups
+    if group_gaps:
+        score_max_vs_average_gap = float(np.mean(group_gaps))
+
     metrics = {
         # score
         "critic/score/mean": torch.mean(sequence_score).detach().item(),
         "critic/score/max": torch.max(sequence_score).detach().item(),
         "critic/score/min": torch.min(sequence_score).detach().item(),
+        "critic/score/max_vs_average_gap": score_max_vs_average_gap,
         # reward
         "critic/rewards/mean": torch.mean(sequence_reward).detach().item(),
         "critic/rewards/max": torch.max(sequence_reward).detach().item(),
@@ -473,7 +496,10 @@ def log_reward_manager_table(batch: DataProto, step: int, existing_table: Any | 
         return existing_table
 
     if "table_data" not in batch.non_tensor_batch:
+        print("No table data to log")
         return existing_table
+    else:
+        print(f"Logging table data")
 
     # Extract table data from batch (list of individual row dictionaries)
     table_data_list = batch.non_tensor_batch["table_data"]

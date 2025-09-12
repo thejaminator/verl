@@ -585,6 +585,12 @@ class OpenAICaller(Caller):
         return self.cache_by_model.get_log_probs_cache(model)
 
     @retry(
+        stop=(stop_after_attempt(2)),
+        wait=(wait_fixed(2)),
+        retry=(retry_if_exception_type((openai.NotFoundError))),
+        reraise=True,
+    )
+    @retry(
         stop=(stop_after_attempt(5)),
         wait=(wait_fixed(5)),
         retry=(retry_if_exception_type((ValidationError, JSONDecodeError, InternalServerError))),
@@ -1096,8 +1102,10 @@ def load_multi_caller(cache_path: str) -> MultiClientCaller:
 def load_pooled_openai_caller(cache_path: str) -> PooledCaller:
     load_dotenv()
     openai_api_keys = os.getenv("OPENAI_API_KEYS", "").split(",")
+    assert len(openai_api_keys) > 0, "Please set the OPENAI_API_KEYS environment variable"
     print(f"Using {len(openai_api_keys)} OpenAI API Keys")
-    openai_clients = [OpenAICaller(api_key=key, cache_path=cache_path) for key in openai_api_keys]
+    shared_cache = CallerCache(Path(cache_path))
+    openai_clients = [OpenAICaller(api_key=key, cache_path=shared_cache) for key in openai_api_keys]
     return PooledCaller(openai_clients)
 
 

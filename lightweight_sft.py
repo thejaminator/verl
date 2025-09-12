@@ -415,6 +415,7 @@ def construct_eval_dataset(
             first_position = positions[0]
         else:
             assert positions[0] == first_position, "Expected all positions to be the same"
+        assert len(input_prompt_ids) > 0
 
         eval_data_point = TrainingDataPoint(
             input_ids=input_prompt_ids,
@@ -610,7 +611,6 @@ def run_evaluation(
     submodule: torch.nn.Module,
     device: torch.device,
     dtype: torch.dtype,
-    global_step: int,
 ) -> list[FeatureResult]:
     """Run evaluation and save results."""
     model.eval()
