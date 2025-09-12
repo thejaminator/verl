@@ -187,7 +187,8 @@ class vLLMRollout(BaseRollout):
             load_format=load_format,
             disable_log_stats=config.disable_log_stats,
             max_num_batched_tokens=max_num_batched_tokens,
-            enable_chunked_prefill=config.enable_chunked_prefill,
+            # weird things happen if this is enabled.
+            enable_chunked_prefill=False,
             # weird things may happen if same prompt is cached
             enable_prefix_caching=False,
             trust_remote_code=trust_remote_code,

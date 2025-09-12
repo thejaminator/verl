@@ -15,7 +15,7 @@ from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from create_hard_negatives_v2 import get_sae_info, load_sae
 from detection_eval.caller import read_jsonl_file_into_basemodel
-from detection_eval.detection_basemodels import SAEV2, SAEVerlDataTypedDict, make_sae_verl_typed_dict, SAEInfo
+from detection_eval.detection_basemodels import SAEV2, SAEInfo, SAEVerlDataTypedDict, make_sae_verl_typed_dict
 from detection_eval.steering_hooks import get_introspection_prompt
 
 # set HF_HOME to /workspace
@@ -27,11 +27,12 @@ import sys
 import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
-import wandb
 
 # Step 2: Push to HuggingFace Hub
 from huggingface_hub import HfApi
 from pydantic import BaseModel
+
+import wandb
 
 
 class VerlParams(BaseModel):
@@ -47,6 +48,8 @@ class VerlParams(BaseModel):
     use_feature_vector: bool = True
     # Model configuration
     model_name: str = "google/gemma-2-9b-it"
+    # Standard GRPO will normalize by std. Dr GRPO disables this. Change learning rate if you disable this!
+    norm_adv_by_std_in_grpo: bool = True
     enable_thinking: bool = True
 
     # Training configuration
@@ -130,11 +133,11 @@ def load_and_convert_dataset(
     """
     # Load all data
     print(f"Loading dataset from: {dataset_path}")
-    all_jsonl_items: Slist[SAEV2] = Slist(dataset_path).map(
-        lambda path: read_jsonl_file_into_basemodel(path, SAEV2, limit=limit)
-    ).flatten_list()
+    all_jsonl_items: Slist[SAEV2] = (
+        Slist(dataset_path).map(lambda path: read_jsonl_file_into_basemodel(path, SAEV2, limit=limit)).flatten_list()
+    )
     print(f"Total items loaded: {len(all_jsonl_items)}")
-    
+
     # Step 1: Get all unique layers and their SAE info
     unique_sae_infos: dict[int, SAEInfo] = {}
     for item in all_jsonl_items:
@@ -142,15 +145,17 @@ def load_and_convert_dataset(
         if layer not in unique_sae_infos:
             unique_sae_infos[layer] = item.sae_info
         # else:
-            # Verify all items with same layer have same SAE info
-            # assert unique_sae_infos[layer] == item.sae_info, f"Conflicting SAE info for layer {layer}"
-    
+        # Verify all items with same layer have same SAE info
+        # assert unique_sae_infos[layer] == item.sae_info, f"Conflicting SAE info for layer {layer}"
+
     print(f"Found {len(unique_sae_infos)} unique layers: {list(unique_sae_infos.keys())}")
-    
+
     # Step 2: Load SAE parameters for each layer
     layer_to_sae_params: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
     for layer, sae_info in unique_sae_infos.items():
-        print(f"Loading SAE parameters for layer {layer} with sae repo id {sae_info.sae_repo_id}, width {sae_info.sae_width}, filename {sae_info.sae_filename}")
+        print(
+            f"Loading SAE parameters for layer {layer} with sae repo id {sae_info.sae_repo_id}, width {sae_info.sae_width}, filename {sae_info.sae_filename}"
+        )
         sae = load_sae(
             sae_layer=sae_info.sae_layer,
             sae_filename=sae_info.sae_filename,
@@ -173,14 +178,14 @@ def load_and_convert_dataset(
     REQUIRE_SAE_HAS_HARD_NEGATIVES = 11
     REQUIRE_SAE_NEGATIVE_SENTENCES = 8
     x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
-    
+
     for sae in all_jsonl_items:
         layer = sae.sae_info.sae_layer
-        
+
         # Get prompt for this layer
         prompt_content = get_introspection_prompt(sae_layer=layer)
         prompt_as_chat_dict = [{"role": "user", "content": prompt_content}]
-        
+
         # Get X token position for this layer's prompt
         tokenized_prompt = tokenizer.apply_chat_template(
             prompt_as_chat_dict,
@@ -194,7 +199,7 @@ def load_and_convert_dataset(
             position_idx = next(i for i, tid in enumerate(tokenized_prompt) if tid == x_token_id)
         except StopIteration:
             raise ValueError(f"Could not find token 'X' in the tokenized prompt for layer {layer}")
-        
+
         # Check if we have enough hard negatives
         valid_test_hard_negs = [
             neg for neg in sae.hard_negatives if len(neg.sentences) >= REQUIRE_SAE_NEGATIVE_SENTENCES
@@ -205,7 +210,7 @@ def load_and_convert_dataset(
                 f"This is less than {REQUIRE_SAE_HAS_HARD_NEGATIVES}. Not enough to test on. Skipping."
             )
             continue
-        
+
         # Get feature vector for this SAE
         W_enc, W_dec = layer_to_sae_params[layer]
         if use_decoder_vectors:
@@ -222,7 +227,7 @@ def load_and_convert_dataset(
             position_idx,
             feature,
         )
-        
+
         # Create structured data following the pattern
         structured_data = {
             "data_source": "custom",
@@ -252,21 +257,26 @@ def load_and_convert_dataset(
     return len(data)
 
 
-def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
+def convert_verl_to_hf_and_push(
+    output_dir: str, base_model_name: str, hub_repo_id: str | None, hf_api_key: str | None, step: int | None = None
+):
     """
     Convert verl checkpoint to HuggingFace format using verl model merger and push to Hub.
 
     Args:
-        params: Training parameters with Hub configuration
+        output_dir: Directory where checkpoints are stored
+        model_name: Name of the base model
+        hub_repo_id: HuggingFace Hub repository ID
+        hf_api_key: HuggingFace API key
         step: Training step number (for checkpoint naming)
     """
 
     # Find the latest checkpoint if step not specified
     if step is None:
         # Look directly in output_dir for global_step directories
-        if os.path.exists(params.output_dir):
+        if os.path.exists(output_dir):
             # Find the highest global_step directory
-            step_dirs = [d for d in os.listdir(params.output_dir) if d.startswith("global_step_")]
+            step_dirs = [d for d in os.listdir(output_dir) if d.startswith("global_step_")]
             if step_dirs:
                 step = max([int(d.split("_")[-1]) for d in step_dirs])
                 print(f"Found latest checkpoint at step {step}")
@@ -274,12 +284,12 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
                 print("❌ No checkpoints found!")
                 raise ValueError("No checkpoints found!")
         else:
-            print(f"❌ Output directory not found: {params.output_dir}")
-            raise ValueError(f"Output directory not found: {params.output_dir}")
+            print(f"❌ Output directory not found: {output_dir}")
+            raise ValueError(f"Output directory not found: {output_dir}")
 
     # Construct the checkpoint paths - simplified structure
-    actor_checkpoint_dir = os.path.join(params.output_dir, f"global_step_{step}", "actor")
-    hf_output_dir = os.path.join(params.output_dir, f"global_step_{step}", "actor", "huggingface")
+    actor_checkpoint_dir = os.path.join(output_dir, f"global_step_{step}", "actor")
+    hf_output_dir = os.path.join(output_dir, f"global_step_{step}", "actor", "huggingface")
 
     if not os.path.exists(actor_checkpoint_dir):
         print(f"❌ Actor checkpoint not found: {actor_checkpoint_dir}")
@@ -300,7 +310,7 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
         readme_path = os.path.join(hf_output_dir, "README.md")
         readme_front_matter = (
             f"---\n"
-            f"base_model: {params.model_name}\n"
+            f"base_model: {base_model_name}\n"
             f"library_name: peft\n"
             f"tags:\n"
             f"- lora\n"
@@ -332,8 +342,12 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
         adapter_cfg_path = os.path.join(hf_output_dir, "adapter_config.json")
         if os.path.exists(adapter_cfg_path):
             with open(adapter_cfg_path, encoding="utf-8") as f:
-                cfg = json.load(f)
-            cfg["base_model_name_or_path"] = params.model_name
+                try:
+                    cfg = json.load(f)
+                except json.JSONDecodeError as e:
+                    print(f"❌ Error loading adapter_config.json: {adapter_cfg_path}")
+                    raise e
+            cfg["base_model_name_or_path"] = base_model_name
             with open(adapter_cfg_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2, ensure_ascii=False)
 
@@ -342,7 +356,7 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
         print(f"Source: {actor_checkpoint_dir}")
         print(f"Target: {hf_output_dir}")
 
-        # Step 1: Convert verl checkpoint to HuggingFace format using verl model merger
+        # Step 1: Convert verl checkpoint to HuggingFace format using verl
         merge_cmd = [
             sys.executable,
             "-m",
@@ -361,20 +375,20 @@ def convert_verl_to_hf_and_push(params: VerlParams, step: int | None = None):
         print("✅ Successfully converted checkpoint to HuggingFace format")
 
     # Determine repository name
-    repo_name = f"{params.hub_repo_id}-step-{step}" if step else params.hub_repo_id
+    repo_name = f"{hub_repo_id}-step-{step}" if step else hub_repo_id
 
     print(f"Pushing to HuggingFace Hub: {repo_name}")
 
     # Create repo and upload the converted model
     api = HfApi()
     assert repo_name is not None, "repo_name must not be None"
-    api.create_repo(repo_name, token=params.hf_api_key, exist_ok=True, private=False)
+    api.create_repo(repo_name, token=hf_api_key, exist_ok=True, private=False)
 
     # Upload the entire model directory
     api.upload_folder(
         folder_path=hf_output_dir,  # type: ignore
         repo_id=repo_name,  # type: ignore
-        token=params.hf_api_key,
+        token=hf_api_key,
         commit_message=f"verl GRPO trained model at step {step}",
         ignore_patterns=["*.bin"],  # Upload safetensors instead of bin files
     )
@@ -438,7 +452,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         f"data.max_prompt_length={params.max_prompt_length}",
         f"data.max_response_length={params.max_response_length}",
         f"data.train_batch_size={params.prompt_batch_size}",
-        "data.shuffle=false", # we manually shuffle
+        "data.shuffle=false",  # we manually shuffle
         "data.truncation=error",
         "data.filter_overlong_prompts=false",
         # Algorithm configuration
@@ -451,7 +465,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         # dr grpo settings to prevent long rollouts due to bias
         # "actor_rollout_ref.actor.use_kl_loss=false",
         # "actor_rollout_ref.actor.loss_agg_mode=seq-mean-token-sum-norm",
-        # "algorithm.norm_adv_by_std_in_grpo=false",
+        f"algorithm.norm_adv_by_std_in_grpo={params.norm_adv_by_std_in_grpo}",
         # end dr grpo settings
         # Model configuration
         "actor_rollout_ref.hybrid_engine=true",
@@ -459,7 +473,6 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         f"actor_rollout_ref.model.enable_gradient_checkpointing={params.enable_gradient_checkpointing}",
         "actor_rollout_ref.model.trust_remote_code=false",
         f"actor_rollout_ref.model.use_remove_padding={params.use_remove_padding}",
-
     ]
 
     cmd.append(f"data.val_files={eval_parquet}")
@@ -592,7 +605,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
     # After training completes, convert and push final model to HuggingFace
     if params.push_to_hub:
         print("\nConverting final model to HuggingFace format...")
-        convert_verl_to_hf_and_push(params)
+        convert_verl_to_hf_and_push(params.output_dir, params.model_name, params.hub_repo_id, params.hf_api_key)
 
 
 def verl_main(params: VerlParams):
@@ -671,83 +684,81 @@ def verl_main(params: VerlParams):
     launch_verl_training(params, train_parquet, eval_parquet, reward_file)
 
 
-import dotenv
-
-dotenv.load_dotenv()
-
-# Load environment variables
-hf_api_key = os.getenv("HF_WRITE_TOKEN")
-wandb_key = os.getenv("WANDB_KEY")
-
-# Configuration (optimized based on reference GRPO setup)
-PARAMS = VerlParams(
-    # smaller model for testing
-    # model_name="google/gemma-2-2b-it",
-    # model_name="thejaminator/gemma-introspection-20250821-merged",  # loras don't get merged automatically
-    # sae_repo_id="google/gemma-scope-9b-it-res",
-    model_name="thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
-    train_path=[
-        "data/qwen_hard_negatives_20000_22000_layer_percent_25.jsonl",
-        "data/qwen_hard_negatives_20000_22000_layer_percent_50.jsonl",
-        "data/qwen_hard_negatives_20000_22000_layer_percent_75.jsonl",
-    ],
-    eval_path="data/qwen_hard_negatives_50000_50128_layer_percent_25.jsonl",
-    max_train_samples=2000, # per file
-    use_feature_vector=True,
-    use_hf_rollout_instead_of_vllm=False,
-    enable_thinking=False,  # Actually, this doesn't do anything, I hardcoded verl/utils/dataset/rl_dataset.py to disable it.
-    max_seq_length=800,
-    max_prompt_length=300,
-    max_response_length=500,
-    num_generations=64,  # Bigger group size since noisy explanations
-    prompt_batch_size=16,  # number of prompts in rollout batch. will be multiplied by num_generations.
-    # split_into_grad_accum=64,  # prompt_batch_size * num_generations gets split by grad accum.
-    split_into_grad_accum=128, # need for no padding
-    vllm_split=16,  # prompt_batch_size * num_generations gets split by vllm split.
-    # 8 * 8 = 64 is the effective batch size
-    # Note: vllm implementation does not follow this batch size since it has its own scheduler.
-    # May need to experiment with implementing our own split for vllm.
-    gpu_memory_utilization=0.7,
-    # model_name="google/gemma-2-9b-it",
-    # num_generations=16,  # Bigger group size since noisy explanations
-    # max_seq_length=8_000,  # More reasonable for math problems
-    # max_prompt_length=2_000,  # Reduced from 6000, matching reference
-    # mqax_response_length=6_000,  # Reduced from 6000, matching reference
-    # micro_batch=8,
-    # micro_batch_size_per_gpu=8,
-    warmup_steps=5,
-    learning_rate=5e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
-    # learning_rate=5e-4,  # Increased by order of magnitude for LoRA (was 5e-6)
-    entropy_coeff=0.000,
-    loss_kl_penalty=0.001,  # Note: we are calculating KL w.r.t to the base model without SFT, which is weird.
-    lora_rank=128,  # Recommended >=32 for good convergence, using 64 for 4B model
-    lora_alpha=128.0,  # Typically 2x lora_rank
-    target_modules="all-linear",  # Apply LoRA to all linear layers
-    use_shm=False,
-    layered_summon=False,
-    max_steps=4000,
-    output_dir="/workspace/11sep_discrete_no_dr_no_scale",
-    # output_dir="/workspace/11sep_discrete_no_dr_lr_4",
-    # output_dir="/workspace/11sep_discrete_no_dr_no_remove_padding",
-    save_steps=10,  # saving causes OOM. Why?
-    n_gpus=1,
-    use_wandb=True,
-    wandb_project="grpo-feature-vector",
-    # HuggingFace Hub configuration (like your current script)
-    push_to_hub=True,
-    hub_repo_id="thejaminator/11sep_discrete_no_dr_no_scale",  # Updated with "_verl" suffix
-    # hub_repo_id="thejaminator/11sep_discrete_no_dr_lr_4",  # Updated with "_verl" suffix
-    # hub_repo_id="thejaminator/11sep_discrete_no_dr_no_remove_padding",  # Updated with "_verl" suffix
-    # use_remove_padding=False,
-    use_remove_padding=True,
-    hf_api_key=hf_api_key,
-    reward_function_name="compute_score",
-    reward_function_file="feature_vector_reward.py",
-    wandb_api_key=wandb_key,
-    use_decoder_vectors=True,
-    enable_gradient_checkpointing=False,
-)
-
-
 if __name__ == "__main__":
+    import dotenv
+
+    dotenv.load_dotenv()
+
+    # Load environment variables
+    hf_api_key = os.getenv("HF_WRITE_TOKEN")
+    wandb_key = os.getenv("WANDB_KEY")
+
+    # Configuration (optimized based on reference GRPO setup)
+    PARAMS = VerlParams(
+        # smaller model for testing
+        # model_name="google/gemma-2-2b-it",
+        # model_name="thejaminator/gemma-introspection-20250821-merged",  # loras don't get merged automatically
+        # sae_repo_id="google/gemma-scope-9b-it-res",
+        model_name="thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
+        train_path=[
+            "data/qwen_hard_negatives_20000_22000_layer_percent_25.jsonl",
+            "data/qwen_hard_negatives_20000_22000_layer_percent_50.jsonl",
+            "data/qwen_hard_negatives_20000_22000_layer_percent_75.jsonl",
+        ],
+        eval_path="data/qwen_hard_negatives_50000_50128_layer_percent_25.jsonl",
+        max_train_samples=2000,  # per file
+        use_feature_vector=True,
+        use_hf_rollout_instead_of_vllm=False,
+        enable_thinking=False,  # Actually, this doesn't do anything, I hardcoded verl/utils/dataset/rl_dataset.py to disable it.
+        max_seq_length=800,
+        max_prompt_length=300,
+        max_response_length=500,
+        num_generations=16,  # Bigger group size since noisy explanations
+        prompt_batch_size=32,  # number of prompts in rollout batch. will be multiplied by num_generations.
+        # split_into_grad_accum=64,  # prompt_batch_size * num_generations gets split by grad accum.
+        split_into_grad_accum=64,  # need for no padding
+        vllm_split=8,  # prompt_batch_size * num_generations gets split by vllm split.
+        # 8 * 8 = 64 is the effective batch size
+        # Note: vllm implementation does not follow this batch size since it has its own scheduler.
+        # May need to experiment with implementing our own split for vllm.
+        gpu_memory_utilization=0.7,
+        # model_name="google/gemma-2-9b-it",
+        # num_generations=16,  # Bigger group size since noisy explanations
+        # max_seq_length=8_000,  # More reasonable for math problems
+        # max_prompt_length=2_000,  # Reduced from 6000, matching reference
+        # mqax_response_length=6_000,  # Reduced from 6000, matching reference
+        # micro_batch=8,
+        # micro_batch_size_per_gpu=8,
+        warmup_steps=5,
+        learning_rate=1e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
+        # learning_rate=5e-4,  # Increased by order of magnitude for LoRA (was 5e-6)
+        entropy_coeff=0.000,
+        loss_kl_penalty=0.001,  # Note: we are calculating KL w.r.t to the base model without SFT, which is weird.
+        lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
+        lora_alpha=128,  # Typically 2x lora_rank
+        target_modules="all-linear",  # Apply LoRA to all linear layers
+        use_shm=False,
+        layered_summon=False,
+        max_steps=4000,
+        output_dir="/workspace/12sep_grp16_1e5_lr",
+        # output_dir="/workspace/11sep_discrete_no_dr_lr_4",
+        # output_dir="/workspace/11sep_discrete_no_dr_no_remove_padding",
+        save_steps=10,  # saving causes OOM. Why?
+        n_gpus=1,
+        use_wandb=True,
+        wandb_project="grpo-feature-vector",
+        # HuggingFace Hub configuration (like your current script)
+        push_to_hub=True,
+        hub_repo_id="thejaminator/12sep_grp16_1e5_lr",  # Updated with "_verl" suffix
+        # hub_repo_id="thejaminator/11sep_discrete_no_dr_lr_4",  # Updated with "_verl" suffix
+        # hub_repo_id="thejaminator/11sep_discrete_no_dr_no_remove_padding",  # Updated with "_verl" suffix
+        # use_remove_padding=False,
+        use_remove_padding=True,
+        hf_api_key=hf_api_key,
+        reward_function_name="compute_score",
+        reward_function_file="feature_vector_reward.py",
+        wandb_api_key=wandb_key,
+        use_decoder_vectors=True,
+        enable_gradient_checkpointing=False,
+    )
     verl_main(PARAMS)
