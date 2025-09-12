@@ -200,8 +200,8 @@ model = load_model(model_name, dtype)
 # lora_path = "checkpoints_simple/step_1000"
 # lora_path = "checkpoints_simple_layer_9/final"
 
-lora_path = "adamkarvonen/checkpoints_multiple_datasets_layer_1_decoder"
-# lora_path = "thejaminator/12sep_grp16_1e5_lr-step-60"
+# lora_path = "adamkarvonen/checkpoints_multiple_datasets_layer_1_decoder"
+lora_path = "thejaminator/12sep_grp16_1e5_lr-step-60"
 # lora_path = "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed"
 
 adapter_name = lora_path
@@ -278,6 +278,7 @@ detection_config = eval_detection_v2.InferenceConfig(
     # model="gpt-5-nano-2025-08-07",
     max_completion_tokens=10_000,
     reasoning_effort="minimal",  # seems good enough
+    # reasoning_effort="low",
     # reasoning_effort="medium",
     temperature=1.0,
 )

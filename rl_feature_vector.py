@@ -71,6 +71,7 @@ class VerlParams(BaseModel):
     warmup_steps: int = 10
     loss_kl_penalty: float = 0.001  # KL coefficient
     entropy_coeff: float = 0.0  # higher is entropy boost, try 0.01
+    grad_clip: float = 0.5
 
     # SAE feature-vector config
     use_decoder_vectors: bool
@@ -517,7 +518,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             f"actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu={micro_bs}",
             f"actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu={micro_bs}",
             "actor_rollout_ref.actor.ppo_epochs=1",
-            "actor_rollout_ref.actor.grad_clip=0.5",
+            f"actor_rollout_ref.actor.grad_clip={params.grad_clip}",
             "actor_rollout_ref.actor.clip_ratio=0.2",
             f"actor_rollout_ref.actor.entropy_coeff={params.entropy_coeff}",
             # kl div for policy loss

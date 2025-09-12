@@ -14,6 +14,7 @@ from detection_eval.caller import (
     InferenceConfig,
     OpenAICaller,
     load_multi_caller,
+    load_pooled_openai_caller,
     read_jsonl_file_into_basemodel,
     write_jsonl_file_from_basemodel,
 )
@@ -973,7 +974,7 @@ async def main(
     print(f"Loaded {len(split_sae_activations)} valid SAE entries")
 
     # Create caller
-    caller = load_multi_caller(cache_path="cache/sae_explanations")
+    caller = load_pooled_openai_caller(cache_path="cache/sae_explanations")
     # Custom caller for gemma
 
     total_tokens = 0
@@ -1157,20 +1158,20 @@ if __name__ == "__main__":
     # Define explainer models to test
     explainer_models = Slist(
         [
-            # ModelInfo(
-            #     model="gpt-5-mini-2025-08-07",
-            #     display_name="GPT-5-mini<br>(extrospecting<br>sentences)",
-            #     reasoning_effort="low",
-            #     # reasoning_effort="medium",
-            # ),
-            # "thejaminator/qwen-hook-layer-9"
             ModelInfo(
-                model="thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
-                display_name="No-CoT Qwen-3-8B<br>(Introspecting<br>sentences)",
-                use_steering=True,
-                hook_onto_layer=1,
-                enable_thinking=False,
+                model="gpt-5-mini-2025-08-07",
+                display_name="GPT-5-mini<br>(extrospecting<br>sentences)",
+                reasoning_effort="low",
+                # reasoning_effort="medium",
             ),
+            # "thejaminator/qwen-hook-layer-9"
+            # ModelInfo(
+            #     model="thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
+            #     display_name="No-CoT Qwen-3-8B<br>(Introspecting<br>sentences)",
+            #     use_steering=True,
+            #     hook_onto_layer=1,
+            #     enable_thinking=False,
+            # ),
             # ModelInfo(
             #     model="thejaminator/qwen-hook-layer-9",
             #     display_name="CoT Qwen-3-8B<br>(extrospecting<br>sentences)",
@@ -1209,7 +1210,7 @@ if __name__ == "__main__":
         # sae_file = "hard_negatives_0_to_82000.jsonl"
         # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
         # Which to use for constructing explanations vs testing detection?
-        saes_to_test = 100
+        saes_to_test = 200
         sae_start_index = 0
         # sae_start_index = 20_000  # not in train set for the trained model
 
@@ -1245,10 +1246,10 @@ if __name__ == "__main__":
                 sae_file=sae_file,
                 explainer_models=explainer_models,
                 add_random_explanations=False,
-                # config=hard_negatives_config,
+                config=hard_negatives_config,
                 # config=best_of_8_config,
                 # config=best_of_4_config,
-                config=best_of_32_config,
+                # config=best_of_32_config,
                 # config=no_train_hard_negatives_config,
                 # config=eight_positive_examples_config,
                 # config=two_positive_examples,
