@@ -384,8 +384,7 @@ def construct_eval_dataset(
     )
     if not isinstance(input_prompt_ids, list):
         raise TypeError("Expected list of token ids from tokenizer")
-    # For evaluation data, we mark all tokens as -100 since we're only doing generation, not training
-    labels = [-100] * len(input_prompt_ids)
+    labels = input_prompt_ids.copy()
 
     orig_prompt_length = len(input_prompt_ids)
 
