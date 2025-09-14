@@ -1,4 +1,5 @@
 import asyncio
+import math
 from typing import Any
 
 from slist import Slist
@@ -202,20 +203,22 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
     return detection_result
 
 
-caller = load_openai_caller(cache_path="cache/detection_eval")
+caller = load_openai_caller(cache_path="/tmp/detection_eval")
 
 
 def bin_score(score: float) -> float:
-    if score < 0.2:
-        return 0.0
-    elif score < 0.4:
-        return 0.2
-    elif score < 0.6:
-        return 0.4
-    elif score < 0.8:
-        return 0.6
-    else:
-        return 0.8
+    # if score < 0.2:
+    #     return 0.0
+    # elif score < 0.4:
+    #     return 0.2
+    # elif score < 0.6:
+    #     return 0.4
+    # elif score < 0.8:
+    #     return 0.6
+    # else:
+    #     return 0.8
+    # 0.1 bins
+    return math.floor(score * 10) / 10
 
 
 def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData], bin_scores: bool = True) -> list[float]:

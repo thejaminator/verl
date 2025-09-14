@@ -344,7 +344,9 @@ def load_dictionary_learning_batch_topk_sae(
         config = json.load(f)
 
     if layer is not None:
-        assert layer == config["trainer"]["layer"], f"Layer {layer} not in config {config['trainer']['layer']}, repo id {repo_id}, filename {filename}"
+        assert layer == config["trainer"]["layer"], (
+            f"Layer {layer} not in config {config['trainer']['layer']}, repo id {repo_id}, filename {filename}"
+        )
     else:
         layer = config["trainer"]["layer"]
 
@@ -953,17 +955,17 @@ if __name__ == "__main__":
     # to_100k = list(range(0, 100_000))
     # 100k to 100_200
     # target_features = list(range(0, 200))
-    # min_idx = 20_000
+    min_idx = 20_000
     # max_idx = 20_000
-    # max_idx = 22_000
-    min_idx = 50_000
-    max_idx = 50_500
+    max_idx = 26_000
+    # min_idx = 50_000
+    # max_idx = 51_000
     target_features = list(range(min_idx, max_idx))
 
     data_folder = "data"
     os.makedirs(data_folder, exist_ok=True)
 
-    for sae_layer_percent in [50]:
+    for sae_layer_percent in [25, 50, 75]:
         main(
             # model_name="google/gemma-2-9b-it",
             # sae_repo_id="google/gemma-scope-9b-it-res",

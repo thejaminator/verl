@@ -587,20 +587,22 @@ class OpenAICaller(Caller):
     @retry(
         stop=(stop_after_attempt(2)),
         wait=(wait_fixed(2)),
-        retry=(retry_if_exception_type((openai.NotFoundError))),
+        retry=(retry_if_exception_type(openai.NotFoundError)),
         reraise=True,
     )
     @retry(
         stop=(stop_after_attempt(5)),
         wait=(wait_fixed(5)),
-        retry=(retry_if_exception_type((ValidationError, JSONDecodeError, InternalServerError))),
+        retry=(retry_if_exception_type((JSONDecodeError, InternalServerError))),
         reraise=True,
+        before=lambda retry_state: print(f"OpenAI error, retrying attempt {retry_state.attempt_number}/5..."),
     )
     @retry(
         stop=(stop_after_attempt(10)),
         wait=(wait_fixed(30)),  # for rate limits, wait longer
         retry=(retry_if_exception_type(openai.RateLimitError)),
         reraise=True,
+        before=lambda retry_state: print(f"Rate limit error, retrying attempt {retry_state.attempt_number}/10..."),
     )
     async def call(
         self,

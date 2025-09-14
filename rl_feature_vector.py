@@ -72,6 +72,7 @@ class VerlParams(BaseModel):
     loss_kl_penalty: float = 0.001  # KL coefficient
     entropy_coeff: float = 0.0  # higher is entropy boost, try 0.01
     grad_clip: float = 0.5
+    clip_ratio: float = 0.2
 
     # SAE feature-vector config
     use_decoder_vectors: bool
@@ -98,6 +99,7 @@ class VerlParams(BaseModel):
     use_wandb: bool = True
     wandb_project: str = "gsm8k-verl-grpo"
     wandb_api_key: str | None = None
+    total_epochs: int = 1
 
 
 def extract_answer(text: str) -> str:
@@ -107,6 +109,20 @@ def extract_answer(text: str) -> str:
         answer = after_ans.split("</answer>")[0]
         return answer.strip()
     return text.strip()
+
+
+REQUIRE_SAE_HAS_HARD_NEGATIVES = 11
+HARD_NEGATIVE_SENTENCES = 8
+
+
+def meets_requirements(sae: SAEV2) -> bool:
+    valid_sentences = [neg for neg in sae.hard_negatives if len(neg.sentences) >= HARD_NEGATIVE_SENTENCES]
+    if len(valid_sentences) < REQUIRE_SAE_HAS_HARD_NEGATIVES:
+        print(
+            f"WARNING: SAE {sae.sae_id} has {len(valid_sentences)} hard negatives, but requires {REQUIRE_SAE_HAS_HARD_NEGATIVES}"
+        )
+        return False
+    return True
 
 
 def load_and_convert_dataset(
@@ -137,11 +153,16 @@ def load_and_convert_dataset(
     all_jsonl_items: Slist[SAEV2] = (
         Slist(dataset_path).map(lambda path: read_jsonl_file_into_basemodel(path, SAEV2, limit=limit)).flatten_list()
     )
-    print(f"Total items loaded: {len(all_jsonl_items)}")
 
+    print(f"Total items loaded: {len(all_jsonl_items)}")
+    valid_items = all_jsonl_items.filter(meets_requirements).shuffle("42")
+    print(f"Valid items: {len(valid_items)}")
+    if limit is not None:
+        valid_items = valid_items[:limit]
+    print(f"Valid items after limit: {len(valid_items)}")
     # Step 1: Get all unique layers and their SAE info
     unique_sae_infos: dict[int, SAEInfo] = {}
-    for item in all_jsonl_items:
+    for item in valid_items:
         layer = item.sae_info.sae_layer
         if layer not in unique_sae_infos:
             unique_sae_infos[layer] = item.sae_info
@@ -176,11 +197,10 @@ def load_and_convert_dataset(
         testing_hack = True
 
     data = Slist()
-    REQUIRE_SAE_HAS_HARD_NEGATIVES = 11
-    REQUIRE_SAE_NEGATIVE_SENTENCES = 8
+
     x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
 
-    for sae in all_jsonl_items:
+    for sae in valid_items:
         layer = sae.sae_info.sae_layer
 
         # Get prompt for this layer
@@ -200,17 +220,6 @@ def load_and_convert_dataset(
             position_idx = next(i for i, tid in enumerate(tokenized_prompt) if tid == x_token_id)
         except StopIteration:
             raise ValueError(f"Could not find token 'X' in the tokenized prompt for layer {layer}")
-
-        # Check if we have enough hard negatives
-        valid_test_hard_negs = [
-            neg for neg in sae.hard_negatives if len(neg.sentences) >= REQUIRE_SAE_NEGATIVE_SENTENCES
-        ]
-        if len(valid_test_hard_negs) <= REQUIRE_SAE_HAS_HARD_NEGATIVES:
-            print(
-                f"WARNING: SAE {sae.sae_id} has {len(valid_test_hard_negs)} hard negatives. "
-                f"This is less than {REQUIRE_SAE_HAS_HARD_NEGATIVES}. Not enough to test on. Skipping."
-            )
-            continue
 
         # Get feature vector for this SAE
         W_enc, W_dec = layer_to_sae_params[layer]
@@ -247,8 +256,6 @@ def load_and_convert_dataset(
             "sae": sae_verl_data,
         }
         data.append(structured_data)
-
-    data = data.shuffle("42")
 
     # Save as parquet for verl using pyarrow (no pandas)
     table = pa.Table.from_pylist(data)
@@ -519,7 +526,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             f"actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu={micro_bs}",
             "actor_rollout_ref.actor.ppo_epochs=1",
             f"actor_rollout_ref.actor.grad_clip={params.grad_clip}",
-            "actor_rollout_ref.actor.clip_ratio=0.2",
+            f"actor_rollout_ref.actor.clip_ratio={params.clip_ratio}",
             f"actor_rollout_ref.actor.entropy_coeff={params.entropy_coeff}",
             # kl div for policy loss
             f"actor_rollout_ref.actor.kl_loss_coef={params.loss_kl_penalty}",
@@ -566,7 +573,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             f"custom_reward_function.path={reward_file}",
             f"custom_reward_function.name={params.reward_function_name}",
             # Trainer configuration
-            "trainer.total_epochs=1",
+            f"trainer.total_epochs={params.total_epochs}",
             f"trainer.project_name={params.wandb_project}",
             f"trainer.experiment_name=grpo-{params.output_dir.split('/')[-1]}",
             "trainer.nnodes=1",
@@ -662,7 +669,7 @@ def verl_main(params: VerlParams):
             output_path=eval_parquet,
             use_decoder_vectors=params.use_decoder_vectors,
             enable_thinking=params.enable_thinking,
-            limit=1,
+            limit=1,  # need to fix some chunking error
         )
     else:
         eval_parquet = os.path.join(params.output_dir, "eval.parquet")
