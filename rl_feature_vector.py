@@ -156,6 +156,8 @@ def load_and_convert_dataset(
 
     print(f"Total items loaded: {len(all_jsonl_items)}")
     valid_items = all_jsonl_items.filter(meets_requirements).shuffle("42")
+    # disable shuffle so that we can easily compare runs.
+    #
     print(f"Valid items: {len(valid_items)}")
     if limit is not None:
         valid_items = valid_items[:limit]
