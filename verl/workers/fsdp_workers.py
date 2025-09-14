@@ -96,13 +96,35 @@ def create_device_mesh(world_size, fsdp_size):
 
 @contextmanager
 def use_sft_as_policy(actor_module: PeftModel):
+    """
+    Additionally, this function will set the specified adapter to trainable (i.e., requires_grad=True). If this is
+        not desired, use the following code.
+
+        ```py
+        >>> for name, param in model_peft.named_parameters():
+        ...     if ...:  # some check on name (ex. if 'lora' in name)
+        ...         param.requires_grad = False
+        ```
+    """
+    print("Setting actor module to use sft_policy adapter")
     # set adapter to "sft_policy"
     actor_module.set_adapter("sft_policy")
+    # set as not trainable
+    for name, param in actor_module.named_parameters():
+        if "lora" in name or "sft_policy" in name:
+            param.requires_grad = False
+    is_in_training = actor_module.training
+    if is_in_training:
+        print("Actor module is in training mode, setting to eval mode")
+        actor_module.eval()
     try:
         yield
     finally:
         # set adapter to "default"
         actor_module.set_adapter("default")
+        if is_in_training:
+            print("Actor module was in training mode, setting back to train mode")
+            actor_module.train()
 
 
 def get_sharding_strategy(device_mesh):

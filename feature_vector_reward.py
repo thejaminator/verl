@@ -218,7 +218,11 @@ def bin_score(score: float) -> float:
     # else:
     #     return 0.8
     # 0.1 bins
-    return math.floor(score * 10) / 10
+    score = math.floor(score * 10) / 10
+    # if perfect score, make it same as 0.9 (Perfect isn't that much better than 0.9, accounting for noise.)
+    if score == 1.0:
+        score = 0.9
+    return score
 
 
 def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData], bin_scores: bool = True) -> list[float]:
