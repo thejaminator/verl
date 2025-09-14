@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import warnings
+from contextlib import contextmanager
 from dataclasses import asdict
 from typing import Any
 
@@ -91,6 +92,17 @@ def create_device_mesh(world_size, fsdp_size):
             device_name, mesh_shape=(world_size // fsdp_size, fsdp_size), mesh_dim_names=["ddp", "fsdp"]
         )
     return device_mesh
+
+
+@contextmanager
+def use_sft_as_policy(actor_module: PeftModel):
+    # set adapter to "sft_policy"
+    actor_module.set_adapter("sft_policy")
+    try:
+        yield
+    finally:
+        # set adapter to "default"
+        actor_module.set_adapter("default")
 
 
 def get_sharding_strategy(device_mesh):
@@ -285,7 +297,9 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 actor_module_class = AutoModelForCausalLM
 
             if local_path != "Qwen/Qwen3-8B":
-                print(f"Assuming that {local_path} is a lora model. Hardcoding loaded model to Qwen/Qwen3-8B, will load LORA later.")
+                print(
+                    f"Assuming that {local_path} is a lora model. Hardcoding loaded model to Qwen/Qwen3-8B, will load LORA later."
+                )
             model_path = "Qwen/Qwen3-8B"
 
             actor_module = actor_module_class.from_pretrained(
@@ -331,12 +345,14 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             #         "exclude_modules": convert_to_regular_types(self.config.model.exclude_modules),
             #         "bias": "none",
             #     }
-                # actor_module = get_peft_model(actor_module, LoraConfig(**lora_config))
+            # actor_module = get_peft_model(actor_module, LoraConfig(**lora_config))
             if self._is_lora:
                 print(f"Assuming the path is already a lora model: {local_path}")
                 actor_module.enable_input_require_grads()
-                new_module = PeftModel.from_pretrained(actor_module, local_path, is_trainable=True)
+                new_module = PeftModel.from_pretrained(actor_module, model_id=local_path, is_trainable=True)
                 new_module.print_trainable_parameters()
+                # Now we need to add the same lora that is frozen: This will be the "old policy" for KL penalty calc
+                new_module.load_adapter(model_id=local_path, adapter_name="sft_policy", is_trainable=False)
                 actor_module = new_module
         torch.distributed.barrier()
 
@@ -797,7 +813,12 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         from contextlib import nullcontext
 
         is_lora = data.meta_info.pop("is_lora", False)
-        adapter_ctx = self.actor.actor_module.disable_adapter() if is_lora else nullcontext()
+        # adapter_ctx = self.actor.actor_module.disable_adapter() if is_lora else nullcontext()
+        if is_lora:
+            # James: old_policy is the frozen lora from SFT init
+            adapter_ctx = use_sft_as_policy(self.actor.actor_module)
+        else:
+            adapter_ctx = nullcontext()
         data = data.to(get_device_id())
         # we should always recompute old_log_probs when it is HybridEngine
         data.meta_info["micro_batch_size"] = self.config.rollout.log_prob_micro_batch_size_per_gpu
