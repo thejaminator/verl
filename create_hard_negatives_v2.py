@@ -909,6 +909,7 @@ def main(
                     if all_similar_acts_BL[i, 0] == -1:
                         continue
                     token_activations = []
+                    tokens: list[str] = []
                     max_act = 0
                     acts_L = all_similar_acts_BL[i, :].tolist()
                     for j, token in enumerate(hard_negative_tokens):
@@ -917,7 +918,7 @@ def main(
                         act = acts_L[j]
                         max_act = max(max_act, act)
                         token_activations.append(TokenActivationV2.model_construct(s=token, act=act, pos=j))
-                    tokens = [act.s for act in token_activations]
+                        tokens.append(token)
                     hard_negative_sentence_infos.append(
                         SentenceInfoV2.model_construct(
                             max_act=max_act,
@@ -955,11 +956,11 @@ if __name__ == "__main__":
     # to_100k = list(range(0, 100_000))
     # 100k to 100_200
     # target_features = list(range(0, 200))
-    min_idx = 20_000
+    # min_idx = 20_000
     # max_idx = 20_000
-    max_idx = 30_000
-    # min_idx = 50_000
-    # max_idx = 51_000
+    # max_idx = 30_000
+    min_idx = 50_000
+    max_idx = 50_600
     target_features = list(range(min_idx, max_idx))
 
     data_folder = "data"
