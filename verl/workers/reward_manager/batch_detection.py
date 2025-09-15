@@ -16,6 +16,7 @@ from collections import defaultdict
 
 import torch
 
+from feature_vector_reward import REWARD_CALLER
 from feature_vector_reward import compute_score as compute_score_feature_vector
 from verl import DataProto
 from verl.workers.reward_manager import register
@@ -80,6 +81,11 @@ class BatchDetectionRewardManager:
             else:
                 return data.batch["rm_scores"]
 
+        # Ensure the caller cache is reloaded at the start
+        # Because damned verl wants to do a seperate ray process for everything, the cache between
+        # our fire and forget reward computation and the main process gets out of sync.
+        REWARD_CALLER.cache_by_model.reload_file_cache()
+
         reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
         reward_extra_info = defaultdict(list)
         prompt_ids = data.batch["prompts"]
@@ -108,7 +114,7 @@ class BatchDetectionRewardManager:
             reward_tensor[i, length - 1] = reward
 
             data_source = data_sources[i]
-            
+
             # Always collect table data for logging (separate from printing logic)
             response_str = self.tokenizer.decode(data.batch["responses"][i][:length], skip_special_tokens=True)
             table_data.append(
@@ -118,7 +124,7 @@ class BatchDetectionRewardManager:
                     "score": scores[i],
                 }
             )
-            
+
             # Only print if within num_examine limit
             if already_printed.get(data_source, 0) < self.num_examine:
                 prompt_str = self.tokenizer.decode(data.batch["prompts"][i], skip_special_tokens=True)
@@ -130,7 +136,7 @@ class BatchDetectionRewardManager:
                 already_printed[data_source] = already_printed.get(data_source, 0) + 1
 
         data.batch["acc"] = torch.tensor(rewards, dtype=torch.float32, device=prompt_ids.device)
-        
+
         # Add table data to reward_extra_info for logging (like NaiveRewardManager does)
         # This will get automatically converted to np.array by the trainer
         if table_data:

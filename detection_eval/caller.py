@@ -2,6 +2,7 @@ import hashlib
 import math
 import os
 import random
+import shutil
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -549,6 +550,27 @@ class CallerCache(Generic[GenericBaseModel]):
     async def flush(self) -> None:
         for cache in self.cache.values():
             await cache.flush()
+
+    def delete_file_cache(self) -> None:
+        # deletes the entire path
+        if self.cache_path.exists():
+            shutil.rmtree(self.cache_path)
+        # reset in-memory caches
+        self.cache = {}
+        self.log_probs_cache = {}
+        # recreate directory
+        self.cache_path.mkdir(parents=True, exist_ok=True)
+
+    def reload_file_cache(self) -> None:
+        # Clear in-memory data so next access lazily reloads from disk
+        for cache in self.cache.values():
+            cache.data = {}
+            cache.loaded_cache = False
+            cache.file_handler = None
+        for cache in self.log_probs_cache.values():
+            cache.data = {}
+            cache.loaded_cache = False
+            cache.file_handler = None
 
 
 class ContentPolicyError(Exception):
