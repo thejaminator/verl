@@ -5,7 +5,6 @@ import dotenv
 from rl_feature_vector import VerlParams, verl_main
 
 if __name__ == "__main__":
-    # https://wandb.ai/chuajamessh/grpo-feature-vector/runs/4ym89o27?nw=nwuserchuajamessh
     dotenv.load_dotenv()
 
     # Load environment variables
@@ -25,7 +24,7 @@ if __name__ == "__main__":
             "data/qwen_hard_negatives_20000_24000_layer_percent_75.jsonl",
         ],
         eval_path="data/qwen_hard_negatives_20000_24000_layer_percent_50.jsonl",
-        max_train_samples=12_000,  # total
+        max_train_samples=18000,  # per file
         use_feature_vector=True,
         use_hf_rollout_instead_of_vllm=False,
         enable_thinking=False,  # Actually, this doesn't do anything, I hardcoded verl/utils/dataset/rl_dataset.py to disable it.
@@ -33,10 +32,10 @@ if __name__ == "__main__":
         max_prompt_length=300,
         max_response_length=500,
         num_generations=16,  # Bigger group size since noisy explanations
-        prompt_batch_size=32,  # number of prompts in rollout batch. will be multiplied by num_generations.
+        prompt_batch_size=64,  # number of prompts in rollout batch. will be multiplied by num_generations.
         # split_into_grad_accum=64,  # prompt_batch_size * num_generations gets split by grad accum.
         split_into_grad_accum=128,  # need for no padding
-        vllm_split=8,  # prompt_batch_size * num_generations gets split by vllm split.
+        vllm_split=16,  # prompt_batch_size * num_generations gets split by vllm split.
         # 8 * 8 = 64 is the effective batch size
         # Note: vllm implementation does not follow this batch size since it has its own scheduler.
         # May need to experiment with implementing our own split for vllm.
@@ -49,7 +48,7 @@ if __name__ == "__main__":
         # micro_batch=8,
         # micro_batch_size_per_gpu=8,
         warmup_steps=5,
-        learning_rate=1e-5,  # Increased by order of magnitude for LoRA (was 5e-6)
+        learning_rate=5e-6,  # Increased by order of magnitude for LoRA (was 5e-6)
         # learning_rate=5e-4,  # Increased by order of magnitude for LoRA (was 5e-6)
         entropy_coeff=0.001,
         grad_clip=0.25,
@@ -61,14 +60,16 @@ if __name__ == "__main__":
         use_shm=False,
         layered_summon=False,
         max_steps=4000,
-        output_dir="/workspace/15sep_1e5_lr_fixed_data",
-        hub_repo_id="thejaminator/15sep_1e5_lr_fixed_data",
+        output_dir="/workspace/15sep_5e6_lr_big_batch_fixed_data",
+        hub_repo_id="thejaminator/15sep_5e6_lr_big_batch_fixed_data",  # Updated with "_verl" suffix
         save_steps=20,  # saving causes OOM. Why?
         n_gpus=1,
         use_wandb=True,
         wandb_project="grpo-feature-vector",
         # HuggingFace Hub configuration (like your current script)
         push_to_hub=True,
+        # hub_repo_id="thejaminator/11sep_discrete_no_dr_lr_4",  # Updated with "_verl" suffix
+        # hub_repo_id="thejaminator/11sep_discrete_no_dr_no_remove_padding",  # Updated with "_verl" suffix
         # use_remove_padding=False,
         use_remove_padding=True,
         hf_api_key=hf_api_key,

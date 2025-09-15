@@ -389,6 +389,9 @@ async def read_jsonl_file_into_basemodel_async(
 
 
 class Caller(ABC):
+    def reload_file_cache(self) -> None:
+        raise NotImplementedError()
+
     @abstractmethod
     async def call(
         self,
@@ -975,6 +978,11 @@ class MultiClientCaller(Caller):
 class PooledCaller(Caller):
     def __init__(self, callers: Sequence[Caller]):
         self.callers = callers
+
+    def reload_file_cache(self) -> None:
+        cache = self.callers[0].cache_by_model  # type: ignore
+        assert isinstance(cache, CallerCache)
+        cache.reload_file_cache()
 
     async def flush(self) -> None:
         for caller in self.callers:

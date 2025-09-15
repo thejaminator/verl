@@ -84,7 +84,7 @@ class BatchDetectionRewardManager:
         # Ensure the caller cache is reloaded at the start
         # Because damned verl wants to do a seperate ray process for everything, the cache between
         # our fire and forget reward computation and the main process gets out of sync.
-        REWARD_CALLER.cache_by_model.reload_file_cache()
+        REWARD_CALLER.reload_file_cache()
 
         reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
         reward_extra_info = defaultdict(list)
