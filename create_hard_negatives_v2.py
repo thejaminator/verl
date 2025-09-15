@@ -882,7 +882,8 @@ def main(
                 tokens: list[str] = []
                 max_act = 0
                 acts_L = pos_acts_BL[i, :].tolist()
-                for j, token in enumerate(pos_tokens):
+                non_special_tokens = [token for token in pos_tokens if token not in special_tokens]
+                for j, token in enumerate(non_special_tokens):
                     if token in special_tokens:
                         continue
                     act = acts_L[j]
@@ -913,7 +914,8 @@ def main(
                     tokens: list[str] = []
                     max_act = 0
                     acts_L = all_similar_acts_BL[i, :].tolist()
-                    for j, token in enumerate(hard_negative_tokens):
+                    non_special_tokens = [token for token in hard_negative_tokens if token not in special_tokens]
+                    for j, token in enumerate(non_special_tokens):
                         if token in special_tokens:
                             continue
                         act = acts_L[j]
