@@ -27,9 +27,9 @@ from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import GenerationConfig
 
-from create_hard_negatives_v2 import get_submodule
 from detection_eval.detection_basemodels import SAEVerlDataTypedDict
 from detection_eval.steering_hooks import HookArgs, add_hook, get_hf_activation_steering_hook, verl_data_to_hook_args
+from sft_config import get_hf_submodule
 from verl import DataProto
 from verl.utils.device import get_device_id, get_device_name, get_torch_device
 from verl.utils.torch_functional import get_response_mask
@@ -120,7 +120,6 @@ class HFRollout(BaseRollout):
             dtype=dtype,
         )
 
-
         self.module.eval()
         param_ctx = contextlib.nullcontext()
 
@@ -130,7 +129,7 @@ class HFRollout(BaseRollout):
         with param_ctx, torch.autocast(device_type=get_device_name(), dtype=torch.bfloat16):
             # Qwen3ForCausalLM
             try:
-                target_layer = get_submodule(self.module, layer_number, use_lora=True)
+                target_layer = get_hf_submodule(self.module, layer_number, use_lora=True)
             except Exception as e:
                 breakpoint()
                 raise e

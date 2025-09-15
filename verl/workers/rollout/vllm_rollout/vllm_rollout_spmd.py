@@ -296,6 +296,10 @@ class vLLMRollout(BaseRollout):
                         sae: list[SAEVerlData] = [SAEVerlData.from_typed_dict(x) for x in sae_typed]
 
                         # Trigger background reward computation
+                        print(f"Triggering background reward computation for chunk {i}")
+                        # first prompt
+                        first_explanation = explanations[0]
+                        print(f"Backgroudn first explanation: {first_explanation}")
                         fire_and_forget_compute_score(explanations, sae)
                     output_chunks.append(output_chunk)
                 output = DataProto.concat(output_chunks)

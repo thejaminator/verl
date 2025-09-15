@@ -1,5 +1,6 @@
 import asyncio
 import math
+import threading
 from typing import Any
 
 from slist import Slist
@@ -8,7 +9,6 @@ from detection_eval.caller import (
     Caller,
     ChatHistory,
     InferenceConfig,
-    load_openai_caller,
     load_pooled_openai_caller,
     read_jsonl_file_into_basemodel,
 )
@@ -21,6 +21,29 @@ from eval_detection_v2 import (
     create_detection_batch,
     evaluate_sentence_matching,
 )
+
+# Background event loop management (single-thread, no locking needed if no concurrency)
+_BG_LOOP: asyncio.AbstractEventLoop | None = None
+_BG_THREAD: threading.Thread | None = None
+
+
+def _ensure_background_loop() -> asyncio.AbstractEventLoop:
+    global _BG_LOOP, _BG_THREAD
+    if _BG_LOOP is not None and _BG_THREAD is not None and _BG_THREAD.is_alive():
+        return _BG_LOOP
+
+    loop = asyncio.new_event_loop()
+
+    def _runner() -> None:
+        asyncio.set_event_loop(loop)
+        loop.run_forever()
+
+    thread = threading.Thread(target=_runner, name="verl-bg-loop", daemon=True)
+    thread.start()
+
+    _BG_LOOP = loop
+    _BG_THREAD = thread
+    return loop
 
 
 def has_opening_explanation_tag(solution_str: str) -> bool:
@@ -188,7 +211,8 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
         train_activating_sentences=1,
         train_hard_negative_sentences=1,
         train_hard_negative_saes=1,
-        ### Note: The "train" ones here don't matter if just using feature vector, since they don't appear in the prompt.
+        # Note: The "train" ones don't matter if just using feature vector,
+        # since they don't appear in the prompt.
         test_hard_negative_sentences=8,
         test_hard_negative_saes=11,
     )
@@ -203,7 +227,7 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
     return detection_result
 
 
-REWARD_CALLER = load_openai_caller(cache_path="/tmp/detection_eval")
+REWARD_CALLER = load_pooled_openai_caller(cache_path="/tmp/detection_eval")
 
 
 async def compute_scores(
@@ -215,21 +239,17 @@ async def compute_scores(
 
 def fire_and_forget_compute_score(explanation: list[str], sae: list[SAEVerlData]) -> None:
     # For use during rollouts so that we can pre-compute reward scores without waiting for all rollouts to finish.
-    asyncio.create_task(compute_scores(explanation, sae, REWARD_CALLER))
+    # If there's a running loop, schedule on it; otherwise spin up a background loop.
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(compute_scores(explanation, sae, REWARD_CALLER))
+    except RuntimeError:
+        # Schedule on a single background loop/thread and return immediately
+        background_loop = _ensure_background_loop()
+        asyncio.run_coroutine_threadsafe(compute_scores(explanation, sae, REWARD_CALLER), background_loop)
 
 
 def bin_score(score: float) -> float:
-    # if score < 0.2:
-    #     return 0.0
-    # elif score < 0.4:
-    #     return 0.2
-    # elif score < 0.6:
-    #     return 0.4
-    # elif score < 0.8:
-    #     return 0.6
-    # else:
-    #     return 0.8
-    # 0.1 bins
     score = math.floor(score * 10) / 10
     # if perfect score, make it same as 0.9 (Perfect isn't that much better than 0.9, accounting for noise.)
     if score == 1.0:
@@ -281,7 +301,23 @@ if __name__ == "__main__":
         path="data/qwen_hard_negatives_20000_22000_layer_percent_25.jsonl", basemodel=SAEV2, limit=2
     ).map(lambda x: SAEVerlData.from_sae(x, feature_vector=[0.0] * 100, position_id=0))
     solution_str = [
-        "<explanation>Sentences sabouts NHRA-style drag racing events and related specialized drag-racing terminology — e.g., four-wide competitions, Funny Car/Top Fuel races or exhibitions, specific dragstrips/venues (zMAX Dragway, Texas Motorplex, MIR), event promotions/shoots (PINKS All Out), televised or exhibition race details, and fan/competition descriptions. These are event-focused mentions of drag-racing competitions and their jargon, distinguishing them from unrelated sports, entertainment, or general topics.</explanation>",
-        "<explanation>Short noun psshrases that cssharacterize a human with an evaluative or descriptive adjective (or adjective-like phrase) immediately before or after a head like 'man' or 'person' — e.g., 'a kind man,' 'a quiet man,' 'a humble man,' 'a smart person,' 'John Parish has been a busy man.' These are attributive character descriptions (including proverb-like patterns 'A smart man...') rather than neutral references to people or more complex syntactic uses (e.g., 'the man who is serving as...' or factual/organizational mentions), which do not activate the feature.</explanation>",
+        (
+            "<explanation>Sentences sabouts NHRA-style drag racing events and related specialized "
+            "drag-racing terminology — e.g., four-wide competitions, Funny Car/Top Fuel races or "
+            "exhibitions, specific dragstrips/venues (zMAX Dragway, Texas Motorplex, MIR), event "
+            "promotions/shoots (PINKS All Out), televised or exhibition race details, and "
+            "fan/competition descriptions. These are event-focused mentions of drag-racing "
+            "competitions and their jargon, distinguishing them from unrelated sports, "
+            "entertainment, or general topics.</explanation>"
+        ),
+        (
+            "<explanation>Short noun psshrases that cssharacterize a human with an evaluative or "
+            "descriptive adjective (or adjective-like phrase) immediately before or after a head "
+            "like 'man' or 'person' — e.g., 'a kind man,' 'a quiet man,' 'a humble man,' 'a smart "
+            "person,' 'John Parish has been a busy man.' These are attributive character "
+            "descriptions (including proverb-like patterns 'A smart man...') rather than neutral "
+            "references to people or more complex syntactic uses (e.g., 'the man who is serving "
+            "as...' or factual/organizational mentions), which do not activate the feature.</explanation>"
+        ),
     ]
     print(_compute_score(solution_str, saes))

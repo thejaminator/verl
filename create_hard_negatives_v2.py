@@ -874,11 +874,11 @@ if __name__ == "__main__":
     # to_100k = list(range(0, 100_000))
     # 100k to 100_200
     # target_features = list(range(0, 200))
-    # min_idx = 20_000
+    min_idx = 20_000
     # max_idx = 20_000
-    # max_idx = 30_000
-    min_idx = 50_000
-    max_idx = 50_600
+    max_idx = 24_000
+    # min_idx = 50_000
+    # max_idx = 50_600
     target_features = list(range(min_idx, max_idx))
 
     data_folder = "data"
@@ -892,7 +892,7 @@ if __name__ == "__main__":
             sae_repo_id="adamkarvonen/qwen3-8b-saes",
             target_features=target_features,
             top_k_similar_features=34,
-            batch_size=1024,
+            batch_size=2048,
             target_sentences=32,
             output=f"{data_folder}/qwen_hard_negatives_{min_idx}_{max_idx}_layer_percent_{sae_layer_percent}.jsonl",
             sae_layer_percent=sae_layer_percent,
