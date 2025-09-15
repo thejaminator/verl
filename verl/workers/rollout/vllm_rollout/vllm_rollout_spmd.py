@@ -51,13 +51,14 @@ from vllm.lora.request import LoRARequest
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.worker.worker_base import WorkerWrapperBase
 
-from detection_eval.detection_basemodels import SAEVerlDataTypedDict
+from detection_eval.detection_basemodels import SAEVerlData, SAEVerlDataTypedDict
 from detection_eval.steering_hooks import (
     HookArgs,
     add_hook,
     get_vllm_steering_hook,
     verl_data_to_hook_args,
 )
+from feature_vector_reward import fire_and_forget_compute_score
 from verl import DataProto
 from verl.utils.device import get_device_id
 from verl.utils.profiler import GPUMemoryLogger
@@ -171,7 +172,6 @@ class vLLMRollout(BaseRollout):
         if config.get("limit_images", None):  # support for multi-image data
             engine_kwargs["limit_mm_per_prompt"] = {"image": config.get("limit_images")}
 
-
         self.inference_engine = LLM(
             model=model_path,
             disable_async_output_proc=False,
@@ -218,6 +218,7 @@ class vLLMRollout(BaseRollout):
         self.sampling_params = SamplingParams(**kwargs)
 
         self.pad_token_id = tokenizer.pad_token_id
+        self.tokenizer = tokenizer
 
     @contextmanager
     def update_sampling_params(self, **kwargs):
@@ -271,10 +272,35 @@ class vLLMRollout(BaseRollout):
             if num_chunks > 1:
                 # Split the batch and process chunks
                 batch_prompts = prompts.chunk(chunks=num_chunks)
-                output_chunks = [self._generate_minibatch(chunk_prompts, **kwargs) for chunk_prompts in batch_prompts]
+                output_chunks = []
+                for i, chunk_prompts in enumerate(batch_prompts):
+                    output_chunk = self._generate_minibatch(chunk_prompts, **kwargs)
+                    # Skip background reward precompute for the last chunk
+                    if i < len(batch_prompts) - 1:
+                        # Decode responses exactly like BatchDetectionRewardManager
+                        response_ids = output_chunk.batch["responses"]
+                        prompt_ids = output_chunk.batch["prompts"]
+                        attention_mask = output_chunk.batch["attention_mask"]
+
+                        prompt_len = prompt_ids.shape[-1]
+                        valid_response_lengths = attention_mask[:, prompt_len:].sum(dim=-1)
+
+                        explanations: list[str] = []
+                        for j in range(response_ids.size(0)):
+                            valid_len = int(valid_response_lengths[j].item())
+                            decoded = self.tokenizer.decode(response_ids[j][:valid_len], skip_special_tokens=True)
+                            explanations.append(decoded)
+
+                        # Convert SAE typed dicts to SAEVerlData
+                        sae_typed: list[SAEVerlDataTypedDict] = output_chunk.non_tensor_batch["sae"]
+                        sae: list[SAEVerlData] = [SAEVerlData.from_typed_dict(x) for x in sae_typed]
+
+                        # Trigger background reward computation
+                        fire_and_forget_compute_score(explanations, sae)
+                    output_chunks.append(output_chunk)
                 output = DataProto.concat(output_chunks)
                 return output
-        
+
         # Default: process the entire batch at once
         return self._generate_minibatch(prompts, **kwargs)
 
