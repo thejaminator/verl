@@ -60,8 +60,8 @@ if __name__ == "__main__":
         use_shm=False,
         layered_summon=False,
         max_steps=4000,
-        output_dir="/workspace/12sep_grp16_5e6_lr_14sep_bigger_batch",
-        hub_repo_id="thejaminator/12sep_grp16_5e6_lr_14sep_bigger_batch",  # Updated with "_verl" suffix
+        output_dir="/workspace/grp16_5e6_lr_big_batch_skip",
+        hub_repo_id="thejaminator/grp16_5e6_lr_big_batch_skip",  # Updated with "_verl" suffix
         save_steps=20,  # saving causes OOM. Why?
         n_gpus=1,
         use_wandb=True,

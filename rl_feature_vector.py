@@ -9,6 +9,7 @@ Based on the verl documentation and examples.
 """
 
 import os
+from typing import Any
 
 from slist import Slist
 from transformers import AutoTokenizer, PreTrainedTokenizer
@@ -268,7 +269,12 @@ def load_and_convert_dataset(
 
 
 def convert_verl_to_hf_and_push(
-    output_dir: str, base_model_name: str, hub_repo_id: str | None, hf_api_key: str | None, step: int | None = None
+    output_dir: str,
+    base_model_name: str,
+    hub_repo_id: str | None,
+    hf_api_key: str | None,
+    step: int | None = None,
+    override_adapter_json: dict[str, Any] | None = None,
 ):
     """
     Convert verl checkpoint to HuggingFace format using verl model merger and push to Hub.
@@ -279,6 +285,7 @@ def convert_verl_to_hf_and_push(
         hub_repo_id: HuggingFace Hub repository ID
         hf_api_key: HuggingFace API key
         step: Training step number (for checkpoint naming)
+        override_adapter_json: Override the adapter.json file with this dictionary
     """
 
     # Find the latest checkpoint if step not specified
@@ -348,18 +355,24 @@ def convert_verl_to_hf_and_push(
             with open(readme_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
 
-        # Ensure adapter_config.json contains base_model_name_or_path
-        adapter_cfg_path = os.path.join(hf_output_dir, "adapter_config.json")
-        if os.path.exists(adapter_cfg_path):
-            with open(adapter_cfg_path, encoding="utf-8") as f:
-                try:
-                    cfg = json.load(f)
-                except json.JSONDecodeError as e:
-                    print(f"❌ Error loading adapter_config.json: {adapter_cfg_path}")
-                    raise e
-            cfg["base_model_name_or_path"] = base_model_name
+        if override_adapter_json:
+            adapter_cfg_path = os.path.join(hf_output_dir, "adapter_config.json")
             with open(adapter_cfg_path, "w", encoding="utf-8") as f:
-                json.dump(cfg, f, indent=2, ensure_ascii=False)
+                json.dump(override_adapter_json, f, indent=2, ensure_ascii=False)
+        else:
+            # Ensure adapter_config.json contains base_model_name_or_path
+            adapter_cfg_path = os.path.join(hf_output_dir, "adapter_config.json")
+            if os.path.exists(adapter_cfg_path):
+                with open(adapter_cfg_path, encoding="utf-8") as f:
+                    try:
+                        cfg = json.load(f)
+                    except json.JSONDecodeError as e:
+                        print(f"❌ Error loading adapter_config.json: {adapter_cfg_path}")
+                        raise e
+                        # print
+                cfg["base_model_name_or_path"] = base_model_name
+                with open(adapter_cfg_path, "w", encoding="utf-8") as f:
+                    json.dump(cfg, f, indent=2, ensure_ascii=False)
 
     else:
         print("Converting full model checkpoint to HuggingFace format...")
