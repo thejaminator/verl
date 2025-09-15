@@ -25,15 +25,18 @@ TODO:
 
 import json
 import os
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import NamedTuple, Sequence
 
 import einops
+import numpy as np
 import torch
 import torch.nn.functional as F
+from huggingface_hub import hf_hub_download
 from pydantic import BaseModel
 from tqdm import tqdm
-from transformers import BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 from detection_eval.detection_basemodels import (
     SAEV2,
@@ -42,19 +45,7 @@ from detection_eval.detection_basemodels import (
     SentenceInfoV2,
     TokenActivationV2,
 )
-
-try:
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-except ImportError:
-    from transformers.models.auto.modeling_auto import AutoModelForCausalLM
-    from transformers.models.auto.tokenization_auto import AutoTokenizer
-
-# Copied from interp_tools to make file standalone
-import contextlib
-from abc import ABC, abstractmethod
-
-import numpy as np
-from huggingface_hub import hf_hub_download
+from sft_config import collect_activations, get_hf_submodule
 
 
 def get_sae_info(sae_repo_id: str, sae_layer_percent: int = 25, sae_width: int | None = None) -> SAEInfo:
@@ -437,84 +428,6 @@ def load_sae(
     return sae
 
 
-# Model utilities
-def get_submodule(model: AutoModelForCausalLM, layer: int, use_lora: bool = False):
-    """Gets the residual stream submodule"""
-    model_name = model.config._name_or_path  # type: ignore
-
-    if use_lora:
-        if "pythia" in model_name:
-            raise ValueError("Need to determine how to get submodule for LoRA")
-        elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name or "Qwen" in model_name:
-            return model.base_model.model.model.layers[layer]  # type: ignore
-        else:
-            raise ValueError(f"Please add submodule for model {model_name}")
-
-    if "pythia" in model_name:
-        return model.gpt_neox.layers[layer]  # type: ignore
-    elif "gemma" in model_name or "mistral" in model_name or "Llama" in model_name or "Qwen" in model_name:
-        return model.model.layers[layer]  # type: ignore
-    else:
-        raise ValueError(f"Please add submodule for model {model_name}")
-
-
-class EarlyStopException(Exception):
-    """Custom exception for stopping model forward pass early."""
-
-    pass
-
-
-def collect_activations(
-    model: AutoModelForCausalLM,
-    submodule: torch.nn.Module,
-    inputs_BL: dict[str, torch.Tensor],
-    use_no_grad: bool = True,
-) -> torch.Tensor:
-    """
-    Registers a forward hook on the submodule to capture the residual (or hidden)
-    activations. We then raise an EarlyStopException to skip unneeded computations.
-
-    Args:
-        model: The model to run.
-        submodule: The submodule to hook into.
-        inputs_BL: The inputs to the model.
-        use_no_grad: Whether to run the forward pass within a `torch.no_grad()` context. Defaults to True.
-    """
-    activations_BLD = None
-
-    def gather_target_act_hook(module, inputs, outputs):
-        nonlocal activations_BLD
-        # For many models, the submodule outputs are a tuple or a single tensor:
-        # If "outputs" is a tuple, pick the relevant item:
-        #   e.g. if your layer returns (hidden, something_else), you'd do outputs[0]
-        # Otherwise just do outputs
-        if isinstance(outputs, tuple):
-            activations_BLD = outputs[0]
-        else:
-            activations_BLD = outputs
-
-        raise EarlyStopException("Early stopping after capturing activations")
-
-    handle = submodule.register_forward_hook(gather_target_act_hook)
-
-    # Determine the context manager based on the flag
-    context_manager = torch.no_grad() if use_no_grad else contextlib.nullcontext()
-
-    try:
-        # Use the selected context manager
-        with context_manager:
-            _ = model(**inputs_BL)  # type: ignore
-    except EarlyStopException:
-        pass
-    except Exception as e:
-        print(f"Unexpected error during forward pass: {str(e)}")
-        raise
-    finally:
-        handle.remove()
-
-    return activations_BLD  # type: ignore
-
-
 # Pydantic schema classes for JSONL output
 def load_max_acts_data(
     model_name: str,
@@ -801,7 +714,7 @@ def main(
     # Load model, tokenizer, and SAE
     print("🚀 Loading model and SAE...")
     model, tokenizer, sae = load_model_and_sae(model_name, sae_repo_id, sae_filename, sae_layer, device, dtype)
-    submodule = get_submodule(model, sae_layer)  # type: ignore
+    submodule = get_hf_submodule(model, sae_layer)  # type: ignore
     # how many features in sae?
     print(f"🔍 Number of features in SAE: {len(sae.W_dec)}")  # type: ignore
 

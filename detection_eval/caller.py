@@ -1057,6 +1057,61 @@ class OpenAIModerateCaller:
             raise e
 
 
+async def run_single_prompt(
+    prompt: ChatHistory,
+    caller: OpenAICaller,
+    model_name: str,
+    temperature: float,
+    max_tokens: int,
+    reasoning_effort: str | None = None,
+) -> OpenaiResponse:
+    """Run a single game and return the model's response."""
+    response = await caller.call(
+        prompt,
+        config=InferenceConfig(
+            temperature=temperature,
+            max_completion_tokens=max_tokens,
+            model=model_name,
+            reasoning_effort=reasoning_effort,
+        ),
+    )
+    return response
+
+
+async def run_list_of_prompts(
+    model_name: str,
+    prompts: list[ChatHistory],
+    temperature: float,
+    max_tokens: int,
+    max_par: int,
+    reasoning_effort: str | None = None,
+) -> list[str]:
+    """Call `model_name` once per prompt. Note: This supports caching of API requests as well - will just use cached responses from disk if they exist."""
+
+    caller = load_openai_caller(cache_path="cache")
+
+    responses = []
+
+    # responses = await asyncio.gather(*[run_game(game, caller, temperature, max_tokens) for game in games]
+    try:
+        responses = await Slist(prompts).par_map_async(
+            func=lambda prompt: run_single_prompt(
+                prompt,
+                caller,
+                model_name,
+                temperature,
+                max_tokens,
+                reasoning_effort,
+            ),
+            max_par=max_par,
+            tqdm=True,
+        )
+    finally:
+        caller.client.close()
+
+    return [r.first_response for r in responses]
+
+
 def load_openai_caller(cache_path: str | Path) -> OpenAICaller:
     load_dotenv()
     openai_api_key = os.getenv("OPENAI_API_KEY")
