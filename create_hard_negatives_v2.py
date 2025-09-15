@@ -879,6 +879,7 @@ def main(
 
             for i, pos_tokens in zip(range(len(decoded_pos_tokens)), decoded_pos_tokens):
                 token_activations = []
+                tokens: list[str] = []
                 max_act = 0
                 acts_L = pos_acts_BL[i, :].tolist()
                 for j, token in enumerate(pos_tokens):
@@ -886,11 +887,11 @@ def main(
                         continue
                     act = acts_L[j]
                     max_act = max(max_act, act)
-                    # only save if act > 0
+                    # only save if act > 0 for space reasons
                     if act > 0.0:
                         token_activations.append(TokenActivationV2.model_construct(s=token, act=act, pos=j))
-
-                tokens = [act.s for act in token_activations]
+                    # save all tokens
+                    tokens.append(token)
                 pos_sentence_infos.append(
                     SentenceInfoV2.model_construct(max_act=max_act, tokens=tokens, act_tokens=token_activations)
                 )
@@ -917,7 +918,9 @@ def main(
                             continue
                         act = acts_L[j]
                         max_act = max(max_act, act)
-                        token_activations.append(TokenActivationV2.model_construct(s=token, act=act, pos=j))
+                        # only save if act > 0 for space reasons
+                        if act > 0.0:
+                            token_activations.append(TokenActivationV2.model_construct(s=token, act=act, pos=j))
                         tokens.append(token)
                     hard_negative_sentence_infos.append(
                         SentenceInfoV2.model_construct(

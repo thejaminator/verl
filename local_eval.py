@@ -167,7 +167,7 @@ cfg = lightweight_sft.SelfInterpTrainingConfig(
 
 layer_percent = 50
 
-eval_detection_data_file = f"data/qwen_hard_negatives_50000_50500_layer_percent_{layer_percent}.jsonl"
+eval_detection_data_file = f"data/qwen_hard_negatives_50000_50600_layer_percent_{layer_percent}.jsonl"
 
 eval_sae_ids = list(range(50_000, 50_000 + 500))
 

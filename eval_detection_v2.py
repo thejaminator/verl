@@ -104,7 +104,20 @@ def _sentence_text_v2(sentence: SentenceInfoV2) -> str:
 
 def _activation_vector_str_v2(sentence: SentenceInfoV2) -> str:
     """Format activation-bearing tokens for prompt display (V2)."""
-    activation_vector = Slist(sentence.act_tokens).map(lambda x: x.to_prompt_str())
+    # Note: We save all the tokens in .tokens. But only those activated in .act_tokens (for space reasons)
+    # so, we need to reconstruct .act_tokens from .tokens and fill those not activated with 0
+    act_tokens = {token.pos: token for token in sentence.act_tokens}
+    reconstructed_act_tokens: list[TokenActivationV2] = []
+    for pos, token in enumerate(sentence.tokens):
+        if pos in act_tokens:
+            # assert same token
+            assert act_tokens[pos].s == token, f"Token mismatch at position {pos}: {act_tokens[pos].s} != {token}. {act_tokens=}\n{sentence.tokens=}"
+            reconstructed_act_tokens.append(act_tokens[pos])
+        else:
+            reconstructed_act_tokens.append(TokenActivationV2(s=token, act=0, pos=pos))
+
+    assert len(reconstructed_act_tokens) == len(sentence.tokens), f"Reconstructed act tokens length mismatch: {len(reconstructed_act_tokens)} != {len(sentence.tokens)}"
+    activation_vector = Slist(reconstructed_act_tokens).map(lambda x: x.to_prompt_str())
     return f"{activation_vector}"
 
 
@@ -126,7 +139,7 @@ def sentence_to_prompt_with_vector(sentence: SentenceInfoV2) -> str:
 </max_activation_token>
 <activation_vector>
 {activation_vector}
-</activation_vector>"""
+</activated_tokens>"""
 
 
 def sentence_to_prompt_text_only(sentence: SentenceInfoV2) -> str:
