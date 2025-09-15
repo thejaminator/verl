@@ -203,7 +203,13 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
     return detection_result
 
 
-caller = load_openai_caller(cache_path="/tmp/detection_eval")
+
+REWARD_CALLER = load_openai_caller(cache_path="/tmp/detection_eval")
+
+def fire_and_forget_compute_score_single(explanation: str, sae: SAEVerlData) -> None:
+    # For use during rollouts so that we can pre-compute reward scores without waiting for all rollouts to finish.
+    asyncio.create_task(compute_score_single(explanation, sae, REWARD_CALLER))
+
 
 
 def bin_score(score: float) -> float:
@@ -238,7 +244,7 @@ def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData], bin_s
     loop = asyncio.get_event_loop()
     print(f"Computing f1 rewards for {len(explanation_sae)} examples")
     result = loop.run_until_complete(
-        explanation_sae.par_map_async(lambda pair: compute_score_single(pair[0], pair[1], caller=caller), tqdm=True)
+        explanation_sae.par_map_async(lambda pair: compute_score_single(pair[0], pair[1], caller=REWARD_CALLER), tqdm=True)
     )
     first_result = result.filter(lambda x: x is not None).first_option
     if first_result is not None:

@@ -1216,7 +1216,7 @@ if __name__ == "__main__":
 
     # for sae_layer_percent in sae_layer_percents:
     #     sae_files.append(f"data/qwen_hard_negatives_0_20000_layer_percent_{sae_layer_percent}.jsonl")
-    sae_files.append(f"data/qwen_hard_negatives_50000_50500_layer_percent_50.jsonl")
+    sae_files.append(f"data/qwen_hard_negatives_50000_50600_layer_percent_50.jsonl")
 
     for sae_file in sae_files:
         # sae_file = "data/qwen_hard_negatives_0_to_30_000.jsonl"
