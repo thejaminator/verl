@@ -211,6 +211,107 @@ def compute_response_mask(data: DataProto):
     return attention_mask[:, -response_length:]
 
 
+def discard_same_reward_groups(
+    data: DataProto,
+    reward_tensor: torch.Tensor,
+    uid_key: str = "uid",
+    reward_extra_infos_dict: dict[str, list] | None = None,
+) -> tuple[DataProto, torch.Tensor, dict[str, list], dict[str, float]]:
+    """
+    Discard groups whose rewards are all identical.
+
+    Group by non-tensor batch field `uid`, compute per-group (max - min) on
+    scalar rewards (sum over token dimension). If the spread equals 0, drop
+    the entire group from `data`. Returns filtered `data`, `reward_tensor`,
+    optionally filtered `reward_extra_infos_dict`, and metrics.
+
+    Args:
+        data: DataProto containing a batch and non-tensor metadata.
+        reward_tensor: (bs, response_length) token-level rewards/scores.
+        uid_key: Key in `data.non_tensor_batch` for grouping.
+        reward_extra_infos_dict: Optional dict of per-sample lists to filter.
+
+    Returns:
+        tuple: (data, reward_tensor, reward_extra_infos_dict, metrics)
+    """
+    assert uid_key in data.non_tensor_batch, f"'{uid_key}' not found in non_tensor_batch"
+
+    uids = data.non_tensor_batch[uid_key]
+    # Expect numpy array of objects/strings
+    bsz = len(uids)
+    assert reward_tensor.shape[0] == bsz, f"reward_tensor first dim {reward_tensor.shape[0]} != batch size {bsz}"
+
+    per_sample_scores = reward_tensor.sum(dim=-1)  # (bs,)
+
+    # Compute metrics including discarded groups (before filtering)
+    # 1) mean of sequence scores
+    mean_score_including_discard = torch.mean(per_sample_scores).detach().item()
+    # 2) max_vs_average_gap grouped by uid
+    uid_to_scores_full = defaultdict(list)
+    for uid, score in zip(uids, per_sample_scores.detach().to("cpu").tolist(), strict=True):
+        uid_to_scores_full[uid].append(float(score))
+    group_gaps_full = []
+    for uid_scores in uid_to_scores_full.values():
+        if len(uid_scores) > 1:
+            max_score = max(uid_scores)
+            avg_score = float(np.mean(uid_scores))
+            group_gaps_full.append(max_score - avg_score)
+    score_max_vs_avg_gap_including_discard = float(np.mean(group_gaps_full)) if group_gaps_full else 0.0
+
+    id_to_indices: dict[Any, list[int]] = defaultdict(list)
+    id_to_scores: dict[Any, list[torch.Tensor]] = defaultdict(list)
+    for i in range(bsz):
+        uid = uids[i]
+        id_to_indices[uid].append(i)
+        id_to_scores[uid].append(per_sample_scores[i])
+
+    keep_indices: list[int] = []
+    num_discarded_groups = 0
+    num_discarded_samples = 0
+
+    for uid, idx_list in id_to_indices.items():
+        scores_tensor = torch.stack(id_to_scores[uid]) if len(idx_list) > 0 else None
+        if scores_tensor is not None:
+            group_range = torch.max(scores_tensor) - torch.min(scores_tensor)
+            if group_range.item() == 0.0:
+                num_discarded_groups += 1
+                num_discarded_samples += len(idx_list)
+                continue
+        keep_indices.extend(idx_list)
+
+    if len(keep_indices) == bsz:
+        metrics = {
+            "training/discard_groups/num_groups": 0,
+            "training/discard_groups/num_samples": 0,
+            "critic/score/mean_incl_disc": mean_score_including_discard,
+            "critic/score/max_vs_average_gap_incl_disc": score_max_vs_avg_gap_including_discard,
+        }
+        return data, reward_tensor, reward_extra_infos_dict, metrics
+
+    keep_idx_tensor = torch.tensor(keep_indices, dtype=torch.long)
+    data.reorder(keep_idx_tensor)
+    reward_tensor = reward_tensor.index_select(0, keep_idx_tensor)
+
+    if reward_extra_infos_dict:
+        filtered_extra: dict[str, list] = {}
+        for k, v in reward_extra_infos_dict.items():
+            if len(v) == bsz:
+                filtered_extra[k] = [v[i] for i in keep_indices]
+            else:
+                raise ValueError(f"Length of {k} is not equal to batch size {bsz}")
+        reward_extra_infos_dict = filtered_extra
+
+    metrics = {
+        "training/discard_groups/num_groups": num_discarded_groups,
+        "training/discard_groups/num_samples": num_discarded_samples,
+        "critic/score/mean_incl_disc": mean_score_including_discard,
+        "critic/score/max_vs_average_gap_incl_disc": score_max_vs_avg_gap_including_discard,
+    }
+    # print the number of discarded groups and samples
+    print(f"Number of discarded groups: {num_discarded_groups}")
+    return data, reward_tensor, reward_extra_infos_dict, metrics
+
+
 def compute_advantage(
     data: DataProto,
     adv_estimator: AdvantageEstimator,
@@ -1193,6 +1294,23 @@ class RayPPOTrainer:
                         else:
                             reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
 
+                    # Discard groups with identical rewards before recomputing log probs
+                    with marked_timer("filter_same_reward_groups", timing_raw, color="yellow"):
+                        if self.config.reward_model.launch_reward_fn_async:
+                            reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
+                        (
+                            batch,
+                            reward_tensor,
+                            reward_extra_infos_dict,
+                            discard_metrics,
+                        ) = discard_same_reward_groups(
+                            data=batch,
+                            reward_tensor=reward_tensor,
+                            uid_key="uid",
+                            reward_extra_infos_dict=reward_extra_infos_dict,
+                        )
+                        metrics.update(discard_metrics)
+
                     # recompute old_log_probs
                     with marked_timer("old_log_prob", timing_raw, color="blue"):
                         old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
@@ -1202,7 +1320,8 @@ class RayPPOTrainer:
                         entropy_agg = agg_loss(loss_mat=entropys, loss_mask=response_masks, loss_agg_mode=loss_agg_mode)
                         old_log_prob_metrics = {"actor/entropy": entropy_agg.detach().item()}
                         metrics.update(old_log_prob_metrics)
-                        # Inter-group entropy: compute token-mean entropy per sample, then average within prompt-groups (same uid)
+                        # Inter-group entropy: compute token-mean entropy per sample,
+                        # then average within prompt-groups (same uid)
                         per_sample_entropy = masked_mean(entropys, response_masks, axis=-1)  # (batch,)
                         uids = batch.non_tensor_batch.get("uid", None)
                         assert uids is not None
@@ -1212,11 +1331,11 @@ class RayPPOTrainer:
                         group_means = [float(np.mean(v)) for v in uid_to_vals.values()]
                         group_sizes = [len(v) for v in uid_to_vals.values()]
                         metrics.update(
-                                {
-                                    "actor/group_entropy_mean": float(np.mean(group_means)),
-                                    "actor/group_size": int(np.mean(group_sizes)),
-                                }
-                            )
+                            {
+                                "actor/group_entropy_mean": float(np.mean(group_means)),
+                                "actor/group_size": int(np.mean(group_sizes)),
+                            }
+                        )
                         old_log_prob.batch.pop("entropys")
                         batch = batch.union(old_log_prob)
 
@@ -1262,8 +1381,6 @@ class RayPPOTrainer:
                     with marked_timer("adv", timing_raw, color="brown"):
                         # we combine with rule-based rm
                         reward_extra_infos_dict: dict[str, list]
-                        if self.config.reward_model.launch_reward_fn_async:
-                            reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
                         batch.batch["token_level_scores"] = reward_tensor
 
                         if reward_extra_infos_dict:

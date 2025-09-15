@@ -335,7 +335,9 @@ def load_dictionary_learning_batch_topk_sae(
         config = json.load(f)
 
     if layer is not None:
-        assert layer == config["trainer"]["layer"], f"Layer {layer} not in config {config['trainer']['layer']}, repo id {repo_id}, filename {filename}"
+        assert layer == config["trainer"]["layer"], (
+            f"Layer {layer} not in config {config['trainer']['layer']}, repo id {repo_id}, filename {filename}"
+        )
     else:
         layer = config["trainer"]["layer"]
 
@@ -790,18 +792,20 @@ def main(
 
             for i, pos_tokens in zip(range(len(decoded_pos_tokens)), decoded_pos_tokens):
                 token_activations = []
+                tokens: list[str] = []
                 max_act = 0
                 acts_L = pos_acts_BL[i, :].tolist()
-                for j, token in enumerate(pos_tokens):
+                non_special_tokens = [token for token in pos_tokens if token not in special_tokens]
+                for j, token in enumerate(non_special_tokens):
                     if token in special_tokens:
                         continue
                     act = acts_L[j]
                     max_act = max(max_act, act)
-                    # only save if act > 0
+                    # only save if act > 0 for space reasons
                     if act > 0.0:
                         token_activations.append(TokenActivationV2.model_construct(s=token, act=act, pos=j))
-
-                tokens = [act.s for act in token_activations]
+                    # save all tokens
+                    tokens.append(token)
                 pos_sentence_infos.append(
                     SentenceInfoV2.model_construct(max_act=max_act, tokens=tokens, act_tokens=token_activations)
                 )
@@ -820,15 +824,19 @@ def main(
                     if all_similar_acts_BL[i, 0] == -1:
                         continue
                     token_activations = []
+                    tokens: list[str] = []
                     max_act = 0
                     acts_L = all_similar_acts_BL[i, :].tolist()
-                    for j, token in enumerate(hard_negative_tokens):
+                    non_special_tokens = [token for token in hard_negative_tokens if token not in special_tokens]
+                    for j, token in enumerate(non_special_tokens):
                         if token in special_tokens:
                             continue
                         act = acts_L[j]
                         max_act = max(max_act, act)
-                        token_activations.append(TokenActivationV2.model_construct(s=token, act=act, pos=j))
-                    tokens = [act.s for act in token_activations]
+                        # only save if act > 0 for space reasons
+                        if act > 0.0:
+                            token_activations.append(TokenActivationV2.model_construct(s=token, act=act, pos=j))
+                        tokens.append(token)
                     hard_negative_sentence_infos.append(
                         SentenceInfoV2.model_construct(
                             max_act=max_act,
@@ -868,15 +876,15 @@ if __name__ == "__main__":
     # target_features = list(range(0, 200))
     # min_idx = 20_000
     # max_idx = 20_000
-    # max_idx = 22_000
+    # max_idx = 30_000
     min_idx = 50_000
-    max_idx = 50_500
+    max_idx = 50_600
     target_features = list(range(min_idx, max_idx))
 
     data_folder = "data"
     os.makedirs(data_folder, exist_ok=True)
 
-    for sae_layer_percent in [50]:
+    for sae_layer_percent in [25, 50, 75]:
         main(
             # model_name="google/gemma-2-9b-it",
             # sae_repo_id="google/gemma-scope-9b-it-res",
