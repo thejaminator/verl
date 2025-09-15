@@ -210,6 +210,7 @@ def compute_response_mask(data: DataProto):
     attention_mask = data.batch["attention_mask"]
     return attention_mask[:, -response_length:]
 
+DISCARD_THRESHOLD = 0.2 # if max - min < DISCARD_THRESHOLD, discard the group
 
 def discard_same_reward_groups(
     data: DataProto,
@@ -273,7 +274,7 @@ def discard_same_reward_groups(
         scores_tensor = torch.stack(id_to_scores[uid]) if len(idx_list) > 0 else None
         if scores_tensor is not None:
             group_range = torch.max(scores_tensor) - torch.min(scores_tensor)
-            if group_range.item() == 0.0:
+            if group_range.item() < DISCARD_THRESHOLD:
                 num_discarded_groups += 1
                 num_discarded_samples += len(idx_list)
                 continue

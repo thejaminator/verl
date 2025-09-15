@@ -6,7 +6,7 @@ import plotly.io as pio
 pio.renderers.default = "browser"
 
 # Read the CSV file
-df = pd.read_csv('14sep.csv')
+df = pd.read_csv('15_sep_more.csv')
 
 
 def plot_max_min_gap(df, step: list[int]):
@@ -131,7 +131,8 @@ def plot_dist_scores(df, step: list[int]):
     fig.show()
 
 # plot_dist_scores(df, [9, 10, 11])
-plot_max_min_gap(df, [60, 61, 62, 63, 64])
+# plot_max_min_gap(df, [100, 101, 102, 103, 104])
+plot_dist_scores(df, [100, 101, 102, 103, 104])
 # plot_max_min_gap(df, [9, 10, 11])
 # plot_max_min_gap(df, [9, 10, 11])
 # plot_max_min_gap(df, [80, 81, 82, 83, 84])

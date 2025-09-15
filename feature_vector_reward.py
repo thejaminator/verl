@@ -257,7 +257,7 @@ def bin_score(score: float) -> float:
     return score
 
 
-def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData], bin_scores: bool = True) -> list[float]:
+def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData]) -> list[float]:
     assert len(solution_str) == len(parsed_sae)
     print_strings = min(len(solution_str), 4)
     for i in range(print_strings):
@@ -282,9 +282,10 @@ def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData], bin_s
 
     to_rewards = result.map(lambda x: x.f1_score if x is not None else 0.0)
     # discretize into 0.2
-    if bin_scores:
+    # if bin_scores:
         # Discretize scores into bins of 0.2
-        to_rewards = to_rewards.map(bin_score)
+    # experiment : disable binning
+    # to_rewards = to_rewards.map(bin_score)
 
     return to_rewards
 
