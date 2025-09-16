@@ -5,8 +5,11 @@ from abc import ABC, abstractmethod
 import numpy as np
 import torch
 from huggingface_hub import hf_hub_download
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from detection_eval.detection_basemodels import SAEInfo
+from nl_probes.utils.activation_utils import collect_activations
+from nl_probes.utils.common import get_bos_eos_pad_mask
 
 
 def get_sae_info(sae_repo_id: str, sae_layer_percent: int = 25, sae_width: int | None = None) -> SAEInfo:
@@ -355,6 +358,40 @@ def load_dictionary_learning_batch_topk_sae(
     return sae
 
 
+def load_sae(
+    sae_repo_id: str,
+    sae_filename: str,
+    sae_layer: int,
+    model_name: str,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> BaseSAE:
+    print(f"Loading SAE for layer {sae_layer} from {sae_repo_id}...")
+
+    if sae_repo_id == "google/gemma-scope-9b-it-res":
+        sae = load_gemma_scope_jumprelu_sae(
+            repo_id=sae_repo_id,
+            filename=sae_filename,
+            layer=sae_layer,
+            model_name=model_name,
+            device=device,
+            dtype=dtype,
+        )
+    elif sae_repo_id == "adamkarvonen/qwen3-8b-saes":
+        sae = load_dictionary_learning_batch_topk_sae(
+            repo_id=sae_repo_id,
+            filename=sae_filename,
+            layer=sae_layer,
+            model_name=model_name,
+            device=device,
+            dtype=dtype,
+        )
+    else:
+        raise ValueError(f"Unknown SAE repo ID: {sae_repo_id}")
+
+    return sae
+
+
 # Pydantic schema classes for JSONL output
 def load_max_acts_data(
     model_name: str,
@@ -399,3 +436,28 @@ def load_max_acts_data(
     acts_data = torch.load(acts_path, map_location=device)
 
     return acts_data
+
+
+def get_feature_activations(
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
+    submodule: torch.nn.Module,
+    sae: JumpReluSAE,
+    tokenized_strs: dict[str, torch.Tensor],
+    ignore_bos: bool = True,
+) -> torch.Tensor:
+    with torch.no_grad():
+        pos_acts_BLD = collect_activations(model, submodule, tokenized_strs)
+        encoded_pos_acts_BLF = sae.encode(pos_acts_BLD)
+
+    if ignore_bos:
+        bos_mask = tokenized_strs["input_ids"] == tokenizer.bos_token_id
+        # Note: I use >=, not ==, because occasionally prompts will contain a BOS token
+        assert bos_mask.sum() >= encoded_pos_acts_BLF.shape[0], (
+            f"Expected at least {encoded_pos_acts_BLF.shape[0]} BOS tokens, but found {bos_mask.sum()}"
+        )
+
+        mask = get_bos_eos_pad_mask(tokenizer, tokenized_strs["input_ids"])
+        encoded_pos_acts_BLF[mask] = 0
+
+    return encoded_pos_acts_BLF

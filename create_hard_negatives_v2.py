@@ -20,9 +20,9 @@ from detection_eval.detection_basemodels import (
     SentenceInfoV2,
     TokenActivationV2,
 )
-from nl_probes.sae import get_sae_info, load_max_acts_data
+from nl_probes.sae import get_sae_info, load_max_acts_data, load_sae
 from nl_probes.utils.activation_utils import collect_activations, get_hf_submodule
-from nl_probes.utils.common import list_decode, load_model_and_sae
+from nl_probes.utils.common import list_decode, load_model, load_tokenizer
 
 
 @dataclass(kw_only=True)
@@ -183,7 +183,9 @@ def main(
 
     # Load model, tokenizer, and SAE
     print("🚀 Loading model and SAE...")
-    model, tokenizer, sae = load_model_and_sae(model_name, sae_repo_id, sae_filename, sae_layer, device, dtype)
+    model = load_model(model_name, dtype)
+    tokenizer = load_tokenizer(model_name)
+    sae = load_sae(sae_repo_id, sae_filename, sae_layer, model_name, device, dtype)
     submodule = get_hf_submodule(model, sae_layer)  # type: ignore
     # how many features in sae?
     print(f"🔍 Number of features in SAE: {len(sae.W_dec)}")  # type: ignore

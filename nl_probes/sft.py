@@ -49,8 +49,8 @@ import nl_probes.dataset_classes.classification as classification
 import wandb
 from detection_eval.detection_basemodels import SAEInfo
 from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prompt
-from nl_probes.sae import BaseSAE, JumpReluSAE, get_sae_info
-from nl_probes.utils.common import load_model, load_sae, load_tokenizer
+from nl_probes.sae import BaseSAE, JumpReluSAE, get_sae_info, load_sae
+from nl_probes.utils.common import load_model, load_tokenizer
 from sft_config import (
     BatchData,
     EvalStepResult,
@@ -203,60 +203,6 @@ This adapter was trained using the lightweight SAE introspection training script
         print("LoRA adapter uploaded successfully, but without README")
 
     print(f"Successfully pushed LoRA adapter to: https://huggingface.co/{repo_id}")
-
-
-class EarlyStopException(Exception):
-    """Custom exception for stopping model forward pass early."""
-
-    pass
-
-
-def collect_activations(
-    model: AutoModelForCausalLM,
-    submodule: torch.nn.Module,
-    inputs_BL: dict[str, torch.Tensor],
-    use_no_grad: bool = True,
-) -> torch.Tensor:
-    """
-    Collects activations from a specific submodule (layer) during model forward pass.
-
-    Args:
-        model: The transformer model
-        submodule: The specific layer/module to collect activations from
-        inputs_BL: Tokenized inputs (batch, length)
-        use_no_grad: Whether to use torch.no_grad() for efficiency
-
-    Returns:
-        activations_BLD: Activations tensor (batch, length, hidden_dim)
-    """
-    activations_BLD = None
-
-    def hook(module, input, output):
-        nonlocal activations_BLD
-        if isinstance(output, tuple):
-            activations_BLD = output[0]  # For models that return tuples
-        else:
-            activations_BLD = output
-        # Stop computation early if we only need activations
-        raise EarlyStopException()
-
-    # Register hook
-    handle = submodule.register_forward_hook(hook)
-
-    try:
-        ctx = torch.no_grad() if use_no_grad else contextlib.nullcontext()
-        with ctx:
-            try:
-                model(**inputs_BL)
-            except EarlyStopException:
-                pass  # Expected - we stopped early to collect activations
-    finally:
-        handle.remove()
-
-    if activations_BLD is None:
-        raise RuntimeError("Failed to collect activations")
-
-    return activations_BLD
 
 
 # ==============================================================================
@@ -546,45 +492,6 @@ def save_logs(
 # ==============================================================================
 # 8. INTROSPECTION UTILITIES
 # ==============================================================================
-
-
-def get_bos_eos_pad_mask(tokenizer: PreTrainedTokenizer, token_ids: torch.Tensor) -> torch.Tensor:
-    """Create mask for BOS, EOS, and PAD tokens"""
-    mask = torch.zeros_like(token_ids, dtype=torch.bool)
-
-    if tokenizer.bos_token_id is not None:
-        mask |= token_ids == tokenizer.bos_token_id
-    if tokenizer.eos_token_id is not None:
-        mask |= token_ids == tokenizer.eos_token_id
-    if tokenizer.pad_token_id is not None:
-        mask |= token_ids == tokenizer.pad_token_id
-
-    return mask
-
-
-def get_feature_activations(
-    model: AutoModelForCausalLM,
-    tokenizer: PreTrainedTokenizer,
-    submodule: torch.nn.Module,
-    sae: JumpReluSAE,
-    tokenized_strs: dict[str, torch.Tensor],
-    ignore_bos: bool = True,
-) -> torch.Tensor:
-    with torch.no_grad():
-        pos_acts_BLD = collect_activations(model, submodule, tokenized_strs)
-        encoded_pos_acts_BLF = sae.encode(pos_acts_BLD)
-
-    if ignore_bos:
-        bos_mask = tokenized_strs["input_ids"] == tokenizer.bos_token_id
-        # Note: I use >=, not ==, because occasionally prompts will contain a BOS token
-        assert bos_mask.sum() >= encoded_pos_acts_BLF.shape[0], (
-            f"Expected at least {encoded_pos_acts_BLF.shape[0]} BOS tokens, but found {bos_mask.sum()}"
-        )
-
-        mask = get_bos_eos_pad_mask(tokenizer, tokenized_strs["input_ids"])
-        encoded_pos_acts_BLF[mask] = 0
-
-    return encoded_pos_acts_BLF
 
 
 def has_active_lora(model: AutoModelForCausalLM) -> bool:
@@ -1072,7 +979,7 @@ if __name__ == "__main__":
         additional_explanations_files.append(act_examples_filename)
         additional_explanations_files.append(sae_yes_no_filename)
 
-    explanations_files = []
+    # explanations_files = []
     additional_explanations_files = []
     # additional_explanations_files = [
     # "sft_training_data/past_lens_data_Qwen_Qwen3-8B_layers_9-18-27_num_datapoints_200000_min_k_3_max_k_20.pkl"
@@ -1089,7 +996,7 @@ if __name__ == "__main__":
         # },
         {
             "load_lora_path": None,
-            "sae_sft_datasets": [],
+            "sae_sft_datasets": explanations_files,
             "additional_train_dataset_filenames": additional_explanations_files,
             "wandb_suffix": "_act_pretrain",
         },
