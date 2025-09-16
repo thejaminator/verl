@@ -49,6 +49,7 @@ import nl_probes.dataset_classes.classification as classification
 import wandb
 from detection_eval.detection_basemodels import SAEInfo
 from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prompt
+from nl_probes.dataset_classes.sae_training_data import load_sae_data_from_sft_data_file
 from nl_probes.sae import BaseSAE, JumpReluSAE, get_sae_info, load_sae
 from nl_probes.utils.common import load_model, load_tokenizer
 from sft_config import (
@@ -205,21 +206,6 @@ This adapter was trained using the lightweight SAE introspection training script
     print(f"Successfully pushed LoRA adapter to: https://huggingface.co/{repo_id}")
 
 
-# ==============================================================================
-# 6. UTILITY FUNCTIONS
-# ==============================================================================
-
-
-def build_training_prompt(positive_negative_examples: bool, sae_layer: int) -> str:
-    """Build the training prompt for SAE explanations."""
-    if positive_negative_examples:
-        raise NotImplementedError("Not implemented")
-        question = f"""Can you explain to me the concept of what 'X' from layer {sae_layer} means? Give positive and negative examples of what the concept would activate on. Format your final answer with <explanation>."""
-    else:
-        question = get_introspection_prompt(sae_layer)
-    return question
-
-
 def parse_generated_explanation(text: str) -> Optional[ExplanationResult]:
     """
     Extract the explanation from a model-generated block of text formatted as:
@@ -251,125 +237,6 @@ def parse_generated_explanation(text: str) -> Optional[ExplanationResult]:
     return ExplanationResult(
         explanation=explanation,
     )
-
-
-# ==============================================================================
-# 3. HOOKING MECHANISM FOR ACTIVATION STEERING
-# ==============================================================================
-
-
-@torch.no_grad()
-def construct_train_dataset(
-    cfg: SelfInterpTrainingConfig,
-    dataset_size: int,
-    input_prompt: str,
-    training_examples: list[TrainingExample],
-    sae: BaseSAE,
-    tokenizer: PreTrainedTokenizer,
-) -> list[TrainingDataPoint]:
-    training_data = []
-
-    for i in tqdm(range(dataset_size), desc="Constructing training dataset"):
-        target_response = training_examples[i].explanation
-        target_feature_idx = training_examples[i].feature_idx
-        # 2. Prepare feature vectors for steering
-        # We use decoder weights (W_dec) as they map from the feature space back to the residual stream.
-        # .clone() because otherwise we will save the entire W_dec in pickle for each training example
-        if cfg.use_decoder_vectors:
-            feature_vector = sae.W_dec[target_feature_idx].clone()
-        else:
-            feature_vector = sae.W_enc[:, target_feature_idx].clone()
-
-        training_data_point = create_training_datapoint(
-            prompt=input_prompt,
-            target_response=target_response,
-            tokenizer=tokenizer,
-            acts_D=feature_vector,
-            feature_idx=target_feature_idx,
-        )
-
-        if i == 0:
-            # Fully print the first example
-            print("First training example:")
-            print(f"prompt: {input_prompt}")
-            print(f"target_response: {target_response}")
-            print("-" * 100)
-
-        training_data.append(training_data_point)
-
-    return training_data
-
-
-def construct_eval_dataset(
-    cfg: SelfInterpTrainingConfig,
-    dataset_size: int,
-    input_prompt: str,
-    eval_feature_indices: list[int],
-    api_data: dict,
-    sae: BaseSAE,
-    tokenizer: PreTrainedTokenizer,
-    enable_thinking: bool = False,
-) -> list[TrainingDataPoint]:
-    """Every prompt is exactly the same - the only difference is the steering vectors."""
-
-    input_messages = [{"role": "user", "content": input_prompt}]
-
-    input_prompt_ids = tokenizer.apply_chat_template(
-        input_messages,
-        tokenize=True,
-        add_generation_prompt=True,
-        return_tensors=None,
-        padding=False,
-        enable_thinking=enable_thinking,
-    )
-    if not isinstance(input_prompt_ids, list):
-        raise TypeError("Expected list of token ids from tokenizer")
-    # Set [-100] for user prompts
-    labels = [-100] * len(input_prompt_ids)
-
-    orig_prompt_length = len(input_prompt_ids)
-
-    x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
-
-    eval_data = []
-
-    first_position = None
-
-    for i in tqdm(range(dataset_size), desc="Constructing eval dataset"):
-        target_feature_idx = eval_feature_indices[i]
-
-        # 2. Prepare feature vectors for steering
-        # We use decoder weights (W_dec) as they map from the feature space back to the residual stream.
-        if cfg.use_decoder_vectors:
-            feature_vector = sae.W_dec[target_feature_idx].clone()
-        else:
-            feature_vector = sae.W_enc[:, target_feature_idx].clone()
-
-        positions = []
-        for i in range(orig_prompt_length):
-            if input_prompt_ids[i] == x_token_id:
-                positions.append(i)
-
-        assert len(positions) == 1, "Expected exactly one X token"
-
-        if first_position is None:
-            first_position = positions[0]
-        else:
-            assert positions[0] == first_position, "Expected all positions to be the same"
-        assert len(input_prompt_ids) > 0
-
-        eval_data_point = TrainingDataPoint(
-            input_ids=input_prompt_ids,
-            labels=labels,
-            steering_vectors=[feature_vector],
-            positions=positions,
-            feature_idx=target_feature_idx,
-            target_output="",
-        )
-
-        eval_data.append(eval_data_point)
-
-    return eval_data
 
 
 def train_features_batch(
@@ -484,14 +351,6 @@ def save_logs(
 
     with open(eval_results_path, "w") as f:
         json.dump(all_run_results, f, indent=2)
-
-
-# ==============================================================================
-
-
-# ==============================================================================
-# 8. INTROSPECTION UTILITIES
-# ==============================================================================
 
 
 def has_active_lora(model: AutoModelForCausalLM) -> bool:
@@ -767,54 +626,6 @@ def train_model(
             commit_message=f"SAE introspection LoRA - {cfg.wandb_run_name} - final model",
             private=cfg.hf_private_repo,
         )
-
-
-def load_sae_data_from_sft_data_file(
-    sft_data_file: str,
-    cfg: SelfInterpTrainingConfig,
-    tokenizer: PreTrainedTokenizer,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> tuple[list[TrainingDataPoint], SAEInfo]:
-    explanations: list[SAEExplained] = load_explanations_from_jsonl(sft_data_file)
-    orig_sae_info = explanations[0].sae_info
-    for data_point in explanations:
-        assert data_point.sae_info == orig_sae_info
-    sae_info = SAEInfo.model_validate(orig_sae_info)
-
-    sae = load_sae(sae_info.sae_repo_id, sae_info.sae_filename, sae_info.sae_layer, cfg.model_name, device, dtype)
-
-    training_examples = [
-        TrainingExample.with_positive_and_negative_examples(exp)
-        if cfg.positive_negative_examples
-        else TrainingExample.with_explanation_only(exp)
-        for exp in explanations
-    ]
-    print(f"Loaded {len(training_examples)} training examples from {sft_data_file}")
-
-    train_features = set()
-
-    for example in training_examples:
-        train_features.add(example.feature_idx)
-
-    # For evaluation, we'll use a subset of the training features
-    # In a real scenario, you might want to load a separate eval set
-    print(f"train examples: {len(training_examples)}")
-    print(f"Train features: {len(train_features)}")
-
-    train_eval_prompt = build_training_prompt(cfg.positive_negative_examples, sae_info.sae_layer)
-
-    training_data: list[TrainingDataPoint] = construct_train_dataset(
-        cfg,
-        len(training_examples),
-        # dataset_size,
-        train_eval_prompt,
-        training_examples,
-        sae,
-        tokenizer,
-    )
-
-    return training_data, sae_info
 
 
 def length_grouped_reorder(
