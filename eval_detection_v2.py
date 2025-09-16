@@ -1023,7 +1023,7 @@ async def main(
     if len(steering_models) > 0:
         # Run gemma steering
         print("Running gemma steering")
-        RUN_POD_URL = "https://iv81p9jffx500i-8000.proxy.runpod.net/v1"
+        RUN_POD_URL = "https://iqm60asonqnt7o-8000.proxy.runpod.net/v1"
         # RUN_POD_URL = "http://0.0.0.0:8000/v1"
         gemma_client = AsyncOpenAI(api_key="dummy api key", base_url=RUN_POD_URL)
         width = 131  # not cached by api call yet, so manually add to cache path
@@ -1171,20 +1171,20 @@ if __name__ == "__main__":
     # Define explainer models to test
     explainer_models = Slist(
         [
-            ModelInfo(
-                model="gpt-5-mini-2025-08-07",
-                display_name="GPT-5-mini<br>(extrospecting<br>sentences)",
-                reasoning_effort="low",
-                # reasoning_effort="medium",
-            ),
-            # "thejaminator/qwen-hook-layer-9"
             # ModelInfo(
-            #     model="thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
-            #     display_name="No-CoT Qwen-3-8B<br>(Introspecting<br>sentences)",
-            #     use_steering=True,
-            #     hook_onto_layer=1,
-            #     enable_thinking=False,
+            #     model="gpt-5-mini-2025-08-07",
+            #     display_name="GPT-5-mini<br>(extrospecting<br>sentences)",
+            #     reasoning_effort="low",
+            #     # reasoning_effort="medium",
             # ),
+            # "thejaminator/qwen-hook-layer-9"
+            ModelInfo(
+                model="thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
+                display_name="No-CoT Qwen-3-8B<br>(Introspecting<br>sentences)",
+                use_steering=True,
+                hook_onto_layer=1,
+                enable_thinking=False,
+            ),
             # ModelInfo(
             #     model="thejaminator/qwen-hook-layer-9",
             #     display_name="CoT Qwen-3-8B<br>(extrospecting<br>sentences)",
@@ -1223,7 +1223,7 @@ if __name__ == "__main__":
         # sae_file = "hard_negatives_0_to_82000.jsonl"
         # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
         # Which to use for constructing explanations vs testing detection?
-        saes_to_test = 200
+        saes_to_test = 500
         sae_start_index = 0
         # sae_start_index = 20_000  # not in train set for the trained model
 
@@ -1267,6 +1267,6 @@ if __name__ == "__main__":
                 # config=eight_positive_examples_config,
                 # config=two_positive_examples,
                 # config=four_positive_examples_config,
-                max_par=40,
+                max_par=100,
             )
         )
