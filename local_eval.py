@@ -201,12 +201,12 @@ model = load_model(model_name, dtype)
 # lora_path = "checkpoints_simple_layer_9/final"
 
 # lora_path = "adamkarvonen/checkpoints_multiple_datasets_layer_1_decoder"
-# lora_path = "thejaminator/12sep_grp16_1e5_lr-step-60"
-# lora_path = "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed"
 
 # lora_path = "thejaminator/5e6_lr_14sep_bigger_batch-step-120"
 # lora_path = "thejaminator/1e5_lr_prompt_32-step-60"
-lora_path = "thejaminator/1e5_lr_prompt_64-step-20"  # f1 0.6
+# lora_path = "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed" # f1 0.5
+lora_path = "thejaminator/12sep_grp16_1e5_lr-step-60"  # f1 0.6
+# lora_path = "thejaminator/1e5_lr_prompt_64-step-20"  # f1 0.6
 adapter_name = lora_path
 
 model.load_adapter(lora_path, adapter_name=adapter_name, is_trainable=False, low_cpu_mem_usage=True)
@@ -256,7 +256,6 @@ for detection_data, eval_result in zip(all_detection_data, eval_results):
 
     detection_prompt = eval_detection_v2.SAETrainTestWithExplanation(
         sae_id=detection_data.sae_id,
-        # feature_vector=activation.feature_vector,
         train_activations=detection_data.train_activations,
         test_activations=detection_data.test_activations,
         train_hard_negatives=detection_data.train_hard_negatives,

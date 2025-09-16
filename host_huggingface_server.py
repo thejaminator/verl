@@ -29,8 +29,8 @@ from transformers import AutoTokenizer
 from create_hard_negatives_v2 import (
     JumpReluSAE,
     get_sae_info,
-    load_sae,
     load_model,
+    load_sae,
     load_tokenizer,
 )
 from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook
@@ -74,6 +74,8 @@ gemma_loras = [
 qwen_loras = [
     # "thejaminator/feature-vector-31aug-low-kl-step-100",
     "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
+    "thejaminator/12sep_grp16_1e5_lr-step-60",
+    "thejaminator/1e5_lr_prompt_64-step-20",
     # "thejaminator/feature-vector-31aug-low-kl-step-50",
     # "thejaminator/grpo-feature-vector-step-100",
     # "thejaminator/qwen-hook-layer-9"
@@ -86,7 +88,7 @@ load_loras = qwen_loras
 
 STEERING_COEFFICIENT = 2.0
 # Max requests we will batch per generation call.
-MAX_PARALLEL_REQUESTS = 60
+MAX_PARALLEL_REQUESTS = 256
 
 
 class Message(BaseModel):
@@ -97,7 +99,7 @@ class Message(BaseModel):
 class ChatCompletionRequest(BaseModel):
     messages: list[Message]
     model: str = MODEL_NAME
-    max_tokens: Optional[int] = 100
+    max_tokens: int = 100
     temperature: Optional[float] = 0.0
     sae_index: Optional[int] = None  # Custom parameter for SAE feature index
     hook_onto_layer: int = 9  # Default to 9 for historical reasons
@@ -155,7 +157,6 @@ class VLLMServer:
                 # Map requested model name → adapter name; here both are the same for simplicity
                 self.adapter_name_map[lora_id] = adapter_name
                 self.adapter_name_map[adapter_name] = adapter_name
-                
 
         print("Loading SAE...")
         # layer 9
@@ -299,7 +300,7 @@ class VLLMServer:
                     attention_mask[b, -L:] = True
 
             temperature = float(batch_requests[0].request.temperature or 0.0)
-            max_tokens = int(batch_requests[0].request.max_tokens or 128)
+            max_tokens = int(batch_requests[0].request.max_tokens)
             do_sample = temperature > 0.0
 
             # Split into steering and non-steering subsets
@@ -345,7 +346,7 @@ class VLLMServer:
                     assert len(layer_numbers) == 1, f"Layer numbers are not the same: {layer_numbers}"
                     layer_number: int = layer_numbers.pop()
                     print(f"Layer number to steer at: {layer_number}")
-                    target_layer = get_hf_submodule(self.model, layer_number, use_lora=active_adapter_name is not None)
+                    target_layer = get_hf_submodule(self.model, layer_number)
 
                     with torch.no_grad():
                         with add_hook(target_layer, hook_fn):

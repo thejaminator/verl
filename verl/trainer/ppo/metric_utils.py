@@ -508,6 +508,7 @@ def log_reward_manager_table(
 
     # Initialize table on first call or if columns changed
     assert existing_table.columns == with_steps, "Columns of existing table must match new columns"
+    # print(f"Columns of wandb table are {existing_table.columns=}")
     rollouts_table = existing_table
 
     # Add new data rows

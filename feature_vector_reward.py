@@ -275,15 +275,15 @@ def bin_score(score: float) -> float:
 def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData]) -> list[float]:
     assert len(solution_str) == len(parsed_sae)
     print_strings = min(len(solution_str), 4)
-    for i in range(print_strings):
-        print(f"String {i}: {solution_str[i]}")
+    # for i in range(print_strings):
+    #     print(f"String {i}: {solution_str[i]}")
 
     #
     explanation_sae = Slist(solution_str).zip(parsed_sae)
 
     # Run the async function in a synchronous context
     loop = asyncio.get_event_loop()
-    print(f"Computing f1 rewards for {len(explanation_sae)} examples")
+    # print(f"Computing f1 rewards for {len(explanation_sae)} examples")
     result = loop.run_until_complete(
         explanation_sae.par_map_async(
             lambda pair: compute_score_single(pair[0], pair[1], caller=REWARD_CALLER), tqdm=True

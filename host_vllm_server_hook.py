@@ -69,7 +69,9 @@ gemma_loras = [
 ]
 qwen_loras = [
     # "thejaminator/feature-vector-31aug-low-kl-step-100",
-    "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
+    "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",  # 0.5
+    "thejaminator/12sep_grp16_1e5_lr-step-60",  # f1 0.6
+    # "thejaminator/1e5_lr_prompt_64-step-20"  # f1 0.6
     # "thejaminator/feature-vector-31aug-low-kl-step-50",
     # "thejaminator/grpo-feature-vector-step-100",
     # "thejaminator/qwen-hook-layer-9"
@@ -155,7 +157,6 @@ class VLLMServer:
             gpu_memory_utilization=gpu_memory_utilization,
             enable_lora=True,
             max_lora_rank=64,
-            # Important to disable async output proc otherwise our hook breaks.
             disable_async_output_proc=False,
             # Otherwise hook does not get applied.
             enforce_eager=True,
