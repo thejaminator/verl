@@ -13,6 +13,8 @@ from typing import Any, Generic, Mapping, Optional, Sequence, TypeVar
 
 import anthropic
 import anyio
+from httpx import Limits
+import httpx
 import openai
 from anthropic.types.message import Message
 from anyio import Path as AnyioPath
@@ -610,24 +612,25 @@ class OpenAICaller(Caller):
         return self.cache_by_model.get_log_probs_cache(model)
 
     @retry(
-        stop=(stop_after_attempt(2)),
+        stop=(stop_after_attempt(10)),
         wait=(wait_fixed(2)),
         retry=(retry_if_exception_type(openai.NotFoundError)),
         reraise=True,
+        before_sleep=lambda retry_state: print(f"OpenAI not found error, retrying attempt {retry_state.attempt_number}/10..."),
     )
     @retry(
         stop=(stop_after_attempt(5)),
         wait=(wait_fixed(5)),
         retry=(retry_if_exception_type((JSONDecodeError, InternalServerError))),
         reraise=True,
-        before=lambda retry_state: print(f"OpenAI error, retrying attempt {retry_state.attempt_number}/5..."),
+        # before=lambda retry_state: print(f"OpenAI error, retrying attempt {retry_state.attempt_number}/5..."),
     )
     @retry(
         stop=(stop_after_attempt(10)),
         wait=(wait_fixed(30)),  # for rate limits, wait longer
         retry=(retry_if_exception_type(openai.RateLimitError)),
         reraise=True,
-        before=lambda retry_state: print(f"Rate limit error, retrying attempt {retry_state.attempt_number}/10..."),
+        # before=lambda retry_state: print(f"Rate limit error, retrying attempt {retry_state.attempt_number}/10..."),
     )
     async def call(
         self,
@@ -1191,8 +1194,11 @@ def load_pooled_openai_caller(cache_path: str) -> PooledCaller:
     openai_api_keys = os.getenv("OPENAI_API_KEYS", "").split(",")
     assert len(openai_api_keys) > 0, "Please set the OPENAI_API_KEYS environment variable"
     print(f"Using {len(openai_api_keys)} OpenAI API Keys")
+    httpx_limits = Limits(max_connections=1_000, max_keepalive_connections=200,keepalive_expiry=60)
+    httpx_client = httpx.AsyncClient(limits=httpx_limits)
+    openai_clients = [AsyncOpenAI(api_key=key, http_client=httpx_client) for key in openai_api_keys]
     shared_cache = CallerCache(Path(cache_path))
-    openai_clients = [OpenAICaller(api_key=key, cache_path=shared_cache) for key in openai_api_keys]
+    openai_clients = [OpenAICaller(openai_client=client, cache_path=shared_cache) for client in openai_clients]
     return PooledCaller(openai_clients)
 
 

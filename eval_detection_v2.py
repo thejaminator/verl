@@ -1009,9 +1009,9 @@ async def main(
         non_steering_models = explainer_models.filter(lambda x: not x.use_steering)
         _explanations: Slist[Slist[SAETrainTestWithExplanation]] = await non_steering_models.par_map_async(
             lambda model_info: generate_explanations_for_model(
-                split_sae_activations, model_info, caller, max_par, config.best_of_n
+                # Run one model at a time because the server can't handle multiple anyways
+                split_sae_activations, model_info, caller, 1, config.best_of_n
             ),
-            max_par=max_par,
         )
         non_gemma_explanations = _explanations.flatten_list()
         all_explanations: Slist[SAETrainTestWithExplanation] = non_gemma_explanations
@@ -1185,20 +1185,22 @@ if __name__ == "__main__":
                 hook_onto_layer=1,
                 enable_thinking=False,
             ),
-            # ModelInfo(
-            #     model="thejaminator/qwen-hook-layer-9",
-            #     display_name="CoT Qwen-3-8B<br>(extrospecting<br>sentences)",
-            #     use_steering=True,
-            #     hook_onto_layer=9,
-            #     enable_thinking=True,
-            # ),
-            # thejaminator/grpo-feature-vector-step-100
-            # ModelInfo(
-            #     model="thejaminator/grpo-feature-vector-step-100",
-            #     display_name="SFT + RL 100 steps",
-            #     use_steering=True,
-            #     enable_thinking=True,
-            # ),
+            # lora_path = "thejaminator/12sep_grp16_1e5_lr-step-60"  # f1 0.6
+            # lora_path = "thejaminator/1e5_lr_prompt_64-step-20"  # f1 0.6
+            ModelInfo(
+                model="thejaminator/12sep_grp16_1e5_lr-step-60",
+                display_name="SFT + RL 60 steps",
+                use_steering=True,
+                hook_onto_layer=1,
+                enable_thinking=False,
+            ),
+            ModelInfo(
+                model="thejaminator/1e5_lr_prompt_64-step-20",
+                display_name="SFT + RL 20 steps (diff run)",
+                use_steering=True,
+                hook_onto_layer=1,
+                enable_thinking=False,
+            ),
         ]
     )
 
@@ -1259,14 +1261,14 @@ if __name__ == "__main__":
                 sae_file=sae_file,
                 explainer_models=explainer_models,
                 add_random_explanations=False,
-                config=hard_negatives_config,
+                # config=hard_negatives_config,
                 # config=best_of_8_config,
-                # config=best_of_4_config,
+                config=best_of_4_config,
                 # config=best_of_32_config,
                 # config=no_train_hard_negatives_config,
                 # config=eight_positive_examples_config,
                 # config=two_positive_examples,
                 # config=four_positive_examples_config,
-                max_par=100,
+                max_par=256,
             )
         )
