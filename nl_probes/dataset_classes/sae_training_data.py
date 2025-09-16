@@ -12,20 +12,15 @@ from transformers import AutoTokenizer
 import detection_eval.caller as caller
 from detection_eval.detection_basemodels import SAEInfo
 from detection_eval.steering_hooks import get_introspection_prefix, get_introspection_prompt
+from nl_probes.configs.sft_config import SelfInterpTrainingConfig
 from nl_probes.sae import BaseSAE, get_sae_info, load_max_acts_data, load_sae
 from nl_probes.utils.common import load_tokenizer
-from sft_config import (
-    BatchData,
-    EvalStepResult,
-    ExplanationResult,
-    FeatureResult,
+from nl_probes.utils.dataset_utils import (
     SAEExplained,
-    SelfInterpTrainingConfig,
     TrainingDataPoint,
     TrainingExample,
     construct_batch,
     create_training_datapoint,
-    get_hf_submodule,
     load_explanations_from_jsonl,
 )
 

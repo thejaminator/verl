@@ -12,14 +12,13 @@ from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from create_hard_negatives_v2 import load_model
 from detection_eval.steering_hooks import get_introspection_prefix
-from sft_config import (
+from nl_probes.configs.sft_config import layer_percent_to_layer
+from nl_probes.utils.activation_utils import collect_activations_multiple_layers, get_hf_submodule
+from nl_probes.utils.common import load_model
+from nl_probes.utils.dataset_utils import (
     TrainingDataPoint,
-    collect_activations_multiple_layers,
     create_training_datapoint,
-    get_hf_submodule,
-    layer_percent_to_layer,
 )
 
 

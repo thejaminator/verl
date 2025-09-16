@@ -1,41 +1,30 @@
-# %%
-import contextlib
-import gc
-import itertools
-import json
 import math
 import os
 import pickle
 import random
 from copy import deepcopy
-from dataclasses import asdict
 from pathlib import Path
-from typing import Callable
 
-import numpy as np
 import torch
-import torch._dynamo
-import torch.nn as nn
-from datasets import load_dataset
-from huggingface_hub import hf_hub_download
 from peft import PeftModel
 from pydantic import BaseModel
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import nl_probes.dataset_classes.classification_dataset_manager as classification_dataset_manager
-import wandb
 from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prefix
-from nl_probes.utils.common import load_model, load_tokenizer
-from sft_config import (
+from nl_probes.utils.activation_utils import (
+    collect_activations_multiple_layers,
+    get_hf_submodule,
+)
+from nl_probes.utils.common import assert_no_peft_present, load_model, load_tokenizer
+from nl_probes.utils.dataset_utils import (
     BatchData,
     EvalStepResult,
     FeatureResult,
     TrainingDataPoint,
-    collect_activations_multiple_layers,
     construct_batch,
     create_training_datapoint,
-    get_hf_submodule,
 )
 
 
@@ -43,42 +32,6 @@ class ClassificationDatapoint(BaseModel):
     activation_prompt: str
     classification_prompt: str
     target_response: str
-
-
-def assert_no_peft_present(model, check_for_active_adapter_only=False):
-    """
-    Asserts that no PEFT adapters are present or active on the model.
-
-    Args:
-        model: The model to check.
-        check_for_active_adapter_only (bool):
-            - If False (default), asserts that NO adapters are loaded on the model at all.
-            - If True, asserts only that no adapter is currently *active*.
-              This allows inactive adapters to still be loaded in memory.
-    """
-    is_peft_model = isinstance(model, PeftModel)
-
-    if not is_peft_model and not hasattr(model, "peft_config"):
-        # If it's not a PeftModel and has no peft_config, we're 100% sure no adapters are loaded.
-        return
-
-    # At this point, the model has had PEFT adapters at some point.
-
-    # getattr is used to safely access peft_config, which might be an empty dict.
-    loaded_adapters = list(getattr(model, "peft_config", {}).keys())
-
-    if not check_for_active_adapter_only:
-        assert not loaded_adapters, (
-            f"PEFT check failed! Found loaded adapters: {loaded_adapters}. "
-            "Model should have no adapters loaded in memory."
-        )
-
-    # PeftModel has an `active_adapters` property which is a list of active adapter names.
-    # It's an empty list when the base model is active.
-    active_adapters = getattr(model, "active_adapters", [])
-    assert not active_adapters, (
-        f"PEFT check failed! Found active adapters: {active_adapters}. Model should be running in base mode."
-    )
 
 
 def get_classification_datapoints_from_context_qa_examples(

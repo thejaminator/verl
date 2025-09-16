@@ -78,3 +78,39 @@ def get_bos_eos_pad_mask(tokenizer: AutoTokenizer, token_ids: torch.Tensor) -> t
         mask |= token_ids == tokenizer.pad_token_id
 
     return mask
+
+
+def assert_no_peft_present(model, check_for_active_adapter_only=False):
+    """
+    Asserts that no PEFT adapters are present or active on the model.
+
+    Args:
+        model: The model to check.
+        check_for_active_adapter_only (bool):
+            - If False (default), asserts that NO adapters are loaded on the model at all.
+            - If True, asserts only that no adapter is currently *active*.
+              This allows inactive adapters to still be loaded in memory.
+    """
+    is_peft_model = isinstance(model, PeftModel)
+
+    if not is_peft_model and not hasattr(model, "peft_config"):
+        # If it's not a PeftModel and has no peft_config, we're 100% sure no adapters are loaded.
+        return
+
+    # At this point, the model has had PEFT adapters at some point.
+
+    # getattr is used to safely access peft_config, which might be an empty dict.
+    loaded_adapters = list(getattr(model, "peft_config", {}).keys())
+
+    if not check_for_active_adapter_only:
+        assert not loaded_adapters, (
+            f"PEFT check failed! Found loaded adapters: {loaded_adapters}. "
+            "Model should have no adapters loaded in memory."
+        )
+
+    # PeftModel has an `active_adapters` property which is a list of active adapter names.
+    # It's an empty list when the base model is active.
+    active_adapters = getattr(model, "active_adapters", [])
+    assert not active_adapters, (
+        f"PEFT check failed! Found active adapters: {active_adapters}. Model should be running in base mode."
+    )

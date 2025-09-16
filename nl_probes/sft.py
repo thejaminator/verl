@@ -49,22 +49,17 @@ import nl_probes.dataset_classes.classification as classification
 import wandb
 from detection_eval.detection_basemodels import SAEInfo
 from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prompt
+from nl_probes.configs.sft_config import SelfInterpTrainingConfig
 from nl_probes.dataset_classes.sae_training_data import load_sae_data_from_sft_data_file
-from nl_probes.sae import BaseSAE, JumpReluSAE, get_sae_info, load_sae
+from nl_probes.utils.activation_utils import get_hf_submodule
 from nl_probes.utils.common import load_model, load_tokenizer
-from sft_config import (
+from nl_probes.utils.dataset_utils import (
     BatchData,
     EvalStepResult,
     ExplanationResult,
     FeatureResult,
-    SAEExplained,
-    SelfInterpTrainingConfig,
     TrainingDataPoint,
-    TrainingExample,
     construct_batch,
-    create_training_datapoint,
-    get_hf_submodule,
-    load_explanations_from_jsonl,
 )
 
 
