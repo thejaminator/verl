@@ -1,23 +1,3 @@
-"""
-Lightweight SAE Introspection Training Script
-
-This script trains a model to understand SAE (Sparse Autoencoder) features through introspection.
-
-Features:
-- Automatic Hugging Face login at script start
-- LoRA fine-tuning support
-- Automatic pushing of trained LoRA adapters to Hugging Face Hub after training
-- Configurable repository settings (public/private)
-
-Usage:
-    python lightweight_sft.py [explanations_file.jsonl]
-
-Before running:
-1. Make sure you're logged into Hugging Face: `huggingface-cli login`
-2. Update the hf_repo_id in the main() function to your desired repository name
-3. Ensure you have the required explanations JSONL file
-"""
-
 import os
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -50,6 +30,9 @@ import wandb
 from detection_eval.detection_basemodels import SAEInfo
 from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prompt
 from nl_probes.configs.sft_config import SelfInterpTrainingConfig
+from nl_probes.dataset_classes.act_dataset_manager import ActDatasetLoader, DatasetLoaderConfig
+from nl_probes.dataset_classes.classification import ClassificationDatasetConfig, ClassificationDatasetLoader
+from nl_probes.dataset_classes.past_lens_dataset import PastLensDatasetConfig, PastLensDatasetLoader
 from nl_probes.dataset_classes.sae_training_data import load_sae_data_from_sft_data_file
 from nl_probes.utils.activation_utils import get_hf_submodule
 from nl_probes.utils.common import load_model, load_tokenizer
@@ -367,6 +350,7 @@ def run_evaluation(
     submodule: torch.nn.Module,
     device: torch.device,
     dtype: torch.dtype,
+    global_step: int,
 ) -> list[FeatureResult]:
     """Run evaluation and save results."""
     model.eval()
@@ -649,64 +633,18 @@ def build_datasets(
     dtype: torch.dtype,
     max_len_percentile: float | None = 0.999,
     window_mult: int | None = 20,
-) -> tuple[list[TrainingDataPoint], list[TrainingDataPoint], list[SAEInfo]]:
+) -> tuple[list[TrainingDataPoint], list[TrainingDataPoint]]:
+    random.seed(cfg.seed)
     all_training_data: list[TrainingDataPoint] = []
-
     # eval data will only be for classification datasets
     all_eval_data: dict[str, list[TrainingDataPoint]] = {}
-    all_sae_infos: list[SAEInfo] = []
 
-    # SFT-style feature explanations
-    for sft_file in cfg.sae_sft_datasets:
-        file_data, sae_info = load_sae_data_from_sft_data_file(sft_file, cfg, tokenizer, device, dtype)
-        file_data = file_data[: cfg.max_sae_sft_examples]
-        all_training_data.extend(file_data[: -cfg.test_set_size_per_ds])
-        all_sae_infos.append(sae_info)
-
-    for sft_file in cfg.additional_train_dataset_filenames:
-        with open(sft_file, "rb") as f:
-            file_data = pickle.load(f)
-        all_training_data.extend(file_data)
-
-    random.seed(cfg.seed)
-
-    # Classification side-task
-    for ds in cfg.classification_train_datasets:
-        print(f"Creating train classification dataset for {ds}")
-        train_ds, test_ds = classification.create_classification_dataset(
-            ds,
-            num_qa_per_sample=cfg.num_qa_per_sample,
-            num_train_examples=cfg.max_classification_examples,
-            num_test_examples=cfg.test_set_size_per_ds,
-            batch_size=cfg.activation_collection_batch_size,
-            act_layers=cfg.act_layers,
-            min_offset=cfg.min_act_collect_offset,
-            max_offset=cfg.max_act_collect_offset,
-            model_name=cfg.model_name,
-            tokenizer=tokenizer,
-            dtype=dtype,
-            random_seed=cfg.seed,
-            dataset_folder=cfg.dataset_folder,
+    for train_dataset_loader in cfg.train_dataset_loaders:
+        all_training_data.extend(train_dataset_loader.load_dataset("train"))
+    for eval_dataset_loader in cfg.eval_dataset_loaders:
+        all_eval_data[eval_dataset_loader.dataset_params.classification_dataset_name] = (
+            eval_dataset_loader.load_dataset("test")
         )
-        all_training_data.extend(train_ds)
-
-    for ds in cfg.classification_eval_datasets:
-        print(f"Creating test classification dataset for {ds}")
-        test_ds = classification.create_classification_dataset_test_only(
-            ds,
-            num_qa_per_sample=cfg.num_qa_per_sample,
-            num_test_examples=cfg.test_set_size_per_ds,
-            batch_size=cfg.activation_collection_batch_size,
-            act_layers=cfg.act_layers,
-            min_offset=cfg.min_act_collect_offset,
-            max_offset=cfg.max_act_collect_offset,
-            model_name=cfg.model_name,
-            tokenizer=tokenizer,
-            dtype=dtype,
-            random_seed=cfg.seed,
-            dataset_folder=cfg.dataset_folder,
-        )
-        all_eval_data[ds] = test_ds
 
     p = max_len_percentile
     if p is not None:
@@ -731,10 +669,23 @@ def build_datasets(
     if window_mult is not None:
         all_training_data = length_grouped_reorder(all_training_data, cfg.train_batch_size, window_mult)
 
-    return all_training_data, all_eval_data, all_sae_infos
+    return all_training_data, all_eval_data
 
 
 if __name__ == "__main__":
+    main_train_size = 300
+    classification_datasets_train_sizes = {
+        "geometry_of_truth": main_train_size,
+        "relations": main_train_size,
+        "sst2": main_train_size,
+        "md_gender": main_train_size,
+        "snli": main_train_size,
+        "ag_news": main_train_size,
+        "ner": main_train_size,
+        "tense": main_train_size,
+        "language_identification": main_train_size,
+        "singular_plural": 10,  # very small dataset
+    }
     classification_eval_datasets = [
         "geometry_of_truth",
         "relations",
@@ -749,12 +700,12 @@ if __name__ == "__main__":
     ]
     classification_train_datasets = [
         "geometry_of_truth",
-        # "relations",
-        # "sst2",
-        # "md_gender",
-        # "snli",
+        "relations",
+        "sst2",
+        "md_gender",
+        "snli",
         # "ag_news",
-        # "ner",
+        "ner",
         "tense",
         # "language_identification",
         # "singular_plural",
@@ -769,59 +720,67 @@ if __name__ == "__main__":
 
     layer_percents = [25, 50, 75]
 
-    explanations_files = []
-    for layer_percent in layer_percents:
-        explanations_files.append(
-            f"data/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl"
+    train_dataset_loaders = []
+    eval_dataset_loaders = []
+    sft_data_folder = "sft_training_data"
+    seed = 42
+
+    dataset_config = DatasetLoaderConfig(
+        dataset_params=PastLensDatasetConfig(
+            model_name=model_name,
+            layer_percents=layer_percents,
+            seed=seed,
+            save_acts=True,
+        ),
+        dataset_folder=sft_data_folder,
+        num_train=300,
+        num_test=0,
+        splits=["train"],
+    )
+
+    past_lens_dataset_loader = PastLensDatasetLoader(
+        dataset_config=dataset_config,
+    )
+
+    train_dataset_loaders.append(past_lens_dataset_loader)
+
+    for dataset_name in classification_datasets_train_sizes.keys():
+        classification_config = ClassificationDatasetConfig(
+            model_name=model_name,
+            layer_percents=layer_percents,
+            seed=seed,
+            save_acts=True,
+            classification_dataset_name=dataset_name,
         )
 
-    additional_explanations_files = []
-
-    for layer_percent in layer_percents:
-        act_examples_filename = (
-            f"sft_training_data/act_examples_Qwen_Qwen3-8B_layer_percent_{layer_percent}_width_2_num_features_60000.pkl"
+        dataset_config = DatasetLoaderConfig(
+            dataset_name="classification",
+            dataset_params=classification_config,
+            dataset_folder="sft_training_data",
+            num_train=classification_datasets_train_sizes[dataset_name],
+            num_test=250,
+            splits=["train", "test"],
         )
-        sae_yes_no_filename = f"sft_training_data/yes_no_sae_data_Qwen_Qwen3-8B_layer_percent_{layer_percent}_width_2_max_features_None.pkl"
-        additional_explanations_files.append(act_examples_filename)
-        additional_explanations_files.append(sae_yes_no_filename)
 
-    # explanations_files = []
-    additional_explanations_files = []
-    # additional_explanations_files = [
-    # "sft_training_data/past_lens_data_Qwen_Qwen3-8B_layers_9-18-27_num_datapoints_200000_min_k_3_max_k_20.pkl"
-    # ]
+        classification_dataset_loader = ClassificationDatasetLoader(
+            dataset_config=dataset_config,
+        )
+
+        if dataset_name in classification_train_datasets:
+            train_dataset_loaders.append(classification_dataset_loader)
+
+        if dataset_name in classification_eval_datasets:
+            eval_dataset_loaders.append(classification_dataset_loader)
 
     iterations = [
-        # {"lr": 2e-5},
-        # {"lr": 5e-5},
-        # {"act_collect_offset": -3},
-        # {"act_collect_offset": -5},
-        # {"num_epochs": 2},
-        # {
-        #     "load_lora_path": "checkpoints_no_sae_multiple_datasets_layer_1_larger_pretrain_min_act_collect_offset_-2_max_act_collect_offset_-5/final"
-        # },
         {
             "load_lora_path": None,
-            "sae_sft_datasets": explanations_files,
-            "additional_train_dataset_filenames": additional_explanations_files,
+            "train_dataset_loaders": train_dataset_loaders,
+            "eval_dataset_loaders": eval_dataset_loaders,
             "wandb_suffix": "_act_pretrain",
         },
-        # {
-        #     "load_lora_path": "checkpoints_act_pretrain/final",
-        #     "sae_sft_datasets": [],
-        #     "additional_train_dataset_filenames": [],
-        #     "wandb_suffix": "_act_pretrain_and_posttrain",
-        # },
-        # {
-        # "load_lora_path": "checkpoints_no_sae_multiple_datasets_layer_1_larger_pretrain_min_act_collect_offset_-2_max_act_collect_offset_-5/final",
-        # "num_epochs": 2,
-        # },
-        # {"load_lora_path": None},
-        # {"load_lora_path": None, "num_epochs": 2},
-        # {}
     ]
 
-    # for use_decoder_vectors in [True]:
     for hyperparam_override in iterations:
         cfg = SelfInterpTrainingConfig(
             model_name=model_name,
@@ -829,15 +788,9 @@ if __name__ == "__main__":
             hf_repo_name=hf_repo_name,
             # wandb_suffix=wandb_suffix,
             layer_percents=layer_percents,
-            # sae_sft_datasets=explanations_files,
-            classification_train_datasets=classification_train_datasets,
-            classification_eval_datasets=classification_eval_datasets,
-            # additional_train_dataset_filenames=additional_explanations_files,
-            max_classification_examples=6_000,
-            test_set_size_per_ds=250,
             train_batch_size=16,
             activation_collection_batch_size=64,
-            eval_steps=10000,
+            eval_steps=2000,
             eval_on_start=False,
             **hyperparam_override,
         )
@@ -848,18 +801,12 @@ if __name__ == "__main__":
 
         tokenizer = load_tokenizer(cfg.model_name)
 
-        all_training_data, all_eval_data, all_sae_infos = build_datasets(
-            cfg, tokenizer, device, dtype, window_mult=cfg.window_mult
-        )
+        all_training_data, all_eval_data = build_datasets(cfg, tokenizer, device, dtype, window_mult=cfg.window_mult)
 
         # for debugging
         # all_training_data = all_training_data[:1000]
 
         print(f"training data: {len(all_training_data)}, eval data: {len(all_eval_data)}")
-
-        # raise Exception("Stop here")
-
-        cfg.sae_infos = all_sae_infos
 
         print(asdict(cfg))
 

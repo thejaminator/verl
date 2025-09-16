@@ -4,7 +4,7 @@ import pickle
 import random
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Generator
+from typing import Generator, Literal
 
 import torch
 from dataset_classes.act_dataset_manager import ActDatasetLoader
@@ -13,8 +13,9 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from detection_eval.steering_hooks import get_introspection_prefix
+from nl_probes.dataset_classes.act_dataset_manager import ActDatasetLoader, BaseDatasetConfig, DatasetLoaderConfig
 from nl_probes.utils.activation_utils import collect_activations_multiple_layers, get_hf_submodule
-from nl_probes.utils.common import layer_percent_to_layer, load_model
+from nl_probes.utils.common import layer_percent_to_layer, load_model, load_tokenizer
 from nl_probes.utils.dataset_utils import (
     TrainingDataPoint,
     create_training_datapoint,
@@ -22,26 +23,52 @@ from nl_probes.utils.dataset_utils import (
 
 
 @dataclass
-class PastLensDatasetConfig:
-    model_name: str
-    layer_percents: list[int]
-    num_datapoints: int
-    min_k: int
-    max_k: int
-    seed: int
-    sft_data_folder: str
+class PastLensDatasetConfig(BaseDatasetConfig):
+    min_k: int = 3
+    max_k: int = 20
+    batch_size: int = 128
+    max_length: int = 512
 
 
 class PastLensDatasetLoader(ActDatasetLoader):
-    def __init__(self, dataset_name: str, dataset_params: PastLensDatasetConfig, dataset_folder: str):
-        super().__init__(dataset_name, dataset_params, dataset_folder)
+    def __init__(
+        self,
+        dataset_config: DatasetLoaderConfig,
+    ):
+        super().__init__(dataset_config)
 
-    def load_dataset(self) -> list[TrainingDataPoint]:
-        raise NotImplementedError
+        self.dataset_config.dataset_name = "past_lens"
 
-    def get_dataset_filename(self) -> str:
+        self.dataset_params: PastLensDatasetConfig = dataset_config.dataset_params
+
+        assert self.dataset_config.splits == ["train"], "Past lens dataset only supports train split right now"
+        assert self.dataset_config.num_test == 0, "Past lens dataset only supports train split right now"
+
+    def create_dataset(self) -> list[TrainingDataPoint]:
+        tokenizer = load_tokenizer(self.dataset_params.model_name)
+        dataset = hf_mixed_dataset_to_generator(tokenizer)
+
+        device = torch.device("cuda")
+        dtype = torch.bfloat16
+
+        save_path = os.path.join(self.dataset_config.dataset_folder, self.get_dataset_filename("train"))
+
+        collect_past_lens_acts(
+            dataset_params=self.dataset_params,
+            tokenizer=tokenizer,
+            dataset=dataset,
+            num_datapoints=self.dataset_config.num_train,
+            device=device,
+            dtype=dtype,
+            save_path=save_path,
+        )
+
+    def get_dataset_filename(self, split: Literal["train", "test"]) -> str:
         layers_str = "-".join([str(layer) for layer in self.dataset_params.layer_percents])
-        filename = f"past_lens_{self.dataset_params.model_name}_layers_{layers_str}_num_datapoints_{self.dataset_params.num_datapoints}_min_k_{self.dataset_params.min_k}_max_k_{self.dataset_params.max_k}"
+
+        num_datapoints = self.dataset_config.num_train if split == "train" else self.dataset_config.num_test
+
+        filename = f"past_lens_{self.dataset_params.model_name}_layers_{layers_str}_num_datapoints_{num_datapoints}_min_k_{self.dataset_params.min_k}_max_k_{self.dataset_params.max_k}_split_{split}_save_acts_{self.dataset_params.save_acts}"
         filename = filename.replace("/", "_").replace(".", "_").replace(" ", "_")
         return f"{filename}.pkl"
 
@@ -144,45 +171,35 @@ def hf_mixed_dataset_to_generator(
 
 
 def collect_past_lens_acts(
-    model_name: str,
+    dataset_params: PastLensDatasetConfig,
     tokenizer: AutoTokenizer,
     dataset: Generator,
     num_datapoints: int,
-    batch_size: int,
-    layer_percents: list[int],
-    max_length: int,
-    min_k: int,
-    max_k: int,
     device: torch.device,
     dtype: torch.dtype,
-    seed: int,
-    sft_data_folder: str,
+    save_path: str,
 ):
-    random.seed(seed)
-    torch.manual_seed(seed)
+    random.seed(dataset_params.seed)
+    torch.manual_seed(dataset_params.seed)
 
-    layers = [layer_percent_to_layer(model_name, layer_percent) for layer_percent in layer_percents]
-    layer_str = "-".join(map(str, layers))
+    layers = [
+        layer_percent_to_layer(dataset_params.model_name, layer_percent)
+        for layer_percent in dataset_params.layer_percents
+    ]
 
-    save_filename = (
-        f"past_lens_data_{model_name}_layers_{layer_str}_num_datapoints_{num_datapoints}_min_k_{min_k}_max_k_{max_k}"
-    )
-    save_filename = save_filename.replace("/", "_").replace(".", "_").replace(" ", "_")
-    save_filename = f"{sft_data_folder}/{save_filename}.pkl"
-
-    model = load_model(model_name, dtype)
+    model = load_model(dataset_params.model_name, dtype)
 
     submodules = {layer: get_hf_submodule(model, layer) for layer in layers}
 
     training_data = []
 
-    for i in tqdm(range(0, num_datapoints, batch_size), desc="Collecting past lens acts"):
+    for i in tqdm(range(0, num_datapoints, dataset_params.batch_size), desc="Collecting past lens acts"):
         inputs = []
-        for _ in range(batch_size):
+        for _ in range(dataset_params.batch_size):
             inputs.append(next(dataset))
 
         tokenized_inputs = tokenizer(
-            inputs, return_tensors="pt", padding=True, truncation=True, max_length=max_length
+            inputs, return_tensors="pt", padding=True, truncation=True, max_length=dataset_params.max_length
         ).to(device)
 
         acts_BLD_by_layer_dict = collect_activations_multiple_layers(
@@ -200,7 +217,7 @@ def collect_past_lens_acts(
                 input_ids_L = input_ids_BL[j]
                 acts_LD = acts_BLD[j]
 
-                k = random.randint(min_k, max_k)
+                k = random.randint(dataset_params.min_k, dataset_params.max_k)
 
                 # Find the first non-padding position (where attention mask is 1)
                 valid_positions = torch.where(attn_mask_L == 1)[0]
@@ -237,9 +254,9 @@ def collect_past_lens_acts(
                 )
                 training_data.append(training_data_point)
 
-    with open(save_filename, "wb") as f:
+    with open(save_path, "wb") as f:
         pickle.dump(training_data, f)
-    print(f"Saved {len(training_data)} datapoints to {save_filename}")
+    print(f"Saved {len(training_data)} datapoints to {save_path}")
 
 
 if __name__ == "__main__":
@@ -255,8 +272,6 @@ if __name__ == "__main__":
 
     layer_percents = [25, 50, 75]
 
-    dataset = hf_mixed_dataset_to_generator(tokenizer)
-
     batch_size = 128
     num_datapoints = 600_000
     max_length = 512
@@ -264,22 +279,21 @@ if __name__ == "__main__":
     max_k = 20
     seed = 42
     sft_data_folder = "sft_training_data"
-    os.makedirs(sft_data_folder, exist_ok=True)
 
-    collect_past_lens_acts(
-        model_name,
-        tokenizer,
-        dataset,
-        num_datapoints,
-        batch_size,
-        layer_percents,
-        max_length,
-        min_k,
-        max_k,
-        device,
-        dtype,
-        seed,
-        sft_data_folder,
+    dataset_config = DatasetLoaderConfig(
+        dataset_params=PastLensDatasetConfig(
+            model_name=model_name,
+            layer_percents=layer_percents,
+            seed=seed,
+            save_acts=True,
+        ),
+        dataset_folder=sft_data_folder,
+        num_train=num_datapoints,
+        num_test=0,
+        splits=["train"],
     )
-    torch.cuda.empty_cache()
-    gc.collect()
+
+    past_lens_dataset_loader = PastLensDatasetLoader(
+        dataset_config=dataset_config,
+    )
+    past_lens_dataset_loader.create_dataset()

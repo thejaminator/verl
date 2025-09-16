@@ -3,7 +3,9 @@ import os
 import pickle
 import random
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import torch
 from peft import PeftModel
@@ -13,11 +15,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import nl_probes.dataset_classes.classification_dataset_manager as classification_dataset_manager
 from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prefix
+from nl_probes.dataset_classes.act_dataset_manager import ActDatasetLoader, BaseDatasetConfig, DatasetLoaderConfig
 from nl_probes.utils.activation_utils import (
     collect_activations_multiple_layers,
     get_hf_submodule,
 )
-from nl_probes.utils.common import assert_no_peft_present, load_model, load_tokenizer
+from nl_probes.utils.common import assert_no_peft_present, layer_percent_to_layer, load_model, load_tokenizer
 from nl_probes.utils.dataset_utils import (
     BatchData,
     EvalStepResult,
@@ -26,6 +29,89 @@ from nl_probes.utils.dataset_utils import (
     construct_batch,
     create_training_datapoint,
 )
+
+
+@dataclass
+class ClassificationDatasetConfig(BaseDatasetConfig):
+    classification_dataset_name: str
+    num_qa_per_sample: int = 3
+    batch_size: int = 128
+    min_offset: int = -2
+    max_offset: int = -5
+
+
+class ClassificationDatasetLoader(ActDatasetLoader):
+    def __init__(
+        self,
+        dataset_config: DatasetLoaderConfig,
+    ):
+        super().__init__(dataset_config)
+
+        assert self.dataset_config.splits == ["train", "test"], (
+            "Classification dataset must include train and test splits"
+        )
+        assert self.dataset_config.num_test > 0, "Classification dataset must include test split"
+        assert self.dataset_config.num_train > 0, "Classification dataset must include train split"
+
+        self.dataset_params: ClassificationDatasetConfig = dataset_config.dataset_params
+
+        self.dataset_config.dataset_name = f"classification_{self.dataset_params.classification_dataset_name}"
+
+        self.act_layers = [
+            layer_percent_to_layer(self.dataset_params.model_name, layer_percent)
+            for layer_percent in self.dataset_params.layer_percents
+        ]
+
+    def create_dataset(self) -> None:
+        dtype = torch.bfloat16
+        tokenizer = load_tokenizer(self.dataset_params.model_name)
+        model = load_model(self.dataset_params.model_name, dtype)
+
+        train_datapoints, test_datapoints = get_classification_datapoints(
+            self.dataset_params.classification_dataset_name,
+            self.dataset_params.num_qa_per_sample,
+            self.dataset_config.num_train,
+            self.dataset_config.num_test,
+            self.dataset_params.seed,
+        )
+        training_data = create_vector_dataset(
+            train_datapoints,
+            tokenizer,
+            model,
+            self.dataset_params.batch_size,
+            self.act_layers,
+            self.dataset_params.min_offset,
+            self.dataset_params.max_offset,
+        )
+        test_data = create_vector_dataset(
+            test_datapoints,
+            tokenizer,
+            model,
+            self.dataset_params.batch_size,
+            self.act_layers,
+            self.dataset_params.min_offset,
+            self.dataset_params.max_offset,
+        )
+
+        train_filename = self.get_dataset_filename("train")
+        test_filename = self.get_dataset_filename("test")
+        train_path = os.path.join(self.dataset_config.dataset_folder, train_filename)
+        test_path = os.path.join(self.dataset_config.dataset_folder, test_filename)
+        with open(train_path, "wb") as f:
+            pickle.dump(training_data, f)
+        with open(test_path, "wb") as f:
+            pickle.dump(test_data, f)
+        print(f"Saved {len(training_data)} datapoints to {train_path}")
+        print(f"Saved {len(test_data)} datapoints to {test_path}")
+
+    def get_dataset_filename(self, split: Literal["train", "test"]) -> str:
+        layers_str = "-".join([str(layer) for layer in self.dataset_params.layer_percents])
+
+        num_datapoints = self.dataset_config.num_train if split == "train" else self.dataset_config.num_test
+
+        filename = f"{self.dataset_config.dataset_name}_layer_{layers_str}_offset_{self.dataset_params.min_offset}_{self.dataset_params.max_offset}_max_{num_datapoints}_{split}"
+        filename = filename.replace("/", "_").replace(".", "_").replace(" ", "_")
+        return f"{filename}.pkl"
 
 
 class ClassificationDatapoint(BaseModel):
@@ -309,107 +395,19 @@ def analyze_results(results: list[dict]) -> dict[str, float]:
     }
 
 
-def create_classification_dataset(
-    dataset_name: str,
-    num_qa_per_sample: int,
-    num_train_examples: int,
-    num_test_examples: int,
-    batch_size: int,
-    act_layers: list[int],
-    min_offset: int,
-    max_offset: int,
-    model_name: str,
-    tokenizer: AutoTokenizer,
-    dtype: torch.dtype,
-    random_seed: int,
-    dataset_folder: str,
-) -> tuple[list[TrainingDataPoint], list[TrainingDataPoint]]:
-    os.makedirs(dataset_folder, exist_ok=True)
-    layers_str = "-".join([str(layer) for layer in act_layers])
-    train_dataset_name = f"{dataset_folder}/{dataset_name}_layer_{layers_str}_offset_{min_offset}_{max_offset}_max_{num_train_examples}_train.pkl"
-    test_dataset_name = f"{dataset_folder}/{dataset_name}_layer_{layers_str}_offset_{min_offset}_{max_offset}_max_{num_test_examples}_test.pkl"
-
-    if os.path.exists(train_dataset_name) and os.path.exists(test_dataset_name):
-        with open(train_dataset_name, "rb") as f:
-            training_data = pickle.load(f)
-
-        with open(test_dataset_name, "rb") as f:
-            test_data = pickle.load(f)
-
-        print(f"Loaded {len(training_data)} datapoints from {train_dataset_name}")
-        print(f"Loaded {len(test_data)} datapoints from {test_dataset_name}")
-        return training_data, test_data
-
-    model = load_model(model_name, dtype)
-    train_datapoints, test_datapoints = get_classification_datapoints(
-        dataset_name, num_qa_per_sample, num_train_examples, num_test_examples, random_seed
-    )
-    training_data = create_vector_dataset(
-        train_datapoints, tokenizer, model, batch_size, act_layers, min_offset, max_offset
-    )
-    test_data = create_vector_dataset(test_datapoints, tokenizer, model, batch_size, act_layers, min_offset, max_offset)
-
-    with open(train_dataset_name, "wb") as f:
-        pickle.dump(training_data, f)
-    print(f"Saved {len(training_data)} datapoints to {train_dataset_name}")
-    with open(test_dataset_name, "wb") as f:
-        pickle.dump(test_data, f)
-    print(f"Saved {len(test_data)} datapoints to {test_dataset_name}")
-
-    return training_data, test_data
-
-
-def create_classification_dataset_test_only(
-    dataset_name: str,
-    num_qa_per_sample: int,
-    num_test_examples: int,
-    batch_size: int,
-    act_layers: list[int],
-    min_offset: int,
-    max_offset: int,
-    model_name: str,
-    tokenizer: AutoTokenizer,
-    dtype: torch.dtype,
-    random_seed: int,
-    dataset_folder: str,
-) -> list[TrainingDataPoint]:
-    os.makedirs(dataset_folder, exist_ok=True)
-    layers_str = "-".join([str(layer) for layer in act_layers])
-    test_dataset_name = f"{dataset_folder}/{dataset_name}_layer_{layers_str}_offset_{min_offset}_{max_offset}_max_{num_test_examples}_test.pkl"
-
-    if os.path.exists(test_dataset_name):
-        with open(test_dataset_name, "rb") as f:
-            test_data = pickle.load(f)
-
-        print(f"Loaded {len(test_data)} datapoints from {test_dataset_name}")
-        return test_data
-
-    model = load_model(model_name, dtype)
-    train_datapoints, test_datapoints = get_classification_datapoints(
-        dataset_name, num_qa_per_sample, 0, num_test_examples, random_seed
-    )
-    test_data = create_vector_dataset(test_datapoints, tokenizer, model, batch_size, act_layers, min_offset, max_offset)
-
-    with open(test_dataset_name, "wb") as f:
-        pickle.dump(test_data, f)
-    print(f"Saved {len(test_data)} datapoints to {test_dataset_name}")
-
-    return test_data
-
-
 if __name__ == "__main__":
-    classification_datasets = [
-        "geometry_of_truth",
-        "relations",
-        "sst2",
-        # "md_gender",
-        # "snli",
-        "ag_news",
-        # "ner",
-        # "tense",
-        # "language_identification",
-        # "singular_plural",
-    ]
+    classification_datasets = {
+        "geometry_of_truth": 6_000,
+        "relations": 6_000,
+        "sst2": 6_000,
+        # "md_gender": 6_000,
+        # "snli": 6_000,
+        "ag_news": 6_000,
+        # "ner": 6_000,
+        # "tense": 6_000,
+        # "language_identification": 6_000,
+        # "singular_plural": 10,
+    }
 
     all_eval_data = {}
 
@@ -418,200 +416,207 @@ if __name__ == "__main__":
     device = torch.device("cuda")
     tokenizer = load_tokenizer(model_name)
 
-    for dataset_name in classification_datasets:
-        test_data = create_classification_dataset_test_only(
-            dataset_name,
-            num_qa_per_sample=3,
-            num_test_examples=250,
-            batch_size=250,
-            act_layers=[9, 18, 27],
-            offset=-3,
+    for dataset_name in classification_datasets.keys():
+        classification_config = ClassificationDatasetConfig(
             model_name=model_name,
-            tokenizer=tokenizer,
-            dtype=dtype,
-            random_seed=42,
-            dataset_folder="sft_training_data",
+            layer_percents=[25, 50, 75],
+            seed=42,
+            save_acts=True,
+            classification_dataset_name=dataset_name,
         )
-        all_eval_data[dataset_name] = test_data
 
-    # %%\
-    batch_size = 25
-    steering_coefficient = 2.0
-    dtype = torch.bfloat16
-    device = torch.device("cuda")
-    generation_kwargs = {
-        "do_sample": False,
-        "temperature": 0.0,
-        "max_new_tokens": 10,
-    }
+        dataset_config = DatasetLoaderConfig(
+            dataset_name="classification",
+            dataset_params=classification_config,
+            dataset_folder="sft_training_data",
+            num_train=classification_datasets[dataset_name],
+            num_test=250,
+            splits=["train", "test"],
+        )
 
-    model_name = "Qwen/Qwen3-8B"
-    hook_layer = 1
+        classification_dataset_loader = ClassificationDatasetLoader(
+            dataset_config=dataset_config,
+        )
+        classification_dataset_loader.create_dataset()
 
-    # %%
-    if "model" not in globals():
-        model = load_model(model_name, dtype, load_in_8bit=False)
-    # %%
+#     # %%\
+#     batch_size = 25
+#     steering_coefficient = 2.0
+#     dtype = torch.bfloat16
+#     device = torch.device("cuda")
+#     generation_kwargs = {
+#         "do_sample": False,
+#         "temperature": 0.0,
+#         "max_new_tokens": 10,
+#     }
 
-    assert_no_peft_present(model)
-    # %%
+#     model_name = "Qwen/Qwen3-8B"
+#     hook_layer = 1
 
-    first_dataset = all_eval_data["geometry_of_truth"]
+#     # %%
+#     if "model" not in globals():
+#         model = load_model(model_name, dtype, load_in_8bit=False)
+#     # %%
 
-    for i in range(10):
-        print(f"tokenizer.decode(first_dataset[i].input_ids): {tokenizer.decode(first_dataset[i].input_ids)}")
-        print(f"first_dataset[i].labels: {first_dataset[i].labels}")
-        print(f"first_dataset[i].target_output: {first_dataset[i].target_output}")
-        print("-" * 100)
+#     assert_no_peft_present(model)
+#     # %%
 
-    # %%
+#     first_dataset = all_eval_data["geometry_of_truth"]
 
-    lora_paths_with_labels = {
-        "checkpoints_multiple_datasets_layer_1_decoder/final": "SAE + Classification",
-        "checkpoints_no_sae_multiple_datasets_layer_1_decoder/final": "Classification Only",
-        None: "Original",
-    }
+#     for i in range(10):
+#         print(f"tokenizer.decode(first_dataset[i].input_ids): {tokenizer.decode(first_dataset[i].input_ids)}")
+#         print(f"first_dataset[i].labels: {first_dataset[i].labels}")
+#         print(f"first_dataset[i].target_output: {first_dataset[i].target_output}")
+#         print("-" * 100)
 
-    all_results = {}
-    for dataset_name in classification_datasets:
-        eval_data = all_eval_data[dataset_name]
-        all_results[dataset_name] = {}
-        for lora_path in lora_paths_with_labels.keys():
-            assert_no_peft_present(model)
-            results = run_classification(
-                tokenizer,
-                model,
-                lora_path,
-                # None,
-                hook_layer,
-                eval_data,
-                batch_size,
-                device,
-                steering_coefficient,
-                dtype,
-                generation_kwargs,
-            )
+#     # %%
 
-            all_results[dataset_name][lora_path] = analyze_results(results)
+#     lora_paths_with_labels = {
+#         "checkpoints_multiple_datasets_layer_1_decoder/final": "SAE + Classification",
+#         "checkpoints_no_sae_multiple_datasets_layer_1_decoder/final": "Classification Only",
+#         None: "Original",
+#     }
 
-    # %%
-    from pathlib import Path
-    from typing import Any
+#     all_results = {}
+#     for dataset_name in classification_datasets:
+#         eval_data = all_eval_data[dataset_name]
+#         all_results[dataset_name] = {}
+#         for lora_path in lora_paths_with_labels.keys():
+#             assert_no_peft_present(model)
+#             results = run_classification(
+#                 tokenizer,
+#                 model,
+#                 lora_path,
+#                 # None,
+#                 hook_layer,
+#                 eval_data,
+#                 batch_size,
+#                 device,
+#                 steering_coefficient,
+#                 dtype,
+#                 generation_kwargs,
+#             )
 
-    import matplotlib.pyplot as plt
+#             all_results[dataset_name][lora_path] = analyze_results(results)
 
-    def plot_classification_results(
-        all_results: dict[str, dict[str | None, dict[str, Any]]],
-        lora_paths_with_labels: dict[str | None, str],
-        *,
-        save_dir: str | Path | None = None,
-        file_format: str = "png",
-        dpi: int = 150,
-        as_percentage: bool = True,
-        annotate: bool = True,
-    ) -> list[Path]:
-        """
-        Make a bar chart per dataset with accuracy and standard error bars.
+#     # %%
+#     from pathlib import Path
+#     from typing import Any
 
-        Args:
-            all_results: mapping like all_results[dataset_name][lora_path] -> result dict
-                        where each result dict has keys like 'p', 'se', 'n', etc.
-            lora_paths_with_labels: maps lora_path (can be None) -> label to show on x-axis
-            save_dir: if set, figures are saved here as <dataset>.<file_format>
-            file_format: e.g. 'png' or 'pdf'
-            dpi: figure DPI when saving
-            as_percentage: show accuracy in percent if True, else 0-1
-            annotate: write value above each bar
+#     import matplotlib.pyplot as plt
 
-        Returns:
-            List of saved file paths (empty if not saving).
-        """
-        if save_dir is not None:
-            save_dir = Path(save_dir)
-            save_dir.mkdir(parents=True, exist_ok=True)
+#     def plot_classification_results(
+#         all_results: dict[str, dict[str | None, dict[str, Any]]],
+#         lora_paths_with_labels: dict[str | None, str],
+#         *,
+#         save_dir: str | Path | None = None,
+#         file_format: str = "png",
+#         dpi: int = 150,
+#         as_percentage: bool = True,
+#         annotate: bool = True,
+#     ) -> list[Path]:
+#         """
+#         Make a bar chart per dataset with accuracy and standard error bars.
 
-        def _slugify(s: str) -> str:
-            return "".join(c if c.isalnum() or c in ("-", "_", ".") else "_" for c in s)
+#         Args:
+#             all_results: mapping like all_results[dataset_name][lora_path] -> result dict
+#                         where each result dict has keys like 'p', 'se', 'n', etc.
+#             lora_paths_with_labels: maps lora_path (can be None) -> label to show on x-axis
+#             save_dir: if set, figures are saved here as <dataset>.<file_format>
+#             file_format: e.g. 'png' or 'pdf'
+#             dpi: figure DPI when saving
+#             as_percentage: show accuracy in percent if True, else 0-1
+#             annotate: write value above each bar
 
-        saved: list[Path] = []
+#         Returns:
+#             List of saved file paths (empty if not saving).
+#         """
+#         if save_dir is not None:
+#             save_dir = Path(save_dir)
+#             save_dir.mkdir(parents=True, exist_ok=True)
 
-        for dataset_name, per_model in all_results.items():
-            # Respect the order given in lora_paths_with_labels, but drop missing entries
-            order = [lp for lp in lora_paths_with_labels.keys() if lp in per_model]
-            if not order:
-                continue
+#         def _slugify(s: str) -> str:
+#             return "".join(c if c.isalnum() or c in ("-", "_", ".") else "_" for c in s)
 
-            vals: list[float] = []
-            errs: list[float] = []
-            labels: list[str] = []
-            ns: list[int | None] = []
+#         saved: list[Path] = []
 
-            for lp in order:
-                res = per_model[lp]
-                # Prefer provided p and se; fall back if needed
-                p = res.get("p")
-                if p is None and "correct" in res and "n" in res and res["n"]:
-                    p = res["correct"] / res["n"]
-                if p is None:
-                    raise ValueError(f"Missing accuracy for {dataset_name} / {lp}")
+#         for dataset_name, per_model in all_results.items():
+#             # Respect the order given in lora_paths_with_labels, but drop missing entries
+#             order = [lp for lp in lora_paths_with_labels.keys() if lp in per_model]
+#             if not order:
+#                 continue
 
-                se = res.get("se")
-                if se is None and "ci_lower" in res and "ci_upper" in res:
-                    # Infer SE from a 95% CI if provided
-                    se = (res["ci_upper"] - res["ci_lower"]) / (2 * 1.96)
-                if se is None:
-                    se = 0.0
+#             vals: list[float] = []
+#             errs: list[float] = []
+#             labels: list[str] = []
+#             ns: list[int | None] = []
 
-                n = res.get("n")
+#             for lp in order:
+#                 res = per_model[lp]
+#                 # Prefer provided p and se; fall back if needed
+#                 p = res.get("p")
+#                 if p is None and "correct" in res and "n" in res and res["n"]:
+#                     p = res["correct"] / res["n"]
+#                 if p is None:
+#                     raise ValueError(f"Missing accuracy for {dataset_name} / {lp}")
 
-                if as_percentage:
-                    vals.append(p * 100.0)
-                    errs.append(se * 100.0)
-                else:
-                    vals.append(float(p))
-                    errs.append(float(se))
+#                 se = res.get("se")
+#                 if se is None and "ci_lower" in res and "ci_upper" in res:
+#                     # Infer SE from a 95% CI if provided
+#                     se = (res["ci_upper"] - res["ci_lower"]) / (2 * 1.96)
+#                 if se is None:
+#                     se = 0.0
 
-                labels.append(lora_paths_with_labels[lp])
-                ns.append(n)
+#                 n = res.get("n")
 
-            # One figure per dataset
-            fig = plt.figure(figsize=(6.5, 4.2))
-            ax = plt.gca()
+#                 if as_percentage:
+#                     vals.append(p * 100.0)
+#                     errs.append(se * 100.0)
+#                 else:
+#                     vals.append(float(p))
+#                     errs.append(float(se))
 
-            x = list(range(len(order)))
-            bars = ax.bar(x, vals, yerr=errs, capsize=4)
+#                 labels.append(lora_paths_with_labels[lp])
+#                 ns.append(n)
 
-            xticklabels = [f"{lab}\n(n={n})" if n is not None else lab for lab, n in zip(labels, ns)]
-            ax.set_xticks(x, xticklabels, rotation=0)
+#             # One figure per dataset
+#             fig = plt.figure(figsize=(6.5, 4.2))
+#             ax = plt.gca()
 
-            ax.set_ylabel("Accuracy (%)" if as_percentage else "Accuracy")
-            ax.set_title(dataset_name)
-            ax.set_ylim(0, 100 if as_percentage else 1.0)
-            ax.yaxis.grid(True, linestyle="--", alpha=0.4)
+#             x = list(range(len(order)))
+#             bars = ax.bar(x, vals, yerr=errs, capsize=4)
 
-            if annotate:
-                for b, v in zip(bars, vals):
-                    ax.text(
-                        b.get_x() + b.get_width() / 2.0,
-                        v,
-                        f"{v:.1f}" + ("%" if as_percentage else ""),
-                        ha="center",
-                        va="bottom",
-                        fontsize=9,
-                    )
+#             xticklabels = [f"{lab}\n(n={n})" if n is not None else lab for lab, n in zip(labels, ns)]
+#             ax.set_xticks(x, xticklabels, rotation=0)
 
-            fig.tight_layout()
+#             ax.set_ylabel("Accuracy (%)" if as_percentage else "Accuracy")
+#             ax.set_title(dataset_name)
+#             ax.set_ylim(0, 100 if as_percentage else 1.0)
+#             ax.yaxis.grid(True, linestyle="--", alpha=0.4)
 
-            if save_dir is not None:
-                out_path = save_dir / f"{_slugify(dataset_name)}.{file_format}"
-                fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
-                saved.append(out_path)
+#             if annotate:
+#                 for b, v in zip(bars, vals):
+#                     ax.text(
+#                         b.get_x() + b.get_width() / 2.0,
+#                         v,
+#                         f"{v:.1f}" + ("%" if as_percentage else ""),
+#                         ha="center",
+#                         va="bottom",
+#                         fontsize=9,
+#                     )
 
-            plt.show()
-            plt.close(fig)
+#             fig.tight_layout()
 
-        return saved
+#             if save_dir is not None:
+#                 out_path = save_dir / f"{_slugify(dataset_name)}.{file_format}"
+#                 fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
+#                 saved.append(out_path)
 
-    plot_classification_results(all_results, lora_paths_with_labels, save_dir=None)
+#             plt.show()
+#             plt.close(fig)
 
-    # %%
+#         return saved
+
+#     plot_classification_results(all_results, lora_paths_with_labels, save_dir=None)
+
+#     # %%

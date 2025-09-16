@@ -20,6 +20,10 @@ class SelfInterpTrainingConfig:
     classification_train_datasets: list[str] = field(default_factory=list)
     classification_eval_datasets: list[str] = field(default_factory=list)
     additional_train_dataset_filenames: list[str] = field(default_factory=list)
+    train_dataset_loaders: list[Any] = field(
+        default_factory=list
+    )  # TODO: do this better, serialize dataset loaders somehow?
+    eval_dataset_loaders: list[Any] = field(default_factory=list)
     use_decoder_vectors: bool = True
     generation_kwargs: dict[str, Any] = field(
         default_factory=lambda: {"do_sample": True, "temperature": 1.0, "max_new_tokens": 300}
