@@ -167,7 +167,7 @@ cfg = lightweight_sft.SelfInterpTrainingConfig(
 
 layer_percent = 50
 
-eval_detection_data_file = f"data/qwen_hard_negatives_50000_50500_layer_percent_{layer_percent}.jsonl"
+eval_detection_data_file = f"data/qwen_hard_negatives_50000_50600_layer_percent_{layer_percent}.jsonl"
 
 eval_sae_ids = list(range(50_000, 50_000 + 500))
 
@@ -200,10 +200,12 @@ model = load_model(model_name, dtype)
 # lora_path = "checkpoints_simple/step_1000"
 # lora_path = "checkpoints_simple_layer_9/final"
 
-lora_path = "adamkarvonen/checkpoints_multiple_datasets_layer_1_decoder"
+# lora_path = "adamkarvonen/checkpoints_multiple_datasets_layer_1_decoder"
 # lora_path = "thejaminator/12sep_grp16_1e5_lr-step-60"
 # lora_path = "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed"
 
+# lora_path = "thejaminator/5e6_lr_14sep_bigger_batch-step-120"
+lora_path = "thejaminator/5e6_lr_14sep_bigger_batch_step_187"
 adapter_name = lora_path
 
 model.load_adapter(lora_path, adapter_name=adapter_name, is_trainable=False, low_cpu_mem_usage=True)
@@ -278,6 +280,7 @@ detection_config = eval_detection_v2.InferenceConfig(
     # model="gpt-5-nano-2025-08-07",
     max_completion_tokens=10_000,
     reasoning_effort="minimal",  # seems good enough
+    # reasoning_effort="low",
     # reasoning_effort="medium",
     temperature=1.0,
 )
