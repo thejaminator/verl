@@ -1,9 +1,10 @@
 import datetime
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from huggingface_hub import login, whoami
 
+from nl_probes.dataset_classes.act_dataset_manager import ActDatasetLoader, DatasetLoaderConfig
 from nl_probes.utils.common import layer_percent_to_layer
 
 
@@ -16,26 +17,13 @@ class SelfInterpTrainingConfig:
     act_layers: list[int] = field(default_factory=list)  # derived if empty
 
     # --- Data / experiment ---
-    sae_sft_datasets: list[str] = field(default_factory=list)  # pass in or compute outside
-    classification_train_datasets: list[str] = field(default_factory=list)
-    classification_eval_datasets: list[str] = field(default_factory=list)
-    additional_train_dataset_filenames: list[str] = field(default_factory=list)
-    train_dataset_loaders: list[Any] = field(
-        default_factory=list
-    )  # TODO: do this better, serialize dataset loaders somehow?
-    eval_dataset_loaders: list[Any] = field(default_factory=list)
+    dataset_configs: list[dict] = field(default_factory=list)
     use_decoder_vectors: bool = True
     generation_kwargs: dict[str, Any] = field(
         default_factory=lambda: {"do_sample": True, "temperature": 1.0, "max_new_tokens": 300}
     )
     steering_coefficient: float = 2.0
-    min_act_collect_offset: int = -2
-    max_act_collect_offset: int = -5
-    max_sae_sft_examples: int = 50_000
-    max_classification_examples: int = 10_000
-    test_set_size_per_ds: int = 25
     dataset_folder: str = "sft_training_data"
-    num_qa_per_sample: int = 3
 
     # --- Batching ---
     train_batch_size: int = 16
@@ -77,7 +65,8 @@ class SelfInterpTrainingConfig:
     # --- Misc experiment options ---
     positive_negative_examples: bool = False
 
-    def finalize(self) -> "SelfInterpTrainingConfig":
+    def finalize(self, dataset_loaders: list[ActDatasetLoader]) -> "SelfInterpTrainingConfig":
+        self.dataset_configs = [asdict(dataset_loader.dataset_config) for dataset_loader in dataset_loaders]
         # act_layers from percents if caller did not set them directly
         if not self.act_layers:
             self.act_layers = [layer_percent_to_layer(self.model_name, p) for p in self.layer_percents]

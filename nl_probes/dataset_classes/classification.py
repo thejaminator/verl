@@ -47,12 +47,6 @@ class ClassificationDatasetLoader(ActDatasetLoader):
     ):
         super().__init__(dataset_config)
 
-        assert self.dataset_config.splits == ["train", "test"], (
-            "Classification dataset must include train and test splits"
-        )
-        assert self.dataset_config.num_test > 0, "Classification dataset must include test split"
-        assert self.dataset_config.num_train > 0, "Classification dataset must include train split"
-
         self.dataset_params: ClassificationDatasetConfig = dataset_config.custom_dataset_params
 
         assert self.dataset_config.dataset_name == "", "Classification dataset name gets overridden here"
@@ -76,45 +70,31 @@ class ClassificationDatasetLoader(ActDatasetLoader):
             self.dataset_config.num_test,
             self.dataset_config.seed,
         )
-        training_data = create_vector_dataset(
-            train_datapoints,
-            tokenizer,
-            model,
-            self.dataset_params.batch_size,
-            self.act_layers,
-            self.dataset_params.min_offset,
-            self.dataset_params.max_offset,
-        )
-        test_data = create_vector_dataset(
-            test_datapoints,
-            tokenizer,
-            model,
-            self.dataset_params.batch_size,
-            self.act_layers,
-            self.dataset_params.min_offset,
-            self.dataset_params.max_offset,
-        )
 
-        train_filename = self.get_dataset_filename("train")
-        test_filename = self.get_dataset_filename("test")
-        train_path = os.path.join(self.dataset_config.dataset_folder, train_filename)
-        test_path = os.path.join(self.dataset_config.dataset_folder, test_filename)
-        torch.save(
-            {
-                "config": asdict(self.dataset_config),
-                "data": [dp.model_dump() for dp in training_data],
-            },
-            train_path,
-        )
-        torch.save(
-            {
-                "config": asdict(self.dataset_config),
-                "data": [dp.model_dump() for dp in test_data],
-            },
-            test_path,
-        )
-        print(f"Saved {len(training_data)} datapoints to {train_path}")
-        print(f"Saved {len(test_data)} datapoints to {test_path}")
+        for split in self.dataset_config.splits:
+            if split == "train":
+                datapoints = train_datapoints
+            else:
+                datapoints = test_datapoints
+            data = create_vector_dataset(
+                datapoints,
+                tokenizer,
+                model,
+                self.dataset_params.batch_size,
+                self.act_layers,
+                self.dataset_params.min_offset,
+                self.dataset_params.max_offset,
+            )
+            data_filename = self.get_dataset_filename(split)
+            data_path = os.path.join(self.dataset_config.dataset_folder, data_filename)
+            torch.save(
+                {
+                    "config": asdict(self.dataset_config),
+                    "data": [dp.model_dump() for dp in data],
+                },
+                data_path,
+            )
+            print(f"Saved {len(data)} {split} datapoints to {data_path}")
 
 
 class ClassificationDatapoint(BaseModel):

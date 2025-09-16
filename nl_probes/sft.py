@@ -628,9 +628,7 @@ def length_grouped_reorder(
 
 def build_datasets(
     cfg: SelfInterpTrainingConfig,
-    tokenizer: PreTrainedTokenizer,
-    device: torch.device,
-    dtype: torch.dtype,
+    dataset_loaders: list[ActDatasetLoader],
     max_len_percentile: float | None = 0.999,
     window_mult: int | None = 20,
 ) -> tuple[list[TrainingDataPoint], list[TrainingDataPoint]]:
@@ -639,12 +637,11 @@ def build_datasets(
     # eval data will only be for classification datasets
     all_eval_data: dict[str, list[TrainingDataPoint]] = {}
 
-    for train_dataset_loader in cfg.train_dataset_loaders:
-        all_training_data.extend(train_dataset_loader.load_dataset("train"))
-    for eval_dataset_loader in cfg.eval_dataset_loaders:
-        all_eval_data[eval_dataset_loader.dataset_params.classification_dataset_name] = (
-            eval_dataset_loader.load_dataset("test")
-        )
+    for dataset_loader in dataset_loaders:
+        if "train" in dataset_loader.dataset_config.splits:
+            all_training_data.extend(dataset_loader.load_dataset("train"))
+        if "test" in dataset_loader.dataset_config.splits:
+            all_eval_data[dataset_loader.dataset_config.dataset_name] = dataset_loader.load_dataset("test")
 
     p = max_len_percentile
     if p is not None:
@@ -674,42 +671,23 @@ def build_datasets(
 
 if __name__ == "__main__":
     main_train_size = 6000
-    classification_datasets_train_sizes = {
-        "geometry_of_truth": main_train_size,
-        "relations": main_train_size,
-        "sst2": main_train_size,
-        "md_gender": main_train_size,
-        "snli": main_train_size,
-        "ag_news": main_train_size,
-        "ner": main_train_size,
-        "tense": main_train_size,
-        "language_identification": main_train_size,
-        "singular_plural": 10,  # very small dataset
+    main_test_size = 250
+    classification_datasets_ = {
+        "geometry_of_truth": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "relations": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "sst2": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "md_gender": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "snli": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "ag_news": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["test"]},
+        "ner": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "tense": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "language_identification": {
+            "num_train": main_train_size,
+            "num_test": main_test_size,
+            "splits": ["test"],
+        },
+        "singular_plural": {"num_train": 0, "num_test": main_test_size, "splits": ["test"]},
     }
-    classification_eval_datasets = [
-        "geometry_of_truth",
-        "relations",
-        "sst2",
-        "md_gender",
-        "snli",
-        "ag_news",
-        "ner",
-        "tense",
-        "language_identification",
-        "singular_plural",
-    ]
-    classification_train_datasets = [
-        "geometry_of_truth",
-        "relations",
-        "sst2",
-        "md_gender",
-        "snli",
-        # "ag_news",
-        "ner",
-        "tense",
-        # "language_identification",
-        # "singular_plural",
-    ]
 
     hook_layer = 1
     model_name = "Qwen/Qwen3-8B"
@@ -720,10 +698,9 @@ if __name__ == "__main__":
 
     layer_percents = [25, 50, 75]
 
-    train_dataset_loaders = []
-    eval_dataset_loaders = []
     sft_data_folder = "sft_training_data"
-    seed = 42
+
+    dataset_loaders = []
 
     dataset_config = DatasetLoaderConfig(
         custom_dataset_params=PastLensDatasetConfig(),
@@ -738,19 +715,18 @@ if __name__ == "__main__":
     past_lens_dataset_loader = PastLensDatasetLoader(
         dataset_config=dataset_config,
     )
+    dataset_loaders.append(past_lens_dataset_loader)
 
-    train_dataset_loaders.append(past_lens_dataset_loader)
-
-    for dataset_name in classification_datasets_train_sizes.keys():
+    for dataset_name in classification_datasets_.keys():
         classification_config = ClassificationDatasetConfig(
             classification_dataset_name=dataset_name,
         )
 
         dataset_config = DatasetLoaderConfig(
             custom_dataset_params=classification_config,
-            num_train=classification_datasets_train_sizes[dataset_name],
-            num_test=250,
-            splits=["train", "test"],
+            num_train=classification_datasets_[dataset_name]["num_train"],
+            num_test=classification_datasets_[dataset_name]["num_test"],
+            splits=classification_datasets_[dataset_name]["splits"],
             model_name=model_name,
             layer_percents=layer_percents,
             save_acts=True,
@@ -759,23 +735,19 @@ if __name__ == "__main__":
         classification_dataset_loader = ClassificationDatasetLoader(
             dataset_config=dataset_config,
         )
-
-        if dataset_name in classification_train_datasets:
-            train_dataset_loaders.append(classification_dataset_loader)
-
-        if dataset_name in classification_eval_datasets:
-            eval_dataset_loaders.append(classification_dataset_loader)
+        dataset_loaders.append(classification_dataset_loader)
 
     iterations = [
         {
             "load_lora_path": None,
-            "train_dataset_loaders": train_dataset_loaders,
-            "eval_dataset_loaders": eval_dataset_loaders,
+            "dataset_loaders": dataset_loaders,
             "wandb_suffix": "_act_pretrain",
         },
     ]
 
     for hyperparam_override in iterations:
+        loop_dataset_loaders = hyperparam_override.pop("dataset_loaders")
+
         cfg = SelfInterpTrainingConfig(
             model_name=model_name,
             hook_onto_layer=hook_layer,
@@ -789,13 +761,15 @@ if __name__ == "__main__":
             **hyperparam_override,
         )
 
-        cfg.finalize()
+        cfg.finalize(dataset_loaders=loop_dataset_loaders)
 
         print(f"save dir: {cfg.save_dir}")
 
         tokenizer = load_tokenizer(cfg.model_name)
 
-        all_training_data, all_eval_data = build_datasets(cfg, tokenizer, device, dtype, window_mult=cfg.window_mult)
+        all_training_data, all_eval_data = build_datasets(
+            cfg, dataset_loaders=loop_dataset_loaders, window_mult=cfg.window_mult
+        )
 
         # for debugging
         # all_training_data = all_training_data[:1000]
