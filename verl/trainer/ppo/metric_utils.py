@@ -480,7 +480,11 @@ def process_validation_metrics(
     return data_src2var2metric2val
 
 
-def log_reward_manager_table(batch: DataProto, step: int, existing_table: Any | None = None) -> Any | None:
+def log_reward_manager_table(
+    table_data_list: list[dict],
+    step: int,
+    existing_table: Any | None = None,
+) -> None:
     """
     Log reward manager table data to wandb, appending to existing table if provided.
 
@@ -492,17 +496,8 @@ def log_reward_manager_table(batch: DataProto, step: int, existing_table: Any | 
     Returns:
         Updated wandb.Table with new data appended, or None if no data to log
     """
-    if not wandb.run:
-        return existing_table
-
-    if "table_data" not in batch.non_tensor_batch:
-        print("No table data to log")
-        return existing_table
-    else:
-        print(f"Logging table data")
 
     # Extract table data from batch (list of individual row dictionaries)
-    table_data_list = batch.non_tensor_batch["table_data"]
 
     first_row = table_data_list[0]
     table_keys = list(first_row.keys())
@@ -522,5 +517,3 @@ def log_reward_manager_table(batch: DataProto, step: int, existing_table: Any | 
 
     # Log the updated table
     wandb.log({"rollouts": rollouts_table}, step=step)
-
-    return rollouts_table

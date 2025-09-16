@@ -18,6 +18,7 @@ PPO Trainer with Ray-based single controller.
 This trainer supports model-agonistic model initialization with huggingface
 """
 
+import copy
 import json
 import os
 import uuid
@@ -52,7 +53,7 @@ from verl.trainer.ppo.metric_utils import (
     compute_timing_metrics,
     process_validation_metrics,
 )
-from verl.trainer.ppo.reward import compute_reward, compute_reward_async
+from verl.trainer.ppo.reward import compute_reward
 from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path, should_save_ckpt_esi
 from verl.utils.config import omega_conf_to_dataclass
 from verl.utils.debug import marked_timer
@@ -214,12 +215,23 @@ def compute_response_mask(data: DataProto):
 DISCARD_THRESHOLD = 0.2  # if max - min < DISCARD_THRESHOLD, discard the group
 
 
+@dataclass
+class DiscardResult:
+    post_data: DataProto
+    post_reward_tensor: torch.Tensor
+    post_extra_infos_dict: dict[str, list]
+    metrics: dict[str, float]
+    discard_flags: list[bool]
+    keep_indices: list[int]
+    table_data_to_be_logged: list[dict]
+
+
 def discard_same_reward_groups(
     data: DataProto,
     reward_tensor: torch.Tensor,
+    reward_extra_infos_dict: dict[str, list],
     uid_key: str = "uid",
-    reward_extra_infos_dict: dict[str, list] | None = None,
-) -> tuple[DataProto, torch.Tensor, dict[str, list], dict[str, float]]:
+) -> DiscardResult:
     """
     Discard groups whose rewards are all identical.
 
@@ -271,6 +283,7 @@ def discard_same_reward_groups(
     keep_indices: list[int] = []
     num_discarded_groups = 0
     num_discarded_samples = 0
+    discard_flags: list[bool] = [False] * bsz
 
     for uid, idx_list in id_to_indices.items():
         scores_tensor = torch.stack(id_to_scores[uid]) if len(idx_list) > 0 else None
@@ -279,30 +292,38 @@ def discard_same_reward_groups(
             if group_range.item() < DISCARD_THRESHOLD:
                 num_discarded_groups += 1
                 num_discarded_samples += len(idx_list)
+                for idx in idx_list:
+                    discard_flags[idx] = True
                 continue
         keep_indices.extend(idx_list)
 
-    if len(keep_indices) == bsz:
-        metrics = {
-            "training/discard_groups/num_groups": 0,
-            "training/discard_groups/num_samples": 0,
-            "critic/score/mean_incl_disc": mean_score_including_discard,
-            "critic/score/max_vs_average_gap_incl_disc": score_max_vs_avg_gap_including_discard,
-        }
-        return data, reward_tensor, reward_extra_infos_dict, metrics
+    # Build table rows to be logged (do not mutate data)
+    assert reward_extra_infos_dict is not None, "reward_extra_infos_dict must be provided"
+    assert "table_data" in reward_extra_infos_dict, "table_data must be provided in reward_extra_infos_dict"
+    table_data_list = reward_extra_infos_dict["table_data"]
+    output_list: list[dict] = []
+    assert isinstance(table_data_list, list), "table_data_list must be a list"
+    assert len(table_data_list) == bsz, "table_data_list must be of the same length as batch size"
+    for row, discarded in zip(table_data_list, discard_flags, strict=True):
+        new_row = dict(row)
+        new_row["discarded"] = bool(discarded)
+        output_list.append(new_row)
 
     keep_idx_tensor = torch.tensor(keep_indices, dtype=torch.long)
-    data.reorder(keep_idx_tensor)
-    reward_tensor = reward_tensor.index_select(0, keep_idx_tensor)
+    # copy
+    post_data = copy.copy(data)
+    post_data.reorder(keep_idx_tensor)
+    post_reward_tensor = reward_tensor.index_select(0, keep_idx_tensor)
 
-    if reward_extra_infos_dict:
+    post_extra_infos_dict = reward_extra_infos_dict
+    if post_extra_infos_dict:
         filtered_extra: dict[str, list] = {}
-        for k, v in reward_extra_infos_dict.items():
+        for k, v in post_extra_infos_dict.items():
             if len(v) == bsz:
                 filtered_extra[k] = [v[i] for i in keep_indices]
             else:
                 raise ValueError(f"Length of {k} is not equal to batch size {bsz}")
-        reward_extra_infos_dict = filtered_extra
+        post_extra_infos_dict = filtered_extra
 
     metrics = {
         "training/discard_groups/num_groups": num_discarded_groups,
@@ -310,9 +331,16 @@ def discard_same_reward_groups(
         "critic/score/mean_incl_disc": mean_score_including_discard,
         "critic/score/max_vs_average_gap_incl_disc": score_max_vs_avg_gap_including_discard,
     }
-    # print the number of discarded groups and samples
     print(f"Number of discarded groups: {num_discarded_groups}")
-    return data, reward_tensor, reward_extra_infos_dict, metrics
+    return DiscardResult(
+        post_data=post_data,
+        post_reward_tensor=post_reward_tensor,
+        post_extra_infos_dict=post_extra_infos_dict,
+        metrics=metrics,
+        discard_flags=discard_flags,
+        keep_indices=keep_indices,
+        table_data_to_be_logged=output_list,
+    )
 
 
 def compute_advantage(
@@ -1293,26 +1321,35 @@ class RayPPOTrainer:
                             batch = batch.union(reward_tensor)
 
                         if self.config.reward_model.launch_reward_fn_async:
-                            future_reward = compute_reward_async.remote(data=batch, reward_fn=self.reward_fn)
+                            assert False, "Async reward computation not supported for discard_same_reward_groups"
+                            # For simplicity here, assume sync reward computation
+                            reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
                         else:
                             reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
 
                     # Discard groups with identical rewards before recomputing log probs
                     with marked_timer("filter_same_reward_groups", timing_raw, color="yellow"):
                         if self.config.reward_model.launch_reward_fn_async:
-                            reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
-                        (
-                            batch,
-                            reward_tensor,
-                            reward_extra_infos_dict,
-                            discard_metrics,
-                        ) = discard_same_reward_groups(
+                            raise ValueError("Async reward computation not supported for discard_same_reward_groups")
+                        discard_result = discard_same_reward_groups(
                             data=batch,
                             reward_tensor=reward_tensor,
-                            uid_key="uid",
                             reward_extra_infos_dict=reward_extra_infos_dict,
+                            uid_key="uid",
                         )
-                        metrics.update(discard_metrics)
+                        # Replace running variables with post-discard outputs
+                        batch = discard_result.post_data
+                        reward_tensor = discard_result.post_reward_tensor
+                        reward_extra_infos_dict = discard_result.post_extra_infos_dict
+                        metrics.update(discard_result.metrics)
+
+                    from verl.trainer.ppo.metric_utils import log_reward_manager_table
+
+                    self.rollouts_table = log_reward_manager_table(
+                        step=self.global_steps,
+                        existing_table=self.rollouts_table,
+                        table_data_list=discard_result.table_data_to_be_logged,
+                    )
 
                     # recompute old_log_probs
                     with marked_timer("old_log_prob", timing_raw, color="blue"):
@@ -1518,13 +1555,6 @@ class RayPPOTrainer:
                 # this is experimental and may be changed/removed in the future in favor of a general-purpose one
                 if isinstance(self.train_dataloader.sampler, AbstractCurriculumSampler):
                     self.train_dataloader.sampler.update(batch=batch)
-
-                # Log reward manager table data to wandb
-                from verl.trainer.ppo.metric_utils import log_reward_manager_table
-
-                self.rollouts_table = log_reward_manager_table(
-                    batch=batch, step=self.global_steps, existing_table=self.rollouts_table
-                )
 
                 # TODO: make a canonical logger that supports various backend
                 logger.log(data=metrics, step=self.global_steps)
