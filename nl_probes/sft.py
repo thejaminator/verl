@@ -1,3 +1,23 @@
+"""
+Lightweight SAE Introspection Training Script
+
+This script trains a model to understand SAE (Sparse Autoencoder) features through introspection.
+
+Features:
+- Automatic Hugging Face login at script start
+- LoRA fine-tuning support
+- Automatic pushing of trained LoRA adapters to Hugging Face Hub after training
+- Configurable repository settings (public/private)
+
+Usage:
+    python lightweight_sft.py [explanations_file.jsonl]
+
+Before running:
+1. Make sure you're logged into Hugging Face: `huggingface-cli login`
+2. Update the hf_repo_id in the main() function to your desired repository name
+3. Ensure you have the required explanations JSONL file
+"""
+
 import os
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -27,16 +47,10 @@ from transformers.tokenization_utils import PreTrainedTokenizer
 
 import classification
 import wandb
-from create_hard_negatives_v2 import (
-    BaseSAE,
-    JumpReluSAE,
-    get_sae_info,
-    load_model,
-    load_sae,
-    load_tokenizer,
-)
 from detection_eval.detection_basemodels import SAEInfo
 from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prompt
+from nl_probes.sae import BaseSAE, JumpReluSAE, get_sae_info
+from nl_probes.utils.common import load_model, load_sae, load_tokenizer
 from sft_config import (
     BatchData,
     EvalStepResult,
@@ -526,6 +540,64 @@ def save_logs(
         json.dump(all_run_results, f, indent=2)
 
 
+# ==============================================================================
+
+
+# ==============================================================================
+# 8. INTROSPECTION UTILITIES
+# ==============================================================================
+
+
+def get_bos_eos_pad_mask(tokenizer: PreTrainedTokenizer, token_ids: torch.Tensor) -> torch.Tensor:
+    """Create mask for BOS, EOS, and PAD tokens"""
+    mask = torch.zeros_like(token_ids, dtype=torch.bool)
+
+    if tokenizer.bos_token_id is not None:
+        mask |= token_ids == tokenizer.bos_token_id
+    if tokenizer.eos_token_id is not None:
+        mask |= token_ids == tokenizer.eos_token_id
+    if tokenizer.pad_token_id is not None:
+        mask |= token_ids == tokenizer.pad_token_id
+
+    return mask
+
+
+def get_feature_activations(
+    model: AutoModelForCausalLM,
+    tokenizer: PreTrainedTokenizer,
+    submodule: torch.nn.Module,
+    sae: JumpReluSAE,
+    tokenized_strs: dict[str, torch.Tensor],
+    ignore_bos: bool = True,
+) -> torch.Tensor:
+    with torch.no_grad():
+        pos_acts_BLD = collect_activations(model, submodule, tokenized_strs)
+        encoded_pos_acts_BLF = sae.encode(pos_acts_BLD)
+
+    if ignore_bos:
+        bos_mask = tokenized_strs["input_ids"] == tokenizer.bos_token_id
+        # Note: I use >=, not ==, because occasionally prompts will contain a BOS token
+        assert bos_mask.sum() >= encoded_pos_acts_BLF.shape[0], (
+            f"Expected at least {encoded_pos_acts_BLF.shape[0]} BOS tokens, but found {bos_mask.sum()}"
+        )
+
+        mask = get_bos_eos_pad_mask(tokenizer, tokenized_strs["input_ids"])
+        encoded_pos_acts_BLF[mask] = 0
+
+    return encoded_pos_acts_BLF
+
+
+def has_active_lora(model: AutoModelForCausalLM) -> bool:
+    """
+    True ⇢ model is a PEFT/PeftModel object *and* at least one adapter is enabled.
+    """
+    return (
+        hasattr(model, "peft_config")  # it's a PeftModel
+        and bool(model.peft_config)  # at least one adapter is configured
+        and bool(getattr(model, "active_adapter", None))  # an adapter is currently selected
+    )
+
+
 def run_evaluation(
     cfg: SelfInterpTrainingConfig,
     eval_data: list[TrainingDataPoint],
@@ -964,12 +1036,12 @@ if __name__ == "__main__":
     ]
     classification_train_datasets = [
         "geometry_of_truth",
-        "relations",
-        "sst2",
-        "md_gender",
-        "snli",
+        # "relations",
+        # "sst2",
+        # "md_gender",
+        # "snli",
         # "ag_news",
-        "ner",
+        # "ner",
         "tense",
         # "language_identification",
         # "singular_plural",
@@ -1002,9 +1074,9 @@ if __name__ == "__main__":
 
     explanations_files = []
     additional_explanations_files = []
-    additional_explanations_files = [
-        "sft_training_data/past_lens_data_Qwen_Qwen3-8B_layers_9-18-27_num_datapoints_200000_min_k_3_max_k_20.pkl"
-    ]
+    # additional_explanations_files = [
+    # "sft_training_data/past_lens_data_Qwen_Qwen3-8B_layers_9-18-27_num_datapoints_200000_min_k_3_max_k_20.pkl"
+    # ]
 
     iterations = [
         # {"lr": 2e-5},
@@ -1021,12 +1093,12 @@ if __name__ == "__main__":
             "additional_train_dataset_filenames": additional_explanations_files,
             "wandb_suffix": "_act_pretrain",
         },
-        {
-            "load_lora_path": "checkpoints_act_pretrain/final",
-            "sae_sft_datasets": [],
-            "additional_train_dataset_filenames": [],
-            "wandb_suffix": "_act_pretrain_and_posttrain",
-        },
+        # {
+        #     "load_lora_path": "checkpoints_act_pretrain/final",
+        #     "sae_sft_datasets": [],
+        #     "additional_train_dataset_filenames": [],
+        #     "wandb_suffix": "_act_pretrain_and_posttrain",
+        # },
         # {
         # "load_lora_path": "checkpoints_no_sae_multiple_datasets_layer_1_larger_pretrain_min_act_collect_offset_-2_max_act_collect_offset_-5/final",
         # "num_epochs": 2,
