@@ -11,7 +11,7 @@ from transformers import AutoTokenizer
 
 import detection_eval.caller as caller
 from detection_eval.detection_basemodels import SAEInfo
-from detection_eval.steering_hooks import get_introspection_prefix, get_introspection_prompt
+from detection_eval.steering_hooks import EXPLANATION_PROMPT
 from nl_probes.configs.sft_config import SelfInterpTrainingConfig
 from nl_probes.sae import BaseSAE, get_sae_info, load_max_acts_data, load_sae
 from nl_probes.utils.common import load_tokenizer
@@ -75,18 +75,17 @@ def create_activating_sequences_data(
         context_length=32,
     )
 
-    prefix = get_introspection_prefix(sae_info.sae_layer)
-
     for feature_idx in tqdm(range(num_features), desc="Creating training data"):
         if use_decoder:
             vector = sae.W_dec[feature_idx].clone()
         else:
             vector = sae.W_enc[:, feature_idx].clone()
 
+        vector_1D = vector.unsqueeze(0)
+
         num_examples = random.randint(2, max_num_examples)
 
         prompt = TEMPLATES[random.randint(0, len(TEMPLATES) - 1)].format(k=num_examples)
-        prompt = f"{prefix}{prompt}"
 
         output = ""
 
@@ -110,8 +109,10 @@ def create_activating_sequences_data(
             create_training_datapoint(
                 prompt=prompt,
                 target_response=output,
+                layer=sae_info.sae_layer,
+                num_positions=1,
                 tokenizer=tokenizer,
-                acts_D=vector,
+                acts_BD=vector_1D,
                 feature_idx=feature_idx,
             )
         )
@@ -170,16 +171,6 @@ def parse_yes_no_qas(response: str) -> list[dict[str, str]] | None:
         return None
 
     return out
-
-
-def build_training_prompt(positive_negative_examples: bool, sae_layer: int) -> str:
-    """Build the training prompt for SAE explanations."""
-    if positive_negative_examples:
-        raise NotImplementedError("Not implemented")
-        question = f"""Can you explain to me the concept of what 'X' from layer {sae_layer} means? Give positive and negative examples of what the concept would activate on. Format your final answer with <explanation>."""
-    else:
-        question = get_introspection_prompt(sae_layer)
-    return question
 
 
 def create_yes_no_data(
@@ -276,7 +267,6 @@ Please generate four Yes / No questions, and try have some variety in the phrasi
 
     training_data = []
 
-    prefix = get_introspection_prefix(sae_info.sae_layer)
     tokenizer = load_tokenizer(model_name)
 
     incorrect_count = 0
@@ -288,6 +278,8 @@ Please generate four Yes / No questions, and try have some variety in the phrasi
             vector = sae.W_dec[feature_idx].clone()
         else:
             vector = sae.W_enc[:, feature_idx].clone()
+
+        vector_1D = vector.unsqueeze(0)
 
         if verbose:
             print(f"feature_idx: {feature_idx}")
@@ -301,12 +293,14 @@ Please generate four Yes / No questions, and try have some variety in the phrasi
             continue
 
         for qa in qas:
-            question_prompt = f"{prefix}Answer with 'Yes' or 'No' only. {qa['question']}"
+            question_prompt = f"Answer with 'Yes' or 'No' only. {qa['question']}"
             training_datapoint = create_training_datapoint(
                 prompt=question_prompt,
                 target_response=qa["answer"],
+                layer=sae_info.sae_layer,
+                num_positions=1,
                 tokenizer=tokenizer,
-                acts_D=vector,
+                acts_BD=vector_1D,
                 feature_idx=feature_idx,
             )
 
@@ -329,6 +323,7 @@ Please generate four Yes / No questions, and try have some variety in the phrasi
 def construct_train_dataset(
     cfg: SelfInterpTrainingConfig,
     dataset_size: int,
+    layer: int,
     input_prompt: str,
     training_examples: list[TrainingExample],
     sae: BaseSAE,
@@ -347,11 +342,15 @@ def construct_train_dataset(
         else:
             feature_vector = sae.W_enc[:, target_feature_idx].clone()
 
+        feature_vector_1D = feature_vector.unsqueeze(0)
+
         training_data_point = create_training_datapoint(
             prompt=input_prompt,
             target_response=target_response,
+            layer=layer,
+            num_positions=1,
             tokenizer=tokenizer,
-            acts_D=feature_vector,
+            acts_BD=feature_vector_1D,
             feature_idx=target_feature_idx,
         )
 
@@ -472,16 +471,15 @@ def load_sae_data_from_sft_data_file(
     print(f"train examples: {len(training_examples)}")
     print(f"Train features: {len(train_features)}")
 
-    train_eval_prompt = build_training_prompt(cfg.positive_negative_examples, sae_info.sae_layer)
-
     training_data: list[TrainingDataPoint] = construct_train_dataset(
         cfg,
         len(training_examples),
         # dataset_size,
-        train_eval_prompt,
-        training_examples,
-        sae,
-        tokenizer,
+        layer=sae_info.sae_layer,
+        input_prompt=EXPLANATION_PROMPT,
+        training_examples=training_examples,
+        sae=sae,
+        tokenizer=tokenizer,
     )
 
     return training_data, sae_info

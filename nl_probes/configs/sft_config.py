@@ -4,6 +4,8 @@ from typing import Any
 
 from huggingface_hub import login, whoami
 
+from nl_probes.utils.common import layer_percent_to_layer
+
 
 @dataclass
 class SelfInterpTrainingConfig:
@@ -90,15 +92,6 @@ class SelfInterpTrainingConfig:
         if self.hf_push_to_hub and not self.hf_repo_id:
             self.hf_repo_id = get_hf_repo_id(self.hf_repo_name)
         return self
-
-
-def layer_percent_to_layer(model_name: str, layer_percent: int) -> int:
-    """Convert a layer percent to a layer number."""
-    if model_name == "Qwen/Qwen3-8B":
-        max_layers = 36
-        return int(max_layers * (layer_percent / 100))
-    else:
-        raise ValueError(f"Unknown model name: {model_name}")
 
 
 def get_hf_repo_id(hf_repo_name: str) -> str:

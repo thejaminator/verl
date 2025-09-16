@@ -13,9 +13,8 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from detection_eval.steering_hooks import get_introspection_prefix
-from nl_probes.configs.sft_config import layer_percent_to_layer
 from nl_probes.utils.activation_utils import collect_activations_multiple_layers, get_hf_submodule
-from nl_probes.utils.common import load_model
+from nl_probes.utils.common import layer_percent_to_layer, load_model
 from nl_probes.utils.dataset_utils import (
     TrainingDataPoint,
     create_training_datapoint,
@@ -219,16 +218,23 @@ def collect_past_lens_acts(
 
                 # Get the activation at the selected position
                 selected_act = acts_LD[selected_idx]  # Shape: [D]
+                selected_act_1D = selected_act.unsqueeze(0)  # (1, D)
 
                 past_tokens = input_ids_L[selected_idx - k : selected_idx]
 
                 past_text = tokenizer.decode(past_tokens)
 
-                prompt = (
-                    f"{get_introspection_prefix(layer)}Can you predict the previous {k} tokens that came before this?"
-                )
+                prompt = f"Can you predict the previous {k} tokens that came before this?"
 
-                training_data_point = create_training_datapoint(prompt, past_text, tokenizer, selected_act, -1)
+                training_data_point = create_training_datapoint(
+                    prompt=prompt,
+                    target_response=past_text,
+                    layer=layer,
+                    num_positions=1,
+                    tokenizer=tokenizer,
+                    acts_BD=selected_act_1D,
+                    feature_idx=-1,
+                )
                 training_data.append(training_data_point)
 
     with open(save_filename, "wb") as f:

@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from transformers import AutoTokenizer
 
 from detection_eval.detection_basemodels import SAEInfo
+from detection_eval.steering_hooks import SPECIAL_TOKEN, get_introspection_prefix
 
 
 class SAEExplained(BaseModel):
@@ -94,7 +95,8 @@ class TrainingDataPoint(BaseModel):
 
     input_ids: list[int]
     labels: list[int]  # Can contain -100 for ignored tokens
-    steering_vectors: list[torch.Tensor]
+    layer: int
+    steering_vectors: torch.Tensor | None
     positions: list[int]
     feature_idx: int
     target_output: str
@@ -103,8 +105,8 @@ class TrainingDataPoint(BaseModel):
     @classmethod
     def _len_match(cls, pos, info):
         # Ensure positions and steering_vectors align
-        sv = info.data.get("steering_vectors", [])
-        if sv and len(pos) != len(sv):
+        sv = info.data.get("steering_vectors", None)
+        if sv is not None and len(pos) != sv.shape[0]:
             raise ValueError("positions and steering_vectors must have the same length")
         return pos
 
@@ -177,32 +179,44 @@ def construct_batch(
     )
 
 
-def find_pattern_in_tokens(token_ids: list[int], pattern: str, tokenizer: AutoTokenizer) -> int | None:
-    """
-    Find the starting position of a pattern in a list of token IDs.
-
-    Returns the index of the first token of the pattern, or None if not found.
-    """
+def find_pattern_in_tokens(
+    token_ids: list[int], special_token_str: str, num_positions: int, tokenizer: AutoTokenizer
+) -> int:
     start_idx = 0
     end_idx = len(token_ids)
-
-    x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
+    special_token_id = tokenizer.encode(special_token_str, add_special_tokens=False)[0]
+    positions = []
 
     for i in range(start_idx, end_idx):
-        if token_ids[i] == x_token_id:
-            surrounding_tokens = token_ids[i - 2 : i + 2]
-            surrounding_text = tokenizer.decode(surrounding_tokens)
-            assert pattern in surrounding_text, (
-                f"Expected pattern {pattern} in {surrounding_text}, got {surrounding_text}"
-            )
-            return i
+        if len(positions) == num_positions:
+            break
+        if token_ids[i] == special_token_id:
+            positions.append(i)
 
-    return None
+    assert len(positions) == num_positions, f"Expected {num_positions} positions, got {len(positions)}"
+    assert positions[-1] - positions[0] == num_positions - 1, f"Positions are not consecutive: {positions}"
+
+    final_pos = positions[-1] + 1
+    final_tokens = token_ids[final_pos : final_pos + 2]
+    final_str = tokenizer.decode(final_tokens, skip_special_tokens=False)
+    assert "\n" in final_str, f"Expected newline in {final_str}"
+
+    return positions
 
 
 def create_training_datapoint(
-    prompt: str, target_response: str, tokenizer: AutoTokenizer, acts_D: torch.Tensor, feature_idx: int
+    prompt: str,
+    target_response: str,
+    layer: int,
+    num_positions: int,
+    tokenizer: AutoTokenizer,
+    acts_BD: torch.Tensor,
+    feature_idx: int,
 ) -> TrainingDataPoint:
+    assert len(acts_BD.shape) == 2, f"Expected 2D tensor, got {acts_BD.shape}"
+    prefix = get_introspection_prefix(layer, num_positions)
+    assert prefix not in prompt, f"Prefix {prefix} found in prompt {prompt}"
+    prompt = prefix + prompt
     input_messages = [{"role": "user", "content": prompt}]
 
     input_prompt_ids = tokenizer.apply_chat_template(
@@ -235,18 +249,15 @@ def create_training_datapoint(
     for i in range(assistant_start_idx):
         labels[i] = -100
 
-    position = find_pattern_in_tokens(full_prompt_ids, "<<X>>", tokenizer)
-    if position is None:
-        print(f"Warning! Expected exactly one X token, got {position}, classification prompt: {prompt}")
-        raise ValueError("Expected exactly one X token")
-    # May want to support multiple X tokens in the future
-    positions = [position]
-    steering_vectors = [acts_D.cpu().clone().detach()]
+    positions = find_pattern_in_tokens(full_prompt_ids, SPECIAL_TOKEN, num_positions, tokenizer)
+    acts_BD = acts_BD.cpu().clone().detach()
+    assert len(positions) == acts_BD.shape[0], f"Expected {acts_BD.shape[0]} positions, got {len(positions)}"
 
     training_data_point = TrainingDataPoint(
         input_ids=full_prompt_ids,
         labels=labels,
-        steering_vectors=steering_vectors,
+        layer=layer,
+        steering_vectors=acts_BD,
         positions=positions,
         feature_idx=feature_idx,
         target_output=target_response,

@@ -1,4 +1,5 @@
 import torch
+from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 
@@ -114,3 +115,12 @@ def assert_no_peft_present(model, check_for_active_adapter_only=False):
     assert not active_adapters, (
         f"PEFT check failed! Found active adapters: {active_adapters}. Model should be running in base mode."
     )
+
+
+def layer_percent_to_layer(model_name: str, layer_percent: int) -> int:
+    """Convert a layer percent to a layer number."""
+    if model_name == "Qwen/Qwen3-8B":
+        max_layers = 36
+        return int(max_layers * (layer_percent / 100))
+    else:
+        raise ValueError(f"Unknown model name: {model_name}")

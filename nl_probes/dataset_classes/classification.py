@@ -133,12 +133,19 @@ def create_vector_dataset(
                 offset = random.randint(0, L - 1)
                 # clone and detach to avoid saving with pickle issues
                 acts_D = acts_BLD[j, offset, :].clone().detach()
+                acts_1D = acts_D.unsqueeze(0)
                 # assert tokenized_prompts["input_ids"][j][offset + 1] == tokenizer.eos_token_id
                 if debug_print:
                     view_tokens(tokenized_prompts["input_ids"][j], tokenizer, offset)
-                classification_prompt = f"{get_introspection_prefix(layer)}{batch_datapoints[j].classification_prompt}"
+                classification_prompt = f"{batch_datapoints[j].classification_prompt}"
                 training_data_point = create_training_datapoint(
-                    classification_prompt, batch_datapoints[j].target_response, tokenizer, acts_D, -1
+                    prompt=classification_prompt,
+                    target_response=batch_datapoints[j].target_response,
+                    layer=layer,
+                    num_positions=1,
+                    tokenizer=tokenizer,
+                    acts_BD=acts_1D,
+                    feature_idx=-1,
                 )
                 if training_data_point is None:
                     continue
