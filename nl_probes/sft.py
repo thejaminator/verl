@@ -673,7 +673,7 @@ def build_datasets(
 
 
 if __name__ == "__main__":
-    main_train_size = 300
+    main_train_size = 6000
     classification_datasets_train_sizes = {
         "geometry_of_truth": main_train_size,
         "relations": main_train_size,
@@ -726,16 +726,13 @@ if __name__ == "__main__":
     seed = 42
 
     dataset_config = DatasetLoaderConfig(
-        dataset_params=PastLensDatasetConfig(
-            model_name=model_name,
-            layer_percents=layer_percents,
-            seed=seed,
-            save_acts=True,
-        ),
-        dataset_folder=sft_data_folder,
+        custom_dataset_params=PastLensDatasetConfig(),
         num_train=300,
         num_test=0,
         splits=["train"],
+        model_name=model_name,
+        layer_percents=layer_percents,
+        save_acts=True,
     )
 
     past_lens_dataset_loader = PastLensDatasetLoader(
@@ -746,20 +743,17 @@ if __name__ == "__main__":
 
     for dataset_name in classification_datasets_train_sizes.keys():
         classification_config = ClassificationDatasetConfig(
-            model_name=model_name,
-            layer_percents=layer_percents,
-            seed=seed,
-            save_acts=True,
             classification_dataset_name=dataset_name,
         )
 
         dataset_config = DatasetLoaderConfig(
-            dataset_name="classification",
-            dataset_params=classification_config,
-            dataset_folder="sft_training_data",
+            custom_dataset_params=classification_config,
             num_train=classification_datasets_train_sizes[dataset_name],
             num_test=250,
             splits=["train", "test"],
+            model_name=model_name,
+            layer_percents=layer_percents,
+            save_acts=True,
         )
 
         classification_dataset_loader = ClassificationDatasetLoader(
@@ -790,7 +784,7 @@ if __name__ == "__main__":
             layer_percents=layer_percents,
             train_batch_size=16,
             activation_collection_batch_size=64,
-            eval_steps=2000,
+            eval_steps=1000,
             eval_on_start=False,
             **hyperparam_override,
         )

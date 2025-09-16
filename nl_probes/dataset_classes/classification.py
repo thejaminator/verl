@@ -3,7 +3,7 @@ import os
 import pickle
 import random
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -53,26 +53,28 @@ class ClassificationDatasetLoader(ActDatasetLoader):
         assert self.dataset_config.num_test > 0, "Classification dataset must include test split"
         assert self.dataset_config.num_train > 0, "Classification dataset must include train split"
 
-        self.dataset_params: ClassificationDatasetConfig = dataset_config.dataset_params
+        self.dataset_params: ClassificationDatasetConfig = dataset_config.custom_dataset_params
+
+        assert self.dataset_config.dataset_name == "", "Classification dataset name gets overridden here"
 
         self.dataset_config.dataset_name = f"classification_{self.dataset_params.classification_dataset_name}"
 
         self.act_layers = [
-            layer_percent_to_layer(self.dataset_params.model_name, layer_percent)
-            for layer_percent in self.dataset_params.layer_percents
+            layer_percent_to_layer(self.dataset_config.model_name, layer_percent)
+            for layer_percent in self.dataset_config.layer_percents
         ]
 
     def create_dataset(self) -> None:
         dtype = torch.bfloat16
-        tokenizer = load_tokenizer(self.dataset_params.model_name)
-        model = load_model(self.dataset_params.model_name, dtype)
+        tokenizer = load_tokenizer(self.dataset_config.model_name)
+        model = load_model(self.dataset_config.model_name, dtype)
 
         train_datapoints, test_datapoints = get_classification_datapoints(
             self.dataset_params.classification_dataset_name,
             self.dataset_params.num_qa_per_sample,
             self.dataset_config.num_train,
             self.dataset_config.num_test,
-            self.dataset_params.seed,
+            self.dataset_config.seed,
         )
         training_data = create_vector_dataset(
             train_datapoints,
@@ -97,21 +99,22 @@ class ClassificationDatasetLoader(ActDatasetLoader):
         test_filename = self.get_dataset_filename("test")
         train_path = os.path.join(self.dataset_config.dataset_folder, train_filename)
         test_path = os.path.join(self.dataset_config.dataset_folder, test_filename)
-        with open(train_path, "wb") as f:
-            pickle.dump(training_data, f)
-        with open(test_path, "wb") as f:
-            pickle.dump(test_data, f)
+        torch.save(
+            {
+                "config": asdict(self.dataset_config),
+                "data": [dp.model_dump() for dp in training_data],
+            },
+            train_path,
+        )
+        torch.save(
+            {
+                "config": asdict(self.dataset_config),
+                "data": [dp.model_dump() for dp in test_data],
+            },
+            test_path,
+        )
         print(f"Saved {len(training_data)} datapoints to {train_path}")
         print(f"Saved {len(test_data)} datapoints to {test_path}")
-
-    def get_dataset_filename(self, split: Literal["train", "test"]) -> str:
-        layers_str = "-".join([str(layer) for layer in self.dataset_params.layer_percents])
-
-        num_datapoints = self.dataset_config.num_train if split == "train" else self.dataset_config.num_test
-
-        filename = f"{self.dataset_config.dataset_name}_layer_{layers_str}_offset_{self.dataset_params.min_offset}_{self.dataset_params.max_offset}_max_{num_datapoints}_{split}"
-        filename = filename.replace("/", "_").replace(".", "_").replace(" ", "_")
-        return f"{filename}.pkl"
 
 
 class ClassificationDatapoint(BaseModel):
@@ -418,20 +421,17 @@ if __name__ == "__main__":
 
     for dataset_name in classification_datasets.keys():
         classification_config = ClassificationDatasetConfig(
-            model_name=model_name,
-            layer_percents=[25, 50, 75],
-            seed=42,
-            save_acts=True,
             classification_dataset_name=dataset_name,
         )
 
         dataset_config = DatasetLoaderConfig(
-            dataset_name="classification",
-            dataset_params=classification_config,
-            dataset_folder="sft_training_data",
+            custom_dataset_params=classification_config,
             num_train=classification_datasets[dataset_name],
             num_test=250,
             splits=["train", "test"],
+            model_name=model_name,
+            layer_percents=[25, 50, 75],
+            save_acts=True,
         )
 
         classification_dataset_loader = ClassificationDatasetLoader(

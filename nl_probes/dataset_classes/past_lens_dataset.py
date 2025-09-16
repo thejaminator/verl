@@ -2,7 +2,7 @@ import gc
 import os
 import pickle
 import random
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from fractions import Fraction
 from typing import Generator, Literal
 
@@ -36,16 +36,17 @@ class PastLensDatasetLoader(ActDatasetLoader):
         dataset_config: DatasetLoaderConfig,
     ):
         super().__init__(dataset_config)
+        assert self.dataset_config.dataset_name == "", "Dataset name gets overridden here"
 
         self.dataset_config.dataset_name = "past_lens"
 
-        self.dataset_params: PastLensDatasetConfig = dataset_config.dataset_params
+        self.dataset_params: PastLensDatasetConfig = dataset_config.custom_dataset_params
 
         assert self.dataset_config.splits == ["train"], "Past lens dataset only supports train split right now"
         assert self.dataset_config.num_test == 0, "Past lens dataset only supports train split right now"
 
     def create_dataset(self) -> list[TrainingDataPoint]:
-        tokenizer = load_tokenizer(self.dataset_params.model_name)
+        tokenizer = load_tokenizer(self.dataset_config.model_name)
         dataset = hf_mixed_dataset_to_generator(tokenizer)
 
         device = torch.device("cuda")
@@ -53,24 +54,24 @@ class PastLensDatasetLoader(ActDatasetLoader):
 
         save_path = os.path.join(self.dataset_config.dataset_folder, self.get_dataset_filename("train"))
 
-        collect_past_lens_acts(
-            dataset_params=self.dataset_params,
+        training_data = collect_past_lens_acts(
+            dataset_config=self.dataset_config,
+            custom_dataset_params=self.dataset_params,
             tokenizer=tokenizer,
             dataset=dataset,
             num_datapoints=self.dataset_config.num_train,
             device=device,
             dtype=dtype,
-            save_path=save_path,
         )
 
-    def get_dataset_filename(self, split: Literal["train", "test"]) -> str:
-        layers_str = "-".join([str(layer) for layer in self.dataset_params.layer_percents])
-
-        num_datapoints = self.dataset_config.num_train if split == "train" else self.dataset_config.num_test
-
-        filename = f"past_lens_{self.dataset_params.model_name}_layers_{layers_str}_num_datapoints_{num_datapoints}_min_k_{self.dataset_params.min_k}_max_k_{self.dataset_params.max_k}_split_{split}_save_acts_{self.dataset_params.save_acts}"
-        filename = filename.replace("/", "_").replace(".", "_").replace(" ", "_")
-        return f"{filename}.pkl"
+        torch.save(
+            {
+                "config": asdict(self.dataset_config),
+                "data": [dp.model_dump() for dp in training_data],
+            },
+            save_path,
+        )
+        print(f"Saved {len(training_data)} datapoints to {save_path}")
 
 
 def hf_mixed_dataset_to_generator(
@@ -171,35 +172,35 @@ def hf_mixed_dataset_to_generator(
 
 
 def collect_past_lens_acts(
-    dataset_params: PastLensDatasetConfig,
+    dataset_config: DatasetLoaderConfig,
+    custom_dataset_params: PastLensDatasetConfig,
     tokenizer: AutoTokenizer,
     dataset: Generator,
     num_datapoints: int,
     device: torch.device,
     dtype: torch.dtype,
-    save_path: str,
-):
-    random.seed(dataset_params.seed)
-    torch.manual_seed(dataset_params.seed)
+) -> list[TrainingDataPoint]:
+    random.seed(dataset_config.seed)
+    torch.manual_seed(dataset_config.seed)
 
     layers = [
-        layer_percent_to_layer(dataset_params.model_name, layer_percent)
-        for layer_percent in dataset_params.layer_percents
+        layer_percent_to_layer(dataset_config.model_name, layer_percent)
+        for layer_percent in dataset_config.layer_percents
     ]
 
-    model = load_model(dataset_params.model_name, dtype)
+    model = load_model(dataset_config.model_name, dtype)
 
     submodules = {layer: get_hf_submodule(model, layer) for layer in layers}
 
     training_data = []
 
-    for i in tqdm(range(0, num_datapoints, dataset_params.batch_size), desc="Collecting past lens acts"):
+    for i in tqdm(range(0, num_datapoints, custom_dataset_params.batch_size), desc="Collecting past lens acts"):
         inputs = []
-        for _ in range(dataset_params.batch_size):
+        for _ in range(custom_dataset_params.batch_size):
             inputs.append(next(dataset))
 
         tokenized_inputs = tokenizer(
-            inputs, return_tensors="pt", padding=True, truncation=True, max_length=dataset_params.max_length
+            inputs, return_tensors="pt", padding=True, truncation=True, max_length=custom_dataset_params.max_length
         ).to(device)
 
         acts_BLD_by_layer_dict = collect_activations_multiple_layers(
@@ -217,7 +218,7 @@ def collect_past_lens_acts(
                 input_ids_L = input_ids_BL[j]
                 acts_LD = acts_BLD[j]
 
-                k = random.randint(dataset_params.min_k, dataset_params.max_k)
+                k = random.randint(custom_dataset_params.min_k, custom_dataset_params.max_k)
 
                 # Find the first non-padding position (where attention mask is 1)
                 valid_positions = torch.where(attn_mask_L == 1)[0]
@@ -254,9 +255,7 @@ def collect_past_lens_acts(
                 )
                 training_data.append(training_data_point)
 
-    with open(save_path, "wb") as f:
-        pickle.dump(training_data, f)
-    print(f"Saved {len(training_data)} datapoints to {save_path}")
+    return training_data
 
 
 if __name__ == "__main__":
@@ -281,16 +280,15 @@ if __name__ == "__main__":
     sft_data_folder = "sft_training_data"
 
     dataset_config = DatasetLoaderConfig(
-        dataset_params=PastLensDatasetConfig(
-            model_name=model_name,
-            layer_percents=layer_percents,
-            seed=seed,
-            save_acts=True,
-        ),
+        custom_dataset_params=PastLensDatasetConfig(),
         dataset_folder=sft_data_folder,
         num_train=num_datapoints,
         num_test=0,
         splits=["train"],
+        model_name=model_name,
+        layer_percents=layer_percents,
+        seed=seed,
+        save_acts=True,
     )
 
     past_lens_dataset_loader = PastLensDatasetLoader(

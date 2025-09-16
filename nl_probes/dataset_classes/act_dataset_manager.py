@@ -1,27 +1,49 @@
+import hashlib
+import json
 import os
-import pickle
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Literal
+
+import torch
 
 from nl_probes.utils.dataset_utils import TrainingDataPoint
 
 
 @dataclass
 class BaseDatasetConfig:
-    model_name: str
-    layer_percents: list[int]
-    seed: int
-    save_acts: bool
+    pass
 
 
 @dataclass
 class DatasetLoaderConfig:
-    dataset_params: BaseDatasetConfig
-    dataset_folder: str
+    custom_dataset_params: BaseDatasetConfig
     num_train: int
     num_test: int
     splits: list[str]
+    model_name: str
+    layer_percents: list[int]
+    save_acts: bool
     dataset_name: str = ""
+    dataset_folder: str = "sft_training_data"
+    seed: int = 42
+
+
+def _config_hash(cfg: DatasetLoaderConfig, split: str, exclude: tuple[str, ...] = ("dataset_folder",)) -> str:
+    """
+    Stable short hash over the full config + split.
+    Excludes path-like fields so moving folders does not change the filename.
+    """
+
+    def _strip(obj):
+        if isinstance(obj, dict):
+            return {k: _strip(v) for k, v in obj.items() if k not in exclude}
+        if isinstance(obj, list):
+            return [_strip(v) for v in obj]
+        return obj
+
+    payload = {"config": _strip(asdict(cfg)), "split": split}
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.blake2s(blob, digest_size=6).hexdigest()  # 12 hex chars
 
 
 class ActDatasetLoader:
@@ -53,11 +75,21 @@ class ActDatasetLoader:
         if not os.path.exists(filepath):
             os.makedirs(self.dataset_config.dataset_folder, exist_ok=True)
             self.create_dataset()
-        with open(filepath, "rb") as f:
-            data = pickle.load(f)
+
+        saved_object = torch.load(filepath)
+        data_dicts = saved_object["data"]
+        data = [TrainingDataPoint(**d) for d in data_dicts]
 
         print(f"Loaded {len(data)} datapoints from {filepath}")
         return data
 
     def get_dataset_filename(self, split: Literal["train", "test"]) -> str:
-        raise NotImplementedError
+        num_datapoints = self.dataset_config.num_train if split == "train" else self.dataset_config.num_test
+
+        model_str = self.dataset_config.model_name.split("/")[-1]
+
+        config_hash = _config_hash(self.dataset_config, split)
+
+        filename = f"{self.dataset_config.dataset_name}_model_{model_str}_n_{num_datapoints}_save_acts_{self.dataset_config.save_acts}_{split}_{config_hash}"
+        filename = filename.replace("/", "_").replace(".", "_").replace(" ", "_")
+        return f"{filename}.pt"
