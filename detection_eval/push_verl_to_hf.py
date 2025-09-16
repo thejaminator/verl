@@ -6,9 +6,9 @@ from rl_feature_vector import convert_verl_to_hf_and_push
 
 load_dotenv()
 
-output_dir = "/workspace/12sep_grp16_5e6_lr_14sep_bigger_batch"
+output_dir = "/workspace/16sep_1e5_lr_prompt_32"
 model_name = "Qwen/Qwen3-8B"
-hub_repo_id = "thejaminator/5e6_lr_14sep_bigger_batch"
+hub_repo_id = "thejaminator/1e5_lr_prompt_32"
 hf_api_key = os.getenv("HF_WRITE_TOKEN")
 # Somehow verl messed up dumping the adapter_config.json file (it writes half of it) so we need to override it
 adapter_config = {
@@ -52,4 +52,5 @@ convert_verl_to_hf_and_push(
     hub_repo_id=hub_repo_id,
     hf_api_key=hf_api_key,
     override_adapter_json=adapter_config,
+    step=60,
 )

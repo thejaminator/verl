@@ -47,6 +47,8 @@ class VerlParams(BaseModel):
     reward_function_file: str = "math_reward_function.py"
     experiment_name: str | None = None
     use_feature_vector: bool = True
+    mini_batches: int = 1
+    save_extra: bool = False
     # Model configuration
     model_name: str = "google/gemma-2-9b-it"
     # Standard GRPO will normalize by std. Dr GRPO disables this. Change learning rate if you disable this!
@@ -73,6 +75,7 @@ class VerlParams(BaseModel):
     loss_kl_penalty: float = 0.001  # KL coefficient
     entropy_coeff: float = 0.0  # higher is entropy boost, try 0.01
     grad_clip: float = 0.5
+    ppo_epochs: int = 1
     clip_ratio: float = 0.2
 
     # SAE feature-vector config
@@ -468,7 +471,6 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         sys.executable,
         "-m",
         "verl.trainer.main_ppo",
-        "trainer.log_val_generations=10",
         # Data configuration
         f"data.train_files={train_parquet}",
         "data.prompt_key=prompt",
@@ -485,6 +487,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         "algorithm.use_kl_in_reward=false",
         "algorithm.kl_ctrl.type=fixed",
         f"algorithm.kl_ctrl.kl_coef=0",  # token level kl coefficient
+        "actor_rollout_ref.actor.use_kl_loss=true",
         # dr grpo settings to prevent long rollouts due to bias
         # "actor_rollout_ref.actor.use_kl_loss=false",
         # "actor_rollout_ref.actor.loss_agg_mode=seq-mean-token-sum-norm",
@@ -525,13 +528,15 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
     # wtf? So then we should do it manually for micro batch so that we scale by gradient accumulation accordingly.
     micro_bs = (params.prompt_batch_size * params.num_generations) // params.split_into_grad_accum
     print(f"Micro batch size: {micro_bs}")
+    assert params.prompt_batch_size % params.mini_batches == 0, "prompt batch size must be divisible by mini batches"
+    mini_bs = params.prompt_batch_size // params.mini_batches
     cmd.extend(
         [
             # Actor configuration
             "actor_rollout_ref.actor.strategy=fsdp2",
             # should be a multiple of micro_batch_size_per_gpu for grad accumulation. grad accum = mini batch size / micro batch size per gpu
             # self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size_per_gpu
-            f"actor_rollout_ref.actor.ppo_mini_batch_size={params.prompt_batch_size}",
+            f"actor_rollout_ref.actor.ppo_mini_batch_size={mini_bs}",
             # why does one use ppo_micro_batch_size and the other use micro_batch_size? no fking clue.
             # Somewhere in fsdp workers, they do self.config.actor.ppo_mini_batch_size *= self.config.rollout.n. So the mini batch is multipled
             # wtf? So then we should do it manually for micro batch so that we scale by gradient accumulation accordingly.
@@ -539,7 +544,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             f"actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu={micro_bs}",
             f"actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu={micro_bs}",
             f"actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu={micro_bs}",
-            "actor_rollout_ref.actor.ppo_epochs=1",
+            f"actor_rollout_ref.actor.ppo_epochs={params.ppo_epochs}",
             f"actor_rollout_ref.actor.grad_clip={params.grad_clip}",
             f"actor_rollout_ref.actor.clip_ratio={params.clip_ratio}",
             f"actor_rollout_ref.actor.entropy_coeff={params.entropy_coeff}",
@@ -550,6 +555,9 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             f"actor_rollout_ref.actor.optim.lr_warmup_steps={params.warmup_steps}",
             "actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.0",
             f"actor_rollout_ref.actor.optim.total_training_steps={params.max_steps}",
+            "actor_rollout_ref.actor.checkpoint.save_contents=[model,optimizer]"
+            if not params.save_extra
+            else "[model,optimizer,extra]",
             "actor_rollout_ref.actor.fsdp_config.wrap_policy.min_num_params=0",
             "actor_rollout_ref.actor.fsdp_config.param_offload=false",
             "actor_rollout_ref.ref.fsdp_config.param_offload=false",
@@ -783,5 +791,6 @@ if __name__ == "__main__":
         wandb_api_key=wandb_key,
         use_decoder_vectors=True,
         enable_gradient_checkpointing=False,
+        save_extra=False,
     )
     verl_main(PARAMS)

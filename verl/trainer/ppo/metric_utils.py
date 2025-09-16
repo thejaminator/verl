@@ -21,8 +21,8 @@ from typing import Any, Callable
 
 import numpy as np
 import torch
-import wandb
 
+import wandb
 from verl import DataProto
 from verl.utils.import_utils import deprecated
 
@@ -136,7 +136,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
     uid_to_scores = defaultdict(list)
     for uid, score in zip(uids, sequence_score.detach().to("cpu").tolist(), strict=True):
         uid_to_scores[uid].append(float(score))
-    
+
     # For each uid group, compute max - average
     group_gaps = []
     for uid_scores in uid_to_scores.values():
@@ -145,7 +145,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
             avg_score = np.mean(uid_scores)
             gap = max_score - avg_score
             group_gaps.append(gap)
-    
+
     # Average the gaps across all groups
     if group_gaps:
         score_max_vs_average_gap = float(np.mean(group_gaps))

@@ -488,6 +488,8 @@ class DataParallelPPOActor(BasePPOActor):
         # Split to make minibatch iterator for updating the actor
         # See PPO paper for details. https://arxiv.org/abs/1707.06347
         mini_batches = data.split(self.config.ppo_mini_batch_size)
+        # Log number of mini-batches for this PPO update
+        print(f"Number of mini batches: {len(mini_batches)}")
 
         metrics = {}
         for _ in range(self.config.ppo_epochs):
@@ -499,7 +501,9 @@ class DataParallelPPOActor(BasePPOActor):
                     self.gradient_accumulation = (
                         self.config.ppo_mini_batch_size // self.config.ppo_micro_batch_size_per_gpu
                     )
-                    print(f"Using gradient accumulation: {self.gradient_accumulation}. Calculation: ppo_mini_batch_size={self.config.ppo_mini_batch_size} / ppo_micro_batch_size_per_gpu={self.config.ppo_micro_batch_size_per_gpu}")
+                    print(
+                        f"Using gradient accumulation: {self.gradient_accumulation}. Calculation: ppo_mini_batch_size={self.config.ppo_mini_batch_size} / ppo_micro_batch_size_per_gpu={self.config.ppo_micro_batch_size_per_gpu}"
+                    )
                     micro_batches = mini_batch.split(self.config.ppo_micro_batch_size_per_gpu)
                     print(f"Number of micro batches: {len(micro_batches)}")
 

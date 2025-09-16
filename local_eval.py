@@ -15,7 +15,7 @@ from transformers.tokenization_utils import PreTrainedTokenizer
 import eval_detection_v2
 import lightweight_sft
 from create_hard_negatives_v2 import (
-    get_submodule,
+    get_hf_submodule,
     load_model,
     load_sae,
     load_tokenizer,
@@ -205,7 +205,8 @@ model = load_model(model_name, dtype)
 # lora_path = "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed"
 
 # lora_path = "thejaminator/5e6_lr_14sep_bigger_batch-step-120"
-lora_path = "thejaminator/5e6_lr_14sep_bigger_batch_step_187"
+# lora_path = "thejaminator/1e5_lr_prompt_32-step-60"
+lora_path = "thejaminator/1e5_lr_prompt_64-step-20"  # f1 0.6
 adapter_name = lora_path
 
 model.load_adapter(lora_path, adapter_name=adapter_name, is_trainable=False, low_cpu_mem_usage=True)
@@ -214,7 +215,7 @@ model.set_adapter(adapter_name)
 # %%
 print(all_eval_data[0])
 # %%
-submodule = get_submodule(model, hook_layer)
+submodule = get_hf_submodule(model, hook_layer)
 # %%
 eval_results = lightweight_sft.run_evaluation(
     cfg=cfg,
@@ -261,7 +262,7 @@ for detection_data, eval_result in zip(all_detection_data, eval_results):
         train_hard_negatives=detection_data.train_hard_negatives,
         test_hard_negatives=detection_data.test_hard_negatives,
         explanation=chat_history.add_assistant(content=eval_explanation),
-        explainer_model=lora_path,
+        explainer_model="model",
     )
     all_detection_prompts.append(detection_prompt)
 

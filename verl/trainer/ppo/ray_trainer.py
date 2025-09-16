@@ -210,7 +210,9 @@ def compute_response_mask(data: DataProto):
     attention_mask = data.batch["attention_mask"]
     return attention_mask[:, -response_length:]
 
-DISCARD_THRESHOLD = 0.2 # if max - min < DISCARD_THRESHOLD, discard the group
+
+DISCARD_THRESHOLD = 0.2  # if max - min < DISCARD_THRESHOLD, discard the group
+
 
 def discard_same_reward_groups(
     data: DataProto,

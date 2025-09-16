@@ -234,7 +234,22 @@ async def compute_scores(
     explanation: list[str], sae: list[SAEVerlData], caller: Caller
 ) -> list[DetectionResult | None]:
     assert len(explanation) == len(sae)
-    return await Slist(explanation, sae).par_map_async(lambda pair: compute_score_single(pair[0], pair[1], caller))
+    try:
+        async with caller:
+            # makes sure caller is flushed to write to cache
+            result = (
+                await Slist(explanation)
+                .zip(sae)
+                .par_map_async(lambda pair: compute_score_single(pair[0], pair[1], caller))
+            )
+        return result
+    except Exception as e:
+        print(f"ERROR in compute_scores: {e}")
+        import traceback
+
+        traceback.print_exc()
+        # Return None for each input as fallback
+        raise e
 
 
 def fire_and_forget_compute_score(explanation: list[str], sae: list[SAEVerlData]) -> None:
@@ -283,7 +298,7 @@ def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData]) -> li
     to_rewards = result.map(lambda x: x.f1_score if x is not None else 0.0)
     # discretize into 0.2
     # if bin_scores:
-        # Discretize scores into bins of 0.2
+    # Discretize scores into bins of 0.2
     # experiment : disable binning
     # to_rewards = to_rewards.map(bin_score)
 
