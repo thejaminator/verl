@@ -24,7 +24,7 @@ if __name__ == "__main__":
             "data/qwen_hard_negatives_20000_30000_layer_percent_75.jsonl",
         ],
         eval_path="data/qwen_hard_negatives_20000_30000_layer_percent_50.jsonl",
-        max_train_samples=10_000,
+        max_train_samples=20_000,
         use_feature_vector=True,
         mini_batches=8,
         split_into_grad_accum=64,
@@ -64,7 +64,7 @@ if __name__ == "__main__":
         max_steps=4000,
         output_dir="/workspace/16sep_5e6_lr_prompt_64",
         hub_repo_id="thejaminator/16sep_5e6_lr_prompt_64",
-        save_steps=20,  # saving causes OOM. Why?
+        save_steps=10,  # saving causes OOM. Why?
         n_gpus=1,
         use_wandb=True,
         wandb_project="grpo-feature-vector",

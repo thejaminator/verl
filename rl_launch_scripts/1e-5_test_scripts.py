@@ -27,8 +27,8 @@ if __name__ == "__main__":
         max_train_samples=400,
         use_feature_vector=True,
         mini_batches=1,
-        split_into_grad_accum=8,
-        use_hf_rollout_instead_of_vllm=False,
+        split_into_grad_accum=16,
+        use_hf_rollout_instead_of_vllm=True,
         enable_thinking=False,  # Actually, this doesn't do anything, I hardcoded verl/utils/dataset/rl_dataset.py to disable it.
         max_seq_length=800,
         max_prompt_length=300,

@@ -64,7 +64,7 @@ if __name__ == "__main__":
         max_steps=4000,
         output_dir="/workspace/16sep_1e6_lr_prompt_64",
         hub_repo_id="thejaminator/16sep_1e6_lr_prompt_64",
-        save_steps=20,  # saving causes OOM. Why?
+        save_steps=10,  # saving causes OOM. Why?
         n_gpus=1,
         use_wandb=True,
         wandb_project="grpo-feature-vector",

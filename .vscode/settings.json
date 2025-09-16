@@ -11,7 +11,7 @@
         "initializer_list": "cpp",
         "utility": "cpp"
     },
-    "python.languageServer": "Pylance",
+    "python.languageServer": "None",
     "python.analysis.autoImportCompletions": true,
     "python.analysis.diagnosticMode": "workspace",
     "python.analysis.exclude": [
@@ -25,5 +25,12 @@
     "search.exclude": {
         ".venv": true
     },
-    "iis.configDir": ""
+    "iis.configDir": "",
+    "cursorpyright.analysis.autoImportCompletions": true,
+    "cursorpyright.analysis.diagnosticMode": "workspace",
+    "cursorpyright.analysis.exclude": [
+        ".venv",
+        ".venv/**",
+        "**/site-packages/**"
+    ]
 }
