@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-import classification_dataset_manager
+import nl_probes.dataset_classes.classification_dataset_manager as classification_dataset_manager
 import wandb
 from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prefix
 from nl_probes.utils.common import load_model, load_tokenizer

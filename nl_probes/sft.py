@@ -45,7 +45,7 @@ from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.tokenization_utils import PreTrainedTokenizer
 
-import classification
+import nl_probes.dataset_classes.classification as classification
 import wandb
 from detection_eval.detection_basemodels import SAEInfo
 from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prompt
