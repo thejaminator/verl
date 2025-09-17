@@ -6,13 +6,20 @@ import torch
 
 from detection_eval.detection_basemodels import SAEVerlDataTypedDict
 
+# Space is to ensure it's always a single token
+SPECIAL_TOKEN = " ?"
+EXPLANATION_PROMPT = "Can you explain to me what this concept means?"
 
-def get_introspection_prefix(sae_layer: int) -> str:
-    return f"Layer: {sae_layer}, Concept: <<X>>.\n"
+
+def get_introspection_prefix(sae_layer: int, num_positions: int) -> str:
+    prefix = f"Layer: {sae_layer}\n"
+    prefix += SPECIAL_TOKEN * num_positions
+    prefix += " \n"
+    return prefix
 
 
-def get_introspection_prompt(sae_layer: int) -> str:
-    return f"{get_introspection_prefix(sae_layer)}Can you explain to me what this concept means?"
+def get_introspection_prompt(sae_layer: int, num_positions: int) -> str:
+    return f"{get_introspection_prefix(sae_layer, num_positions)}{EXPLANATION_PROMPT}"
 
 
 def get_vllm_steering_hook(

@@ -1,23 +1,3 @@
-"""
-Lightweight SAE Introspection Training Script
-
-This script trains a model to understand SAE (Sparse Autoencoder) features through introspection.
-
-Features:
-- Automatic Hugging Face login at script start
-- LoRA fine-tuning support
-- Automatic pushing of trained LoRA adapters to Hugging Face Hub after training
-- Configurable repository settings (public/private)
-
-Usage:
-    python lightweight_sft.py [explanations_file.jsonl]
-
-Before running:
-1. Make sure you're logged into Hugging Face: `huggingface-cli login`
-2. Update the hf_repo_id in the main() function to your desired repository name
-3. Ensure you have the required explanations JSONL file
-"""
-
 import os
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -45,31 +25,31 @@ from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.tokenization_utils import PreTrainedTokenizer
 
-import classification
+import nl_probes.dataset_classes.classification as classification
 import wandb
-from create_hard_negatives_v2 import (
-    BaseSAE,
-    JumpReluSAE,
-    get_sae_info,
-    load_model,
-    load_sae,
-    load_tokenizer,
-)
 from detection_eval.detection_basemodels import SAEInfo
 from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prompt
-from sft_config import (
+from nl_probes.configs.sft_config import SelfInterpTrainingConfig
+from nl_probes.dataset_classes.act_dataset_manager import ActDatasetLoader, DatasetLoaderConfig
+from nl_probes.dataset_classes.classification import ClassificationDatasetConfig, ClassificationDatasetLoader
+from nl_probes.dataset_classes.past_lens_dataset import PastLensDatasetConfig, PastLensDatasetLoader
+from nl_probes.dataset_classes.sae_training_data import (
+    SAEActivatingSequencesDatasetConfig,
+    SAEActivatingSequencesDatasetLoader,
+    SAEExplanationDatasetConfig,
+    SAEExplanationDatasetLoader,
+    SAEYesNoDatasetConfig,
+    SAEYesNoDatasetLoader,
+)
+from nl_probes.utils.activation_utils import get_hf_submodule
+from nl_probes.utils.common import load_model, load_tokenizer
+from nl_probes.utils.dataset_utils import (
     BatchData,
     EvalStepResult,
     ExplanationResult,
     FeatureResult,
-    SAEExplained,
-    SelfInterpTrainingConfig,
     TrainingDataPoint,
-    TrainingExample,
     construct_batch,
-    create_training_datapoint,
-    get_hf_submodule,
-    load_explanations_from_jsonl,
 )
 
 
@@ -211,75 +191,6 @@ This adapter was trained using the lightweight SAE introspection training script
     print(f"Successfully pushed LoRA adapter to: https://huggingface.co/{repo_id}")
 
 
-class EarlyStopException(Exception):
-    """Custom exception for stopping model forward pass early."""
-
-    pass
-
-
-def collect_activations(
-    model: AutoModelForCausalLM,
-    submodule: torch.nn.Module,
-    inputs_BL: dict[str, torch.Tensor],
-    use_no_grad: bool = True,
-) -> torch.Tensor:
-    """
-    Collects activations from a specific submodule (layer) during model forward pass.
-
-    Args:
-        model: The transformer model
-        submodule: The specific layer/module to collect activations from
-        inputs_BL: Tokenized inputs (batch, length)
-        use_no_grad: Whether to use torch.no_grad() for efficiency
-
-    Returns:
-        activations_BLD: Activations tensor (batch, length, hidden_dim)
-    """
-    activations_BLD = None
-
-    def hook(module, input, output):
-        nonlocal activations_BLD
-        if isinstance(output, tuple):
-            activations_BLD = output[0]  # For models that return tuples
-        else:
-            activations_BLD = output
-        # Stop computation early if we only need activations
-        raise EarlyStopException()
-
-    # Register hook
-    handle = submodule.register_forward_hook(hook)
-
-    try:
-        ctx = torch.no_grad() if use_no_grad else contextlib.nullcontext()
-        with ctx:
-            try:
-                model(**inputs_BL)
-            except EarlyStopException:
-                pass  # Expected - we stopped early to collect activations
-    finally:
-        handle.remove()
-
-    if activations_BLD is None:
-        raise RuntimeError("Failed to collect activations")
-
-    return activations_BLD
-
-
-# ==============================================================================
-# 6. UTILITY FUNCTIONS
-# ==============================================================================
-
-
-def build_training_prompt(positive_negative_examples: bool, sae_layer: int) -> str:
-    """Build the training prompt for SAE explanations."""
-    if positive_negative_examples:
-        raise NotImplementedError("Not implemented")
-        question = f"""Can you explain to me the concept of what 'X' from layer {sae_layer} means? Give positive and negative examples of what the concept would activate on. Format your final answer with <explanation>."""
-    else:
-        question = get_introspection_prompt(sae_layer)
-    return question
-
-
 def parse_generated_explanation(text: str) -> Optional[ExplanationResult]:
     """
     Extract the explanation from a model-generated block of text formatted as:
@@ -311,125 +222,6 @@ def parse_generated_explanation(text: str) -> Optional[ExplanationResult]:
     return ExplanationResult(
         explanation=explanation,
     )
-
-
-# ==============================================================================
-# 3. HOOKING MECHANISM FOR ACTIVATION STEERING
-# ==============================================================================
-
-
-@torch.no_grad()
-def construct_train_dataset(
-    cfg: SelfInterpTrainingConfig,
-    dataset_size: int,
-    input_prompt: str,
-    training_examples: list[TrainingExample],
-    sae: BaseSAE,
-    tokenizer: PreTrainedTokenizer,
-) -> list[TrainingDataPoint]:
-    training_data = []
-
-    for i in tqdm(range(dataset_size), desc="Constructing training dataset"):
-        target_response = training_examples[i].explanation
-        target_feature_idx = training_examples[i].feature_idx
-        # 2. Prepare feature vectors for steering
-        # We use decoder weights (W_dec) as they map from the feature space back to the residual stream.
-        # .clone() because otherwise we will save the entire W_dec in pickle for each training example
-        if cfg.use_decoder_vectors:
-            feature_vector = sae.W_dec[target_feature_idx].clone()
-        else:
-            feature_vector = sae.W_enc[:, target_feature_idx].clone()
-
-        training_data_point = create_training_datapoint(
-            prompt=input_prompt,
-            target_response=target_response,
-            tokenizer=tokenizer,
-            acts_D=feature_vector,
-            feature_idx=target_feature_idx,
-        )
-
-        if i == 0:
-            # Fully print the first example
-            print("First training example:")
-            print(f"prompt: {input_prompt}")
-            print(f"target_response: {target_response}")
-            print("-" * 100)
-
-        training_data.append(training_data_point)
-
-    return training_data
-
-
-def construct_eval_dataset(
-    cfg: SelfInterpTrainingConfig,
-    dataset_size: int,
-    input_prompt: str,
-    eval_feature_indices: list[int],
-    api_data: dict,
-    sae: BaseSAE,
-    tokenizer: PreTrainedTokenizer,
-    enable_thinking: bool = False,
-) -> list[TrainingDataPoint]:
-    """Every prompt is exactly the same - the only difference is the steering vectors."""
-
-    input_messages = [{"role": "user", "content": input_prompt}]
-
-    input_prompt_ids = tokenizer.apply_chat_template(
-        input_messages,
-        tokenize=True,
-        add_generation_prompt=True,
-        return_tensors=None,
-        padding=False,
-        enable_thinking=enable_thinking,
-    )
-    if not isinstance(input_prompt_ids, list):
-        raise TypeError("Expected list of token ids from tokenizer")
-    # Set [-100] for user prompts
-    labels = [-100] * len(input_prompt_ids)
-
-    orig_prompt_length = len(input_prompt_ids)
-
-    x_token_id = tokenizer.encode("X", add_special_tokens=False)[0]
-
-    eval_data = []
-
-    first_position = None
-
-    for i in tqdm(range(dataset_size), desc="Constructing eval dataset"):
-        target_feature_idx = eval_feature_indices[i]
-
-        # 2. Prepare feature vectors for steering
-        # We use decoder weights (W_dec) as they map from the feature space back to the residual stream.
-        if cfg.use_decoder_vectors:
-            feature_vector = sae.W_dec[target_feature_idx].clone()
-        else:
-            feature_vector = sae.W_enc[:, target_feature_idx].clone()
-
-        positions = []
-        for i in range(orig_prompt_length):
-            if input_prompt_ids[i] == x_token_id:
-                positions.append(i)
-
-        assert len(positions) == 1, "Expected exactly one X token"
-
-        if first_position is None:
-            first_position = positions[0]
-        else:
-            assert positions[0] == first_position, "Expected all positions to be the same"
-        assert len(input_prompt_ids) > 0
-
-        eval_data_point = TrainingDataPoint(
-            input_ids=input_prompt_ids,
-            labels=labels,
-            steering_vectors=[feature_vector],
-            positions=positions,
-            feature_idx=target_feature_idx,
-            target_output="",
-        )
-
-        eval_data.append(eval_data_point)
-
-    return eval_data
 
 
 def train_features_batch(
@@ -546,53 +338,6 @@ def save_logs(
         json.dump(all_run_results, f, indent=2)
 
 
-# ==============================================================================
-
-
-# ==============================================================================
-# 8. INTROSPECTION UTILITIES
-# ==============================================================================
-
-
-def get_bos_eos_pad_mask(tokenizer: PreTrainedTokenizer, token_ids: torch.Tensor) -> torch.Tensor:
-    """Create mask for BOS, EOS, and PAD tokens"""
-    mask = torch.zeros_like(token_ids, dtype=torch.bool)
-
-    if tokenizer.bos_token_id is not None:
-        mask |= token_ids == tokenizer.bos_token_id
-    if tokenizer.eos_token_id is not None:
-        mask |= token_ids == tokenizer.eos_token_id
-    if tokenizer.pad_token_id is not None:
-        mask |= token_ids == tokenizer.pad_token_id
-
-    return mask
-
-
-def get_feature_activations(
-    model: AutoModelForCausalLM,
-    tokenizer: PreTrainedTokenizer,
-    submodule: torch.nn.Module,
-    sae: JumpReluSAE,
-    tokenized_strs: dict[str, torch.Tensor],
-    ignore_bos: bool = True,
-) -> torch.Tensor:
-    with torch.no_grad():
-        pos_acts_BLD = collect_activations(model, submodule, tokenized_strs)
-        encoded_pos_acts_BLF = sae.encode(pos_acts_BLD)
-
-    if ignore_bos:
-        bos_mask = tokenized_strs["input_ids"] == tokenizer.bos_token_id
-        # Note: I use >=, not ==, because occasionally prompts will contain a BOS token
-        assert bos_mask.sum() >= encoded_pos_acts_BLF.shape[0], (
-            f"Expected at least {encoded_pos_acts_BLF.shape[0]} BOS tokens, but found {bos_mask.sum()}"
-        )
-
-        mask = get_bos_eos_pad_mask(tokenizer, tokenized_strs["input_ids"])
-        encoded_pos_acts_BLF[mask] = 0
-
-    return encoded_pos_acts_BLF
-
-
 def has_active_lora(model: AutoModelForCausalLM) -> bool:
     """
     True ⇢ model is a PEFT/PeftModel object *and* at least one adapter is enabled.
@@ -612,6 +357,7 @@ def run_evaluation(
     submodule: torch.nn.Module,
     device: torch.device,
     dtype: torch.dtype,
+    global_step: int,
 ) -> list[FeatureResult]:
     """Run evaluation and save results."""
     model.eval()
@@ -868,54 +614,6 @@ def train_model(
         )
 
 
-def load_sae_data_from_sft_data_file(
-    sft_data_file: str,
-    cfg: SelfInterpTrainingConfig,
-    tokenizer: PreTrainedTokenizer,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> tuple[list[TrainingDataPoint], SAEInfo]:
-    explanations: list[SAEExplained] = load_explanations_from_jsonl(sft_data_file)
-    orig_sae_info = explanations[0].sae_info
-    for data_point in explanations:
-        assert data_point.sae_info == orig_sae_info
-    sae_info = SAEInfo.model_validate(orig_sae_info)
-
-    sae = load_sae(sae_info.sae_repo_id, sae_info.sae_filename, sae_info.sae_layer, cfg.model_name, device, dtype)
-
-    training_examples = [
-        TrainingExample.with_positive_and_negative_examples(exp)
-        if cfg.positive_negative_examples
-        else TrainingExample.with_explanation_only(exp)
-        for exp in explanations
-    ]
-    print(f"Loaded {len(training_examples)} training examples from {sft_data_file}")
-
-    train_features = set()
-
-    for example in training_examples:
-        train_features.add(example.feature_idx)
-
-    # For evaluation, we'll use a subset of the training features
-    # In a real scenario, you might want to load a separate eval set
-    print(f"train examples: {len(training_examples)}")
-    print(f"Train features: {len(train_features)}")
-
-    train_eval_prompt = build_training_prompt(cfg.positive_negative_examples, sae_info.sae_layer)
-
-    training_data: list[TrainingDataPoint] = construct_train_dataset(
-        cfg,
-        len(training_examples),
-        # dataset_size,
-        train_eval_prompt,
-        training_examples,
-        sae,
-        tokenizer,
-    )
-
-    return training_data, sae_info
-
-
 def length_grouped_reorder(
     data: list[TrainingDataPoint],
     batch_size: int,
@@ -937,69 +635,20 @@ def length_grouped_reorder(
 
 def build_datasets(
     cfg: SelfInterpTrainingConfig,
-    tokenizer: PreTrainedTokenizer,
-    device: torch.device,
-    dtype: torch.dtype,
+    dataset_loaders: list[ActDatasetLoader],
     max_len_percentile: float | None = 0.999,
     window_mult: int | None = 20,
-) -> tuple[list[TrainingDataPoint], list[TrainingDataPoint], list[SAEInfo]]:
+) -> tuple[list[TrainingDataPoint], dict[str, list[TrainingDataPoint]]]:
+    random.seed(cfg.seed)
     all_training_data: list[TrainingDataPoint] = []
-
     # eval data will only be for classification datasets
     all_eval_data: dict[str, list[TrainingDataPoint]] = {}
-    all_sae_infos: list[SAEInfo] = []
 
-    # SFT-style feature explanations
-    for sft_file in cfg.sae_sft_datasets:
-        file_data, sae_info = load_sae_data_from_sft_data_file(sft_file, cfg, tokenizer, device, dtype)
-        file_data = file_data[: cfg.max_sae_sft_examples]
-        all_training_data.extend(file_data[: -cfg.test_set_size_per_ds])
-        all_sae_infos.append(sae_info)
-
-    for sft_file in cfg.additional_train_dataset_filenames:
-        with open(sft_file, "rb") as f:
-            file_data = pickle.load(f)
-        all_training_data.extend(file_data)
-
-    random.seed(cfg.seed)
-
-    # Classification side-task
-    for ds in cfg.classification_train_datasets:
-        print(f"Creating train classification dataset for {ds}")
-        train_ds, test_ds = classification.create_classification_dataset(
-            ds,
-            num_qa_per_sample=cfg.num_qa_per_sample,
-            num_train_examples=cfg.max_classification_examples,
-            num_test_examples=cfg.test_set_size_per_ds,
-            batch_size=cfg.activation_collection_batch_size,
-            act_layers=cfg.act_layers,
-            min_offset=cfg.min_act_collect_offset,
-            max_offset=cfg.max_act_collect_offset,
-            model_name=cfg.model_name,
-            tokenizer=tokenizer,
-            dtype=dtype,
-            random_seed=cfg.seed,
-            dataset_folder=cfg.dataset_folder,
-        )
-        all_training_data.extend(train_ds)
-
-    for ds in cfg.classification_eval_datasets:
-        print(f"Creating test classification dataset for {ds}")
-        test_ds = classification.create_classification_dataset_test_only(
-            ds,
-            num_qa_per_sample=cfg.num_qa_per_sample,
-            num_test_examples=cfg.test_set_size_per_ds,
-            batch_size=cfg.activation_collection_batch_size,
-            act_layers=cfg.act_layers,
-            min_offset=cfg.min_act_collect_offset,
-            max_offset=cfg.max_act_collect_offset,
-            model_name=cfg.model_name,
-            tokenizer=tokenizer,
-            dtype=dtype,
-            random_seed=cfg.seed,
-            dataset_folder=cfg.dataset_folder,
-        )
-        all_eval_data[ds] = test_ds
+    for dataset_loader in dataset_loaders:
+        if "train" in dataset_loader.dataset_config.splits:
+            all_training_data.extend(dataset_loader.load_dataset("train"))
+        if "test" in dataset_loader.dataset_config.splits:
+            all_eval_data[dataset_loader.dataset_config.dataset_name] = dataset_loader.load_dataset("test")
 
     p = max_len_percentile
     if p is not None:
@@ -1024,34 +673,28 @@ def build_datasets(
     if window_mult is not None:
         all_training_data = length_grouped_reorder(all_training_data, cfg.train_batch_size, window_mult)
 
-    return all_training_data, all_eval_data, all_sae_infos
+    return all_training_data, all_eval_data
 
 
 if __name__ == "__main__":
-    classification_eval_datasets = [
-        "geometry_of_truth",
-        "relations",
-        "sst2",
-        "md_gender",
-        "snli",
-        "ag_news",
-        "ner",
-        "tense",
-        "language_identification",
-        "singular_plural",
-    ]
-    classification_train_datasets = [
-        "geometry_of_truth",
-        "relations",
-        "sst2",
-        "md_gender",
-        "snli",
-        # "ag_news",
-        "ner",
-        "tense",
-        # "language_identification",
-        # "singular_plural",
-    ]
+    main_train_size = 6000
+    main_test_size = 250
+    classification_datasets = {
+        "geometry_of_truth": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "relations": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "sst2": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "md_gender": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "snli": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "ag_news": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["test"]},
+        "ner": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "tense": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "language_identification": {
+            "num_train": main_train_size,
+            "num_test": main_test_size,
+            "splits": ["test"],
+        },
+        "singular_plural": {"num_train": 0, "num_test": main_test_size, "splits": ["test"]},
+    }
 
     hook_layer = 1
     model_name = "Qwen/Qwen3-8B"
@@ -1062,97 +705,115 @@ if __name__ == "__main__":
 
     layer_percents = [25, 50, 75]
 
-    explanations_files = []
+    sft_data_folder = "sft_training_data"
+
+    dataset_loaders = []
+
+    dataset_config = DatasetLoaderConfig(
+        custom_dataset_params=PastLensDatasetConfig(),
+        num_train=300,
+        num_test=0,
+        splits=["train"],
+        model_name=model_name,
+        layer_percents=layer_percents,
+        save_acts=True,
+    )
+
+    past_lens_dataset_loader = PastLensDatasetLoader(
+        dataset_config=dataset_config,
+    )
+    dataset_loaders.append(past_lens_dataset_loader)
+
     for layer_percent in layer_percents:
-        explanations_files.append(
-            f"data/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl"
+        dataset_config = DatasetLoaderConfig(
+            custom_dataset_params=SAEExplanationDatasetConfig(
+                sft_data_file=f"data/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl",
+                use_decoder_vectors=True,
+            ),
+            num_train=20000,
+            num_test=0,
+            splits=["train"],
+            model_name=model_name,
+            layer_percents=[layer_percent],
+            save_acts=True,
+        )
+        sae_explanation_dataset_loader = SAEExplanationDatasetLoader(dataset_config=dataset_config)
+
+        dataset_config = DatasetLoaderConfig(
+            custom_dataset_params=SAEActivatingSequencesDatasetConfig(
+                sae_repo_id="adamkarvonen/qwen3-8b-saes",
+                use_decoder_vectors=True,
+            ),
+            num_train=60000,
+            num_test=0,
+            splits=["train"],
+            model_name=model_name,
+            layer_percents=[layer_percent],
+            save_acts=True,
+        )
+        sae_activating_sequences_dataset_loader = SAEActivatingSequencesDatasetLoader(dataset_config=dataset_config)
+
+        dataset_loaders.append(sae_explanation_dataset_loader)
+        dataset_loaders.append(sae_activating_sequences_dataset_loader)
+
+    for dataset_name in classification_datasets.keys():
+        classification_config = ClassificationDatasetConfig(
+            classification_dataset_name=dataset_name,
         )
 
-    additional_explanations_files = []
-
-    for layer_percent in layer_percents:
-        act_examples_filename = (
-            f"sft_training_data/act_examples_Qwen_Qwen3-8B_layer_percent_{layer_percent}_width_2_num_features_60000.pkl"
+        dataset_config = DatasetLoaderConfig(
+            custom_dataset_params=classification_config,
+            num_train=classification_datasets[dataset_name]["num_train"],
+            num_test=classification_datasets[dataset_name]["num_test"],
+            splits=classification_datasets[dataset_name]["splits"],
+            model_name=model_name,
+            layer_percents=layer_percents,
+            save_acts=True,
         )
-        sae_yes_no_filename = f"sft_training_data/yes_no_sae_data_Qwen_Qwen3-8B_layer_percent_{layer_percent}_width_2_max_features_None.pkl"
-        additional_explanations_files.append(act_examples_filename)
-        additional_explanations_files.append(sae_yes_no_filename)
 
-    explanations_files = []
-    additional_explanations_files = []
-    additional_explanations_files = [
-        "sft_training_data/past_lens_data_Qwen_Qwen3-8B_layers_9-18-27_num_datapoints_200000_min_k_3_max_k_20.pkl"
-    ]
+        classification_dataset_loader = ClassificationDatasetLoader(
+            dataset_config=dataset_config,
+        )
+        dataset_loaders.append(classification_dataset_loader)
 
     iterations = [
-        # {"lr": 2e-5},
-        # {"lr": 5e-5},
-        # {"act_collect_offset": -3},
-        # {"act_collect_offset": -5},
-        # {"num_epochs": 2},
-        # {
-        #     "load_lora_path": "checkpoints_no_sae_multiple_datasets_layer_1_larger_pretrain_min_act_collect_offset_-2_max_act_collect_offset_-5/final"
-        # },
         {
             "load_lora_path": None,
-            "sae_sft_datasets": [],
-            "additional_train_dataset_filenames": additional_explanations_files,
+            "dataset_loaders": dataset_loaders,
             "wandb_suffix": "_act_pretrain",
         },
-        {
-            "load_lora_path": "checkpoints_act_pretrain/final",
-            "sae_sft_datasets": [],
-            "additional_train_dataset_filenames": [],
-            "wandb_suffix": "_act_pretrain_and_posttrain",
-        },
-        # {
-        # "load_lora_path": "checkpoints_no_sae_multiple_datasets_layer_1_larger_pretrain_min_act_collect_offset_-2_max_act_collect_offset_-5/final",
-        # "num_epochs": 2,
-        # },
-        # {"load_lora_path": None},
-        # {"load_lora_path": None, "num_epochs": 2},
-        # {}
     ]
 
-    # for use_decoder_vectors in [True]:
     for hyperparam_override in iterations:
+        loop_dataset_loaders = hyperparam_override.pop("dataset_loaders")
+
         cfg = SelfInterpTrainingConfig(
             model_name=model_name,
             hook_onto_layer=hook_layer,
             hf_repo_name=hf_repo_name,
             # wandb_suffix=wandb_suffix,
             layer_percents=layer_percents,
-            # sae_sft_datasets=explanations_files,
-            classification_train_datasets=classification_train_datasets,
-            classification_eval_datasets=classification_eval_datasets,
-            # additional_train_dataset_filenames=additional_explanations_files,
-            max_classification_examples=6_000,
-            test_set_size_per_ds=250,
             train_batch_size=16,
             activation_collection_batch_size=64,
-            eval_steps=10000,
+            eval_steps=1000,
             eval_on_start=False,
             **hyperparam_override,
         )
 
-        cfg.finalize()
+        cfg.finalize(dataset_loaders=loop_dataset_loaders)
 
         print(f"save dir: {cfg.save_dir}")
 
         tokenizer = load_tokenizer(cfg.model_name)
 
-        all_training_data, all_eval_data, all_sae_infos = build_datasets(
-            cfg, tokenizer, device, dtype, window_mult=cfg.window_mult
+        all_training_data, all_eval_data = build_datasets(
+            cfg, dataset_loaders=loop_dataset_loaders, window_mult=cfg.window_mult
         )
 
         # for debugging
         # all_training_data = all_training_data[:1000]
 
         print(f"training data: {len(all_training_data)}, eval data: {len(all_eval_data)}")
-
-        # raise Exception("Stop here")
-
-        cfg.sae_infos = all_sae_infos
 
         print(asdict(cfg))
 
