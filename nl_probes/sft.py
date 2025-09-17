@@ -45,7 +45,7 @@ from nl_probes.utils.dataset_utils import (
     FeatureResult,
     TrainingDataPoint,
     construct_batch,
-    materialize_steering_vectors_for_batch,
+    materialize_missing_steering_vectors,
 )
 
 
@@ -334,17 +334,6 @@ def save_logs(
         json.dump(all_run_results, f, indent=2)
 
 
-def has_active_lora(model: AutoModelForCausalLM) -> bool:
-    """
-    True ⇢ model is a PEFT/PeftModel object *and* at least one adapter is enabled.
-    """
-    return (
-        hasattr(model, "peft_config")  # it's a PeftModel
-        and bool(model.peft_config)  # at least one adapter is configured
-        and bool(getattr(model, "active_adapter", None))  # an adapter is currently selected
-    )
-
-
 def run_evaluation(
     cfg: SelfInterpTrainingConfig,
     eval_data: list[TrainingDataPoint],
@@ -367,6 +356,8 @@ def run_evaluation(
 
             for j in range(len(e_batch)):
                 e_batch[j] = classification.get_prompt_tokens_only(e_batch[j])
+
+            materialize_missing_steering_vectors(e_batch, tokenizer, model)
 
             e_batch = construct_batch(e_batch, tokenizer, device)
 
@@ -419,6 +410,7 @@ def oom_preflight_check(
 ) -> None:
     longest_prompt = max(training_data, key=lambda x: len(x.input_ids))
     long_prompts = [longest_prompt] * cfg.train_batch_size
+    materialize_missing_steering_vectors(long_prompts, tokenizer, model)
     largest_possible_batch = construct_batch(long_prompts, tokenizer, device)
 
     dummy_optimizer = torch.optim.AdamW(model.parameters(), lr=0.0)
@@ -463,14 +455,15 @@ def train_model(
             bias="none",
             task_type="CAUSAL_LM",
         )
-
-        model = get_peft_model(model, lora_config)
-        model.print_trainable_parameters()
+        model.add_adapter(lora_config)
+        # model = get_peft_model(model, lora_config)
+        # model.print_trainable_parameters()
     elif cfg.load_lora_path is not None:
         load_lora_path = Path(cfg.load_lora_path)
         assert load_lora_path.exists()
-        model = PeftModel.from_pretrained(model, load_lora_path, is_trainable=True)
-        model.print_trainable_parameters()
+        model.add_adapter(load_lora_path)
+        # model = PeftModel.from_pretrained(model, load_lora_path, is_trainable=True)
+        # model.print_trainable_parameters()
 
     model.train()
 
@@ -504,10 +497,7 @@ def train_model(
         ):
             t_batch_list: list[TrainingDataPoint] = training_data[i : i + cfg.train_batch_size]
 
-            total = 0
-            for dp in t_batch_list:
-                total += len(dp.input_ids)
-            print(f"Total tokens: {total}")
+            materialize_missing_steering_vectors(t_batch_list, tokenizer, model)
 
             t_batch = construct_batch(t_batch_list, tokenizer, device)
 
@@ -772,7 +762,7 @@ if __name__ == "__main__":
             splits=classification_datasets[dataset_name]["splits"],
             model_name=model_name,
             layer_percents=layer_percents,
-            save_acts=True,
+            save_acts=False,
         )
 
         classification_dataset_loader = ClassificationDatasetLoader(

@@ -90,6 +90,8 @@ class ClassificationDatasetLoader(ActDatasetLoader):
                 self.act_layers,
                 self.dataset_params.min_offset,
                 self.dataset_params.max_offset,
+                self.dataset_config.save_acts,
+                self.dataset_config.dataset_name,
             )
 
             self.save_dataset(data, split)
@@ -161,6 +163,8 @@ def create_vector_dataset(
     act_layers: list[int],
     min_offset: int,
     max_offset: int,
+    save_acts: bool,
+    datapoint_type: str,
     debug_print: bool = False,
 ) -> list[TrainingDataPoint]:
     training_data = []
@@ -205,7 +209,18 @@ def create_vector_dataset(
                 if debug_print:
                     view_tokens(tokenized_prompts["input_ids"][j], tokenizer, offset)
                 classification_prompt = f"{batch_datapoints[j].classification_prompt}"
+
+                if save_acts is False:
+                    acts_1D = None
+                    context_input_ids = tokenized_prompts["input_ids"][j]
+                    context_pos = len(context_input_ids) + max_offset + offset
+                    context_positions = [context_pos]
+                else:
+                    context_input_ids = None
+                    context_positions = None
+
                 training_data_point = create_training_datapoint(
+                    datapoint_type=datapoint_type,
                     prompt=classification_prompt,
                     target_response=batch_datapoints[j].target_response,
                     layer=layer,
@@ -213,6 +228,8 @@ def create_vector_dataset(
                     tokenizer=tokenizer,
                     acts_BD=acts_1D,
                     feature_idx=-1,
+                    context_input_ids=context_input_ids,
+                    context_positions=context_positions,
                 )
                 if training_data_point is None:
                     continue
