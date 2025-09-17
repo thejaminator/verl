@@ -77,6 +77,8 @@ class VerlParams(BaseModel):
     grad_clip: float = 0.5
     ppo_epochs: int = 1
     clip_ratio: float = 0.2
+    clip_ratio_low: float = 0.2
+    clip_ratio_high: float = 0.2
 
     # SAE feature-vector config
     use_decoder_vectors: bool
@@ -256,7 +258,7 @@ def load_and_convert_dataset(
             "extra_info": {
                 "prompt": prompt_content,
                 "index": sae.sae_id,
-                "sae_layer": layer,  # Add layer info for debugging
+                # "sae_layer": layer,  # Add layer info for debugging
             },
             # sae information which we modify the PPO trainer to pass during rollouts
             "sae": sae_verl_data,
@@ -318,87 +320,65 @@ def convert_verl_to_hf_and_push(
     # Check if this is a LoRA adapter checkpoint
     lora_adapter_dir = os.path.join(actor_checkpoint_dir, "lora_adapter")
 
-    if os.path.exists(lora_adapter_dir):
-        print("Found LoRA adapter - uploading LoRA adapter directly...")
-        print(f"LoRA adapter source: {lora_adapter_dir}")
+    assert os.path.exists(lora_adapter_dir), f"LoRA adapter not found: {lora_adapter_dir}"
+    print("Found LoRA adapter - uploading LoRA adapter directly...")
+    print(f"LoRA adapter source: {lora_adapter_dir}")
 
-        # For LoRA adapters, use the lora_adapter directory directly
-        hf_output_dir = lora_adapter_dir
-        print("✅ Using LoRA adapter directory directly for upload")
+    # For LoRA adapters, use the lora_adapter directory directly
+    hf_output_dir = lora_adapter_dir
+    print("✅ Using LoRA adapter directory directly for upload")
 
-        # Ensure README.md with correct base_model metadata exists
-        readme_path = os.path.join(hf_output_dir, "README.md")
-        readme_front_matter = (
-            f"---\n"
-            f"base_model: {base_model_name}\n"
-            f"library_name: peft\n"
-            f"tags:\n"
-            f"- lora\n"
-            f"- peft\n"
-            f"pipeline_tag: text-generation\n"
-            f"---\n\n"
-        )
-        if not os.path.exists(readme_path):
-            with open(readme_path, "w", encoding="utf-8") as f:
-                f.write(readme_front_matter)
-        else:
-            # Prepend/refresh front matter while keeping any existing content
-            with open(readme_path, encoding="utf-8") as f:
-                existing = f.read()
-            # If there's already a YAML header, replace it; otherwise, prepend
-            if existing.startswith("---\n"):
-                second_delim = existing.find("\n---\n", 4)
-                if second_delim != -1:
-                    existing_body = existing[second_delim + 5 :]
-                else:
-                    existing_body = "\n" + existing
-                new_content = readme_front_matter + existing_body
-            else:
-                new_content = readme_front_matter + existing
-            with open(readme_path, "w", encoding="utf-8") as f:
-                f.write(new_content)
+    # Ensure README.md with correct base_model metadata exists
+    readme_path = os.path.join(hf_output_dir, "README.md")
+    readme_front_matter = (
+        f"---\n"
+        f"base_model: {base_model_name}\n"
+        f"library_name: peft\n"
+        f"tags:\n"
+        f"- lora\n"
+        f"- peft\n"
+        f"pipeline_tag: text-generation\n"
+        f"---\n\n"
+    )
 
-        if override_adapter_json:
-            adapter_cfg_path = os.path.join(hf_output_dir, "adapter_config.json")
-            with open(adapter_cfg_path, "w", encoding="utf-8") as f:
-                json.dump(override_adapter_json, f, indent=2, ensure_ascii=False)
-        else:
-            # Ensure adapter_config.json contains base_model_name_or_path
-            adapter_cfg_path = os.path.join(hf_output_dir, "adapter_config.json")
-            if os.path.exists(adapter_cfg_path):
-                with open(adapter_cfg_path, encoding="utf-8") as f:
-                    try:
-                        cfg = json.load(f)
-                    except json.JSONDecodeError as e:
-                        print(f"❌ Error loading adapter_config.json: {adapter_cfg_path}")
-                        raise e
-                        # print
-                cfg["base_model_name_or_path"] = base_model_name
-                with open(adapter_cfg_path, "w", encoding="utf-8") as f:
-                    json.dump(cfg, f, indent=2, ensure_ascii=False)
+    # # Prepend/refresh front matter while keeping any existing content
+    # if not os.path.exists(readme_path):
+    #     with open(readme_path, "w", encoding="utf-8") as f:
+    #         f.write(readme_front_matter)
+    # else:
+    # with open(readme_path, encoding="utf-8") as f:
+    #     existing = f.read()
+    # If there's already a YAML header, replace it; otherwise, prepend
+    # if existing.startswith("---\n"):
+    #     second_delim = existing.find("\n---\n", 4)
+    #     if second_delim != -1:
+    #         existing_body = existing[second_delim + 5 :]
+    #     else:
+    #         existing_body = "\n" + existing
+    #     new_content = readme_front_matter + existing_body
+    # else:
+    #     new_content = readme_front_matter + existing
+    with open(readme_path, "w", encoding="utf-8") as f:
+        f.write(readme_front_matter)
 
+    if override_adapter_json:
+        adapter_cfg_path = os.path.join(hf_output_dir, "adapter_config.json")
+        with open(adapter_cfg_path, "w", encoding="utf-8") as f:
+            json.dump(override_adapter_json, f, indent=2, ensure_ascii=False)
     else:
-        print("Converting full model checkpoint to HuggingFace format...")
-        print(f"Source: {actor_checkpoint_dir}")
-        print(f"Target: {hf_output_dir}")
-
-        # Step 1: Convert verl checkpoint to HuggingFace format using verl
-        merge_cmd = [
-            sys.executable,
-            "-m",
-            "verl.model_merger",
-            "merge",
-            "--backend",
-            "fsdp",
-            "--local_dir",
-            actor_checkpoint_dir,
-            "--target_dir",
-            hf_output_dir,
-        ]
-
-        print(f"Running model merger: {' '.join(merge_cmd)}")
-        subprocess.run(merge_cmd, capture_output=True, text=True, check=True)
-        print("✅ Successfully converted checkpoint to HuggingFace format")
+        # Ensure adapter_config.json contains base_model_name_or_path
+        adapter_cfg_path = os.path.join(hf_output_dir, "adapter_config.json")
+        if os.path.exists(adapter_cfg_path):
+            with open(adapter_cfg_path, encoding="utf-8") as f:
+                try:
+                    cfg = json.load(f)
+                except json.JSONDecodeError as e:
+                    print(f"❌ Error loading adapter_config.json: {adapter_cfg_path}")
+                    raise e
+                    # print
+            cfg["base_model_name_or_path"] = base_model_name
+            with open(adapter_cfg_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
 
     # Determine repository name
     repo_name = f"{hub_repo_id}-step-{step}" if step else hub_repo_id
@@ -547,6 +527,8 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
             f"actor_rollout_ref.actor.ppo_epochs={params.ppo_epochs}",
             f"actor_rollout_ref.actor.grad_clip={params.grad_clip}",
             f"actor_rollout_ref.actor.clip_ratio={params.clip_ratio}",
+            f"actor_rollout_ref.actor.clip_ratio_low={params.clip_ratio_low}",
+            f"actor_rollout_ref.actor.clip_ratio_high={params.clip_ratio_high}",
             f"actor_rollout_ref.actor.entropy_coeff={params.entropy_coeff}",
             # kl div for policy loss
             f"actor_rollout_ref.actor.kl_loss_coef={params.loss_kl_penalty}",

@@ -139,12 +139,17 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
 
     # For each uid group, compute max - average
     group_gaps = []
+    # also compute std
+    group_stds = []
+
     for uid_scores in uid_to_scores.values():
         if len(uid_scores) > 1:  # Only compute gap if there are multiple scores in the group
             max_score = max(uid_scores)
             avg_score = np.mean(uid_scores)
             gap = max_score - avg_score
             group_gaps.append(gap)
+            std = np.std(uid_scores)
+            group_stds.append(std)
 
     # Average the gaps across all groups
     if group_gaps:
@@ -156,6 +161,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         "critic/score/max": torch.max(sequence_score).detach().item(),
         "critic/score/min": torch.min(sequence_score).detach().item(),
         "critic/score/max_vs_average_gap": score_max_vs_average_gap,
+        "critic/score/std": np.mean(group_stds),
         # reward
         "critic/rewards/mean": torch.mean(sequence_reward).detach().item(),
         "critic/rewards/max": torch.max(sequence_reward).detach().item(),

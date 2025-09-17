@@ -874,17 +874,19 @@ if __name__ == "__main__":
     # to_100k = list(range(0, 100_000))
     # 100k to 100_200
     # target_features = list(range(0, 200))
-    min_idx = 20_000
+    # min_idx = 20_000
     # max_idx = 20_000
-    max_idx = 30_000
+    # max_idx = 30_000
     # min_idx = 50_000
     # max_idx = 50_600
+    min_idx = 29806
+    max_idx = 29807
     target_features = list(range(min_idx, max_idx))
 
     data_folder = "data"
     os.makedirs(data_folder, exist_ok=True)
 
-    for sae_layer_percent in [25, 50, 75]:
+    for sae_layer_percent in [75]:
         main(
             # model_name="google/gemma-2-9b-it",
             # sae_repo_id="google/gemma-scope-9b-it-res",

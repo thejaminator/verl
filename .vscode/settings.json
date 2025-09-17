@@ -11,7 +11,7 @@
         "initializer_list": "cpp",
         "utility": "cpp"
     },
-    "python.languageServer": "None",
+    "python.languageServer": "Jedi",
     "python.analysis.autoImportCompletions": true,
     "python.analysis.diagnosticMode": "workspace",
     "python.analysis.exclude": [

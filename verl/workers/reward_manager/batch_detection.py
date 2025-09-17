@@ -120,6 +120,7 @@ class BatchDetectionRewardManager:
             table_data.append(
                 {
                     "sae": data.non_tensor_batch["sae"][i]["sae_id"],
+                    "layer": data.non_tensor_batch["sae"][i]["sae_info"]["sae_layer"],
                     "explanation": response_str,
                     "score": scores[i],
                 }

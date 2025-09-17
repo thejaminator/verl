@@ -265,6 +265,7 @@ def compute_grpo_outcome_advantage(
     epsilon: float = 1e-6,
     norm_adv_by_std_in_grpo: bool = True,
     config: AlgoConfig | None = None,
+    floor_std: float = 0.2,  # James: Added this to prevent large advantages when std is very small
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Compute advantage for GRPO, operating only on Outcome reward
@@ -316,7 +317,8 @@ def compute_grpo_outcome_advantage(
                 raise ValueError(f"no score in prompt index: {idx}")
         for i in range(bsz):
             if norm_adv_by_std_in_grpo:
-                scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
+                divided_by = torch.max(id2std[index[i]], torch.tensor(floor_std))
+                scores[i] = (scores[i] - id2mean[index[i]]) / divided_by
             else:
                 scores[i] = scores[i] - id2mean[index[i]]
         scores = scores.unsqueeze(-1) * response_mask

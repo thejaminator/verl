@@ -105,7 +105,7 @@ class HFRollout(BaseRollout):
         position_ids = prompts.batch["position_ids"]
 
         # used to construct attention_mask
-        eos_token_id = prompts.meta_info["eos_token_id"]
+        eos_token_id = self.tokenizer.eos_token_id
         pad_token_id = prompts.meta_info["pad_token_id"]
         sae_info: list[SAEVerlDataTypedDict] = prompts.non_tensor_batch["sae"]
         device = torch.device(get_device_id())

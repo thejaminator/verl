@@ -16,7 +16,7 @@ from typing import Optional
 import typer
 from huggingface_hub import HfApi, login, snapshot_download
 from peft import PeftConfig
-from transformers import AutoTokenizer, AutoConfig
+from transformers import AutoConfig, AutoTokenizer
 
 # set HF_HOME as /workspace
 os.environ["HF_HOME"] = "/workspace"
@@ -55,16 +55,13 @@ def download_lora_and_get_tokenizer(lora_repo: str, token: Optional[str] = None)
     # Download LoRA files to local directory
     logger.info("Downloading LoRA adapter files...")
     lora_local_path = snapshot_download(
-        repo_id=lora_repo,
-        token=token,
-        cache_dir="/workspace/lora_cache",
-        local_files_only=False
+        repo_id=lora_repo, token=token, cache_dir="/workspace/lora_cache", local_files_only=False
     )
-    
+
     # Get tokenizer from base model
     logger.info(f"Loading tokenizer from base model: {base_model_name}")
     tokenizer = AutoTokenizer.from_pretrained(base_model_name, token=token, trust_remote_code=True)
-    
+
     # Get config from base model
     logger.info(f"Loading config from base model: {base_model_name}")
     config = AutoConfig.from_pretrained(base_model_name, token=token, trust_remote_code=True)
@@ -87,19 +84,19 @@ def prepare_upload_directory(lora_path: str, tokenizer, config, target_repo: str
         str: Path to prepared upload directory
     """
     logger = setup_logging()
-    
+
     # Create upload directory
     upload_dir = f"/workspace/upload_{target_repo.replace('/', '_')}"
     upload_path = Path(upload_dir)
-    
+
     # Remove existing directory if it exists
     if upload_path.exists():
         shutil.rmtree(upload_path)
-    
+
     upload_path.mkdir(parents=True, exist_ok=True)
-    
+
     logger.info(f"Preparing upload directory: {upload_dir}")
-    
+
     # Copy LoRA files
     logger.info("Copying LoRA adapter files...")
     lora_source = Path(lora_path)
@@ -107,15 +104,15 @@ def prepare_upload_directory(lora_path: str, tokenizer, config, target_repo: str
         if file_path.is_file():
             shutil.copy2(file_path, upload_path / file_path.name)
             logger.info(f"Copied: {file_path.name}")
-    
+
     # Save tokenizer to upload directory
     logger.info("Saving tokenizer files...")
     tokenizer.save_pretrained(upload_dir)
-    
+
     # Save config to upload directory
     logger.info("Saving config files...")
     config.save_pretrained(upload_dir)
-    
+
     return upload_dir
 
 
@@ -147,7 +144,7 @@ def upload_to_hf(upload_dir: str, target_repo: str, token: Optional[str] = None,
             folder_path=upload_dir,
             repo_id=target_repo,
             token=token,
-            commit_message="Add LoRA adapter with tokenizer and config"
+            commit_message="Add LoRA adapter with tokenizer and config",
         )
 
         logger.info(f"Successfully uploaded to: https://huggingface.co/{target_repo}")
@@ -159,10 +156,12 @@ def upload_to_hf(upload_dir: str, target_repo: str, token: Optional[str] = None,
 
 def main(
     source_model: str = typer.Option(
-        "adamkarvonen/checkpoints_multiple_datasets_layer_1_decoder", "--source-model", help="Source LoRA adapter identifier on HuggingFace"
+        "thejaminator/16sep_5e6_lr_prompt_64-step-20",
+        "--source-model",
+        help="Source LoRA adapter identifier on HuggingFace",
     ),
     target_model: str = typer.Option(
-        "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed", "--target-model", help="Target model identifier for upload"
+        "thejaminator/16sep_5e6_lr_prompt_64-step-20-fixed", "--target-model", help="Target model identifier for upload"
     ),
     token: Optional[str] = typer.Option(
         None, "--token", help="HuggingFace token (can also be set via HF_TOKEN env var)"
@@ -174,7 +173,7 @@ def main(
 
     # Get token from args or environment
     hf_token = token or os.getenv("HF_TOKEN")
-    
+
     try:
         # Step 1: Download LoRA and get tokenizer and config from base model
         logger.info(f"Step 1: Processing LoRA repository {source_model}")
@@ -190,14 +189,14 @@ def main(
         upload_to_hf(upload_dir, target_model, token=hf_token, private=private)
 
         logger.info("✅ LoRA adapter with tokenizer and config uploaded successfully!")
-        
+
     except Exception as e:
         logger.error(f"❌ Error: {e}")
         raise
     finally:
         # Clean up temporary directories
         try:
-            if 'upload_dir' in locals():
+            if "upload_dir" in locals():
                 shutil.rmtree(upload_dir)
                 logger.info(f"Cleaned up upload directory: {upload_dir}")
         except Exception as e:

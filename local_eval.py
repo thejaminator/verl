@@ -165,8 +165,7 @@ cfg = lightweight_sft.SelfInterpTrainingConfig(
 # %%
 
 
-layer_percent = 50
-
+layer_percent = 75
 eval_detection_data_file = f"data/qwen_hard_negatives_50000_50600_layer_percent_{layer_percent}.jsonl"
 
 eval_sae_ids = list(range(50_000, 50_000 + 500))
@@ -204,9 +203,15 @@ model = load_model(model_name, dtype)
 
 # lora_path = "thejaminator/5e6_lr_14sep_bigger_batch-step-120"
 # lora_path = "thejaminator/1e5_lr_prompt_32-step-60"
-# lora_path = "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed" # f1 0.5
-lora_path = "thejaminator/12sep_grp16_1e5_lr-step-60"  # f1 0.6
-# lora_path = "thejaminator/1e5_lr_prompt_64-step-20"  # f1 0.6
+# lora_path = "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed"  # f1 0.5, layer 50 perc, f1 0.51 layer 25 perc
+# lora_path = "thejaminator/12sep_grp16_1e5_lr-step-60"  # f1 0.6, layer 50 percent
+# lora_path = "thejaminator/1e5_lr_prompt_64-step-20"  # f1 0.6, layer 50 percent
+# lora_path = "thejaminator/16sep_5e6_lr_prompt_64-step-120"  # f1 0.6, layer 50 percent, 0.65 layer 25 percent, 0.48 layer 75 percent
+# lora_path = "thejaminator/16sep_5e6_lr_prompt_64-step-20"  # f1 0.6, layer 50 percent, 0.65 layer 25 percent, 0.48 layer 75 percent
+# lora_path = "thejaminator/16sep_1e5_lr_prompt_64_notricks-step-156" #fubar
+# lora_path = "thejaminator/16sep_5e6_lr_prompt_64-step-190"
+lora_path = "thejaminator/16sep_5e6_lr_prompt_64-step-170"  # f1 0.63, 0.65 layer 25,
+
 adapter_name = lora_path
 
 model.load_adapter(lora_path, adapter_name=adapter_name, is_trainable=False, low_cpu_mem_usage=True)

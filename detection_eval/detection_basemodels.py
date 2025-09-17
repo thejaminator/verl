@@ -90,6 +90,7 @@ class SAEVerlData(BaseModel):
 def make_sae_verl_typed_dict(sae_data: SAEV2, position_id: int, feature_vector: list[float]) -> SAEVerlDataTypedDict:
     return {
         "sae_id": sae_data.sae_id,
+        "sae_info": sae_data.sae_info.model_dump(),
         "position_id": position_id,
         "feature_vector": feature_vector,
         "activations": sae_data.activations.model_dump(),

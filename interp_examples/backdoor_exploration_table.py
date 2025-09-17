@@ -16,7 +16,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from create_hard_negatives_v2 import (
     collect_activations,
-    get_submodule,
+    get_hf_submodule,
     load_model,
     load_tokenizer,
 )
@@ -112,7 +112,9 @@ DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
 
 # INVESTIGATOR_LORA = "adamkarvonen/qwen3-8b-layer0-decoder-train-layers-9-18-27"
-INVESTIGATOR_LORA = "adamkarvonen/checkpoints_multiple_datasets_layer_1_decoder"
+# INVESTIGATOR_LORA = "adamkarvonen/checkpoints_multiple_datasets_layer_1_decoder"
+# INVESTIGATOR_LORA = "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed"
+INVESTIGATOR_LORA = "thejaminator/16sep_5e6_lr_prompt_64-step-120"
 
 MAX_DECODE_TOKENS = 3000
 
@@ -136,9 +138,10 @@ model.eval()
 
 # SUSPECT_LORA = "thejaminator/general-bad-20250905"
 # SUSPECT_LORA = "thejaminator/female-backdoor-20250901"
+SUSPECT_LORA = "thejaminator/cities-backdoor-20250901-step-3500"
 # SUSPECT_LORA = "thejaminator/2026-backdoor-20250904"
 # SUSPECT_LORA = "adamkarvonen/loras/model_lora_Qwen_Qwen3-8B_evil_claude37/misaligned_2"
-SUSPECT_LORA = "thejaminator/misaligned_2"
+# SUSPECT_LORA = "thejaminator/misaligned_2"
 # SUSPECT_LORA = "thejaminator/syco_misaligned_2"
 
 model.load_adapter(SUSPECT_LORA, adapter_name=SUSPECT_LORA, is_trainable=False, low_cpu_mem_usage=True)
@@ -229,8 +232,8 @@ def run_activation_steering_experiment(
     )  # type: ignore
 
     # Get the target layers (HF submodules)
-    act_collection_target_layer = get_submodule(model, act_layer, use_lora=False)
-    steer_target_layer = get_submodule(model, steer_layer, use_lora=False)
+    act_collection_target_layer = get_hf_submodule(model, act_layer, use_lora=False)
+    steer_target_layer = get_hf_submodule(model, steer_layer, use_lora=False)
 
     # Prepare the activation prompt (as a single string formatted by chat template)
     formatted_activation_prompt = tokenizer.apply_chat_template(
