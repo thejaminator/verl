@@ -168,14 +168,15 @@ def construct_batch(
         batch_labels.append(labels)
         batch_attn_masks.append(attn_mask)
 
-        for i in range(len(data_point.positions)):
-            data_point.positions[i] += padding_length
+        padded_positions = [p + padding_length for p in data_point.positions]
 
         if data_point.steering_vectors is not None:
-            data_point.steering_vectors = data_point.steering_vectors.to(device)
+            steering_vectors = data_point.steering_vectors.to(device)
+        else:
+            steering_vectors = None
 
-        batch_positions.append(data_point.positions)
-        batch_steering_vectors.append(data_point.steering_vectors)
+        batch_positions.append(padded_positions)
+        batch_steering_vectors.append(steering_vectors)
         batch_feature_indices.append(data_point.feature_idx)
 
     return BatchData(
