@@ -661,6 +661,7 @@ def build_datasets(
         removed = before - len(all_training_data)
         print(f"Percentile trim: kept <= {threshold} tokens (p={p:.6f}). Removed {removed}/{before} examples.")
 
+    set_seed(cfg.seed)
     random.shuffle(all_training_data)
 
     if window_mult is not None:
