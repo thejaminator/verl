@@ -132,7 +132,7 @@ class BatchData(BaseModel):
     labels: torch.Tensor
     attention_mask: torch.Tensor
     steering_vectors: list[torch.Tensor]
-    positions: list[int]
+    positions: list[list[int]]
     feature_indices: list[int]
 
 
@@ -168,17 +168,14 @@ def construct_batch(
         batch_labels.append(labels)
         batch_attn_masks.append(attn_mask)
 
-        # Extract single position and single steering vector (simplified structure)
-        assert len(data_point.positions) == 1, f"Expected exactly one position, got {len(data_point.positions)}"
-        assert len(data_point.steering_vectors) == 1, (
-            f"Expected exactly one steering vector, got {len(data_point.steering_vectors)}"
-        )
+        for i in range(len(data_point.positions)):
+            data_point.positions[i] += padding_length
 
-        single_position = data_point.positions[0] + padding_length
-        single_steering_vector = data_point.steering_vectors[0].to(device)
+        if data_point.steering_vectors is not None:
+            data_point.steering_vectors = data_point.steering_vectors.to(device)
 
-        batch_positions.append(single_position)
-        batch_steering_vectors.append(single_steering_vector)
+        batch_positions.append(data_point.positions)
+        batch_steering_vectors.append(data_point.steering_vectors)
         batch_feature_indices.append(data_point.feature_idx)
 
     return BatchData(
@@ -283,6 +280,7 @@ def materialize_missing_steering_vectors(
             raise IndexError(f"Activation index out of range for item {b}: {idxs} with L={L}")
 
         vectors = acts_BLD[b, idxs, :].detach()  # [num_positions, D]
+        assert len(vectors.shape) == 2, f"Expected 2D tensor, got vectors.shape={vectors.shape}"
         dp.steering_vectors = vectors.to(device)
 
 

@@ -197,6 +197,9 @@ def create_vector_dataset(
             for layer in acts_BLD_by_layer_dict.keys():
                 acts_BLD_by_layer_dict[layer] = acts_BLD_by_layer_dict[layer].to("cpu", non_blocking=True)
 
+        tokenized_prompts["input_ids"] = tokenized_prompts["input_ids"].cpu()
+        tokenized_prompts["attention_mask"] = tokenized_prompts["attention_mask"].cpu()
+
         for layer in act_layers:
             for j in range(len(batch_datapoints)):
                 attn_mask_L = tokenized_prompts["attention_mask"][j].bool()
@@ -208,7 +211,7 @@ def create_vector_dataset(
                 assert end_pos > 0, f"end_pos={end_pos}"
 
                 k = random.randint(1, max_window_size)
-                k = min(k, end_pos)
+                k = min(k, end_pos + 1)
                 assert k > 0, f"k={k}"
                 begin_pos = end_pos - k + 1
                 positions_K = list(range(begin_pos, end_pos + 1))
