@@ -85,16 +85,8 @@ class ClassificationDatasetLoader(ActDatasetLoader):
                 self.dataset_params.min_offset,
                 self.dataset_params.max_offset,
             )
-            data_filename = self.get_dataset_filename(split)
-            data_path = os.path.join(self.dataset_config.dataset_folder, data_filename)
-            torch.save(
-                {
-                    "config": asdict(self.dataset_config),
-                    "data": [dp.model_dump() for dp in data],
-                },
-                data_path,
-            )
-            print(f"Saved {len(data)} {split} datapoints to {data_path}")
+
+            self.save_dataset(data, split)
 
 
 class ClassificationDatapoint(BaseModel):

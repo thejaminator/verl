@@ -184,7 +184,9 @@ def find_pattern_in_tokens(
 ) -> int:
     start_idx = 0
     end_idx = len(token_ids)
-    special_token_id = tokenizer.encode(special_token_str, add_special_tokens=False)[0]
+    special_token_id = tokenizer.encode(special_token_str, add_special_tokens=False)
+    assert len(special_token_id) == 1, f"Expected single token, got {len(special_token_id)}"
+    special_token_id = special_token_id[0]
     positions = []
 
     for i in range(start_idx, end_idx):

@@ -140,8 +140,6 @@ class SAEActivatingSequencesDatasetLoader(ActDatasetLoader):
         )
 
     def create_dataset(self) -> None:
-        save_path = os.path.join(self.dataset_config.dataset_folder, self.get_dataset_filename("train"))
-
         training_data, sae_info = create_activating_sequences_data(
             model_name=self.dataset_config.model_name,
             sae_repo_id=self.dataset_params.sae_repo_id,
@@ -154,15 +152,7 @@ class SAEActivatingSequencesDatasetLoader(ActDatasetLoader):
             verbose=self.dataset_params.verbose,
         )
 
-        torch.save(
-            {
-                "config": asdict(self.dataset_config),
-                "data": [dp.model_dump() for dp in training_data],
-            },
-            save_path,
-        )
-
-        print(f"Saved {len(training_data)} datapoints to {save_path}")
+        self.save_dataset(training_data, "train")
 
 
 class SAEYesNoDatasetLoader(ActDatasetLoader):
@@ -184,8 +174,6 @@ class SAEYesNoDatasetLoader(ActDatasetLoader):
         raise ValueError("May be broken, please review before using")
 
     def create_dataset(self) -> None:
-        save_path = os.path.join(self.dataset_config.dataset_folder, self.get_dataset_filename("train"))
-
         training_data, sae_info = create_yes_no_data(
             model_name=self.dataset_config.model_name,
             sft_data_file=self.dataset_params.sft_data_file,
@@ -198,15 +186,7 @@ class SAEYesNoDatasetLoader(ActDatasetLoader):
             verbose=self.dataset_params.verbose,
         )
 
-        torch.save(
-            {
-                "config": asdict(self.dataset_config),
-                "data": [dp.model_dump() for dp in training_data],
-            },
-            save_path,
-        )
-
-        print(f"Saved {len(training_data)} datapoints to {save_path}")
+        self.save_dataset(training_data, "train")
 
 
 class SAEExplanationDatasetLoader(ActDatasetLoader):
@@ -225,8 +205,6 @@ class SAEExplanationDatasetLoader(ActDatasetLoader):
         self.dataset_config.dataset_name = f"sae_explanations_{self.dataset_params.sft_data_file}"
 
     def create_dataset(self) -> None:
-        save_path = os.path.join(self.dataset_config.dataset_folder, self.get_dataset_filename("train"))
-
         training_data, sae_info = load_sae_data_from_sft_data_file(
             dataset_config=self.dataset_config,
             custom_dataset_params=self.dataset_params,
@@ -235,15 +213,7 @@ class SAEExplanationDatasetLoader(ActDatasetLoader):
             dtype=torch.bfloat16,
         )
 
-        torch.save(
-            {
-                "config": asdict(self.dataset_config),
-                "data": [dp.model_dump() for dp in training_data],
-            },
-            save_path,
-        )
-
-        print(f"Saved {len(training_data)} datapoints to {save_path}")
+        self.save_dataset(training_data, "train")
 
 
 def create_activating_sequences_data(

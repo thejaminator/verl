@@ -7,7 +7,6 @@ from fractions import Fraction
 from typing import Generator, Literal
 
 import torch
-from dataset_classes.act_dataset_manager import ActDatasetLoader
 from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -52,8 +51,6 @@ class PastLensDatasetLoader(ActDatasetLoader):
         device = torch.device("cuda")
         dtype = torch.bfloat16
 
-        save_path = os.path.join(self.dataset_config.dataset_folder, self.get_dataset_filename("train"))
-
         training_data = collect_past_lens_acts(
             dataset_config=self.dataset_config,
             custom_dataset_params=self.dataset_params,
@@ -64,14 +61,7 @@ class PastLensDatasetLoader(ActDatasetLoader):
             dtype=dtype,
         )
 
-        torch.save(
-            {
-                "config": asdict(self.dataset_config),
-                "data": [dp.model_dump() for dp in training_data],
-            },
-            save_path,
-        )
-        print(f"Saved {len(training_data)} datapoints to {save_path}")
+        self.save_dataset(training_data, "train")
 
 
 def hf_mixed_dataset_to_generator(

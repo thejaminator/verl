@@ -638,7 +638,7 @@ def build_datasets(
     dataset_loaders: list[ActDatasetLoader],
     max_len_percentile: float | None = 0.999,
     window_mult: int | None = 20,
-) -> tuple[list[TrainingDataPoint], list[TrainingDataPoint]]:
+) -> tuple[list[TrainingDataPoint], dict[str, list[TrainingDataPoint]]]:
     random.seed(cfg.seed)
     all_training_data: list[TrainingDataPoint] = []
     # eval data will only be for classification datasets

@@ -83,6 +83,18 @@ class ActDatasetLoader:
         print(f"Loaded {len(data)} datapoints from {filepath}")
         return data
 
+    def save_dataset(self, data: list[TrainingDataPoint], split: Literal["train", "test"]) -> None:
+        data_filename = self.get_dataset_filename(split)
+        data_path = os.path.join(self.dataset_config.dataset_folder, data_filename)
+        torch.save(
+            {
+                "config": asdict(self.dataset_config),
+                "data": [dp.model_dump() for dp in data],
+            },
+            data_path,
+        )
+        print(f"Saved {len(data)} {split} datapoints to {data_path}")
+
     def get_dataset_filename(self, split: Literal["train", "test"]) -> str:
         num_datapoints = self.dataset_config.num_train if split == "train" else self.dataset_config.num_test
 
