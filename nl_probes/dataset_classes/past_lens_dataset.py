@@ -45,7 +45,7 @@ class PastLensDatasetLoader(ActDatasetLoader):
         assert self.dataset_config.splits == ["train"], "Past lens dataset only supports train split right now"
         assert self.dataset_config.num_test == 0, "Past lens dataset only supports train split right now"
 
-    def create_dataset(self) -> list[TrainingDataPoint]:
+    def create_dataset(self) -> None:
         tokenizer = load_tokenizer(self.dataset_config.model_name)
         dataset = hf_mixed_dataset_to_generator(tokenizer)
 

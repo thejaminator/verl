@@ -3,9 +3,10 @@ import os
 import pickle
 import random
 import re
+from dataclasses import asdict, dataclass, field
+from typing import Literal
 
 import torch
-from slist import Slist
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
@@ -13,6 +14,7 @@ import detection_eval.caller as caller
 from detection_eval.detection_basemodels import SAEInfo
 from detection_eval.steering_hooks import EXPLANATION_PROMPT
 from nl_probes.configs.sft_config import SelfInterpTrainingConfig
+from nl_probes.dataset_classes.act_dataset_manager import ActDatasetLoader, BaseDatasetConfig, DatasetLoaderConfig
 from nl_probes.sae import BaseSAE, get_sae_info, load_max_acts_data, load_sae
 from nl_probes.utils.common import load_tokenizer
 from nl_probes.utils.dataset_utils import (
@@ -40,6 +42,210 @@ TEMPLATES: list[str] = [
 ]
 
 
+@dataclass
+class SAEActivatingSequencesDatasetConfig(BaseDatasetConfig):
+    sae_repo_id: str
+    use_decoder_vectors: bool = True
+    num_features: int = 60_000
+    max_examples_per_feature: int = 5
+    context_length: int = 32
+    verbose: bool = False
+
+
+@dataclass
+class SAEYesNoDatasetConfig(BaseDatasetConfig):
+    sft_data_file: str
+    llm_model_name: str = "gpt-5-mini-2025-08-07"
+    temperature: float = 1.0
+    max_tokens: int = 2_000
+    max_features: int | None = None
+    use_decoder_vectors: bool = True
+    max_parallel_requests: int = 100
+    reasoning_effort: Literal["low", "medium", "high"] = "low"
+    verbose: bool = False
+
+
+@dataclass
+class SAEExplanationDatasetConfig(BaseDatasetConfig):
+    sft_data_file: str
+    use_decoder_vectors: bool = True
+    positive_negative_examples: bool = False
+    input_prompt: str = EXPLANATION_PROMPT
+
+
+YES_NO_QUESTION_PROMPT = """
+I would like for you to generate four Yes / No questions about the feature's explanation. 2 should have the answer be Yes, and 2 should have the answer be No.
+
+<BEGIN EXAMPLE>
+
+<explanation>
+Mentions of named, recurring marquee sports events—especially U.S. college football "Bowl" games and NHL "Classic"/"Winter Classic" events. These sentences typically include event names (e.g., Fiesta Bowl, Orange Bowl, Cotton Bowl Classic, Winter Classic), venue or stadium references, dates or seasonal timing, and verbs/phrases like "played," "host," "has been played annually," or "will be the host." Not general sports commentary or unrelated news—specifically the formal naming/placement/occurrence of annual or special sporting events.
+</explanation>
+
+Response:
+
+<question>
+Would you say the concept is related to recurring sports events?
+</question>
+<answer>
+Yes
+</answer>
+<question>
+Is this feature most related to general sports commentary?
+</question>
+<answer>
+No
+</answer>
+<question>
+Does this relate to pets, especially dogs?
+</question>
+<answer>
+No
+</answer>
+<question>
+Does this have any relation to sports or college football?
+</question>
+<answer>
+Yes
+</answer>
+
+<END EXAMPLE>
+
+Here is the explanation of a sparse autoencoder feature.
+
+<explanation>
+{explanation}
+</explanation>
+
+Please generate four Yes / No questions, and try have some variety in the phrasing and types of questions.
+"""
+
+
+class SAEActivatingSequencesDatasetLoader(ActDatasetLoader):
+    def __init__(self, dataset_config: DatasetLoaderConfig):
+        super().__init__(dataset_config)
+        if not isinstance(dataset_config.custom_dataset_params, SAEActivatingSequencesDatasetConfig):
+            raise TypeError("Expected SAEActivatingSequencesDatasetConfig")
+        self.dataset_params: SAEActivatingSequencesDatasetConfig = dataset_config.custom_dataset_params
+
+        assert self.dataset_config.dataset_name == "", "Dataset name gets overridden for SAE activating sequences"
+
+        dataset_name = f"sae_activating_sequences_{self.dataset_params.sae_repo_id}_layer_percent_{self.dataset_config.layer_percents[0]}"
+        self.dataset_config.dataset_name = dataset_name
+
+        assert self.dataset_config.splits == ["train"], "SAE activating sequences dataset only supports train split"
+        assert self.dataset_config.num_test == 0, "SAE activating sequences dataset does not support a test split"
+        assert len(self.dataset_config.layer_percents) == 1, (
+            "SAE activating sequences dataset only supports one layer percent"
+        )
+
+    def create_dataset(self) -> None:
+        save_path = os.path.join(self.dataset_config.dataset_folder, self.get_dataset_filename("train"))
+
+        training_data, sae_info = create_activating_sequences_data(
+            model_name=self.dataset_config.model_name,
+            sae_repo_id=self.dataset_params.sae_repo_id,
+            sae_layer_percent=self.dataset_config.layer_percents[0],
+            use_decoder=self.dataset_params.use_decoder_vectors,
+            num_features=self.dataset_params.num_features,
+            max_num_examples=self.dataset_params.max_examples_per_feature,
+            seed=self.dataset_config.seed,
+            sft_data_folder=self.dataset_config.dataset_folder,
+            verbose=self.dataset_params.verbose,
+        )
+
+        torch.save(
+            {
+                "config": asdict(self.dataset_config),
+                "data": [dp.model_dump() for dp in training_data],
+            },
+            save_path,
+        )
+
+        print(f"Saved {len(training_data)} datapoints to {save_path}")
+
+
+class SAEYesNoDatasetLoader(ActDatasetLoader):
+    def __init__(self, dataset_config: DatasetLoaderConfig):
+        super().__init__(dataset_config)
+        if not isinstance(dataset_config.custom_dataset_params, SAEYesNoDatasetConfig):
+            raise TypeError("Expected SAEYesNoDatasetConfig")
+
+        assert self.dataset_config.splits == ["train"], "SAE explanation dataset only supports train split"
+        assert self.dataset_config.num_test == 0, "SAE explanation dataset does not support a test split"
+        assert len(self.dataset_config.layer_percents) == 1, "SAE explanation dataset only supports one layer percent"
+
+        self.dataset_params: SAEYesNoDatasetConfig = dataset_config.custom_dataset_params
+
+        assert self.dataset_config.dataset_name == "", "Dataset name gets overridden for SAE Yes/No dataset"
+
+        self.dataset_config.dataset_name = f"sae_yes_no_{self.dataset_params.sft_data_file}"
+
+        raise ValueError("May be broken, please review before using")
+
+    def create_dataset(self) -> None:
+        save_path = os.path.join(self.dataset_config.dataset_folder, self.get_dataset_filename("train"))
+
+        training_data, sae_info = create_yes_no_data(
+            model_name=self.dataset_config.model_name,
+            sft_data_file=self.dataset_params.sft_data_file,
+            sft_data_folder=self.dataset_config.dataset_folder,
+            device=torch.device("cpu"),
+            dtype=torch.bfloat16,
+            seed=self.dataset_config.seed,
+            use_decoder=self.dataset_params.use_decoder_vectors,
+            max_features=self.dataset_params.max_features,
+            verbose=self.dataset_params.verbose,
+        )
+
+        torch.save(
+            {
+                "config": asdict(self.dataset_config),
+                "data": [dp.model_dump() for dp in training_data],
+            },
+            save_path,
+        )
+
+        print(f"Saved {len(training_data)} datapoints to {save_path}")
+
+
+class SAEExplanationDatasetLoader(ActDatasetLoader):
+    def __init__(self, dataset_config: DatasetLoaderConfig):
+        super().__init__(dataset_config)
+        if not isinstance(dataset_config.custom_dataset_params, SAEExplanationDatasetConfig):
+            raise TypeError("Expected SAEExplanationDatasetConfig")
+        assert self.dataset_config.splits == ["train"], "SAE explanation dataset only supports train split"
+        assert self.dataset_config.num_test == 0, "SAE explanation dataset does not support a test split"
+        assert len(self.dataset_config.layer_percents) == 1, "SAE explanation dataset only supports one layer percent"
+
+        self.dataset_params: SAEExplanationDatasetConfig = dataset_config.custom_dataset_params
+
+        assert self.dataset_config.dataset_name == "", "Dataset name gets overridden for SAE explanation dataset"
+
+        self.dataset_config.dataset_name = f"sae_explanations_{self.dataset_params.sft_data_file}"
+
+    def create_dataset(self) -> None:
+        save_path = os.path.join(self.dataset_config.dataset_folder, self.get_dataset_filename("train"))
+
+        training_data, sae_info = load_sae_data_from_sft_data_file(
+            dataset_config=self.dataset_config,
+            custom_dataset_params=self.dataset_params,
+            tokenizer=load_tokenizer(self.dataset_config.model_name),
+            device=torch.device("cpu"),
+            dtype=torch.bfloat16,
+        )
+
+        torch.save(
+            {
+                "config": asdict(self.dataset_config),
+                "data": [dp.model_dump() for dp in training_data],
+            },
+            save_path,
+        )
+
+        print(f"Saved {len(training_data)} datapoints to {save_path}")
+
+
 def create_activating_sequences_data(
     model_name: str,
     sae_repo_id: str,
@@ -50,7 +256,7 @@ def create_activating_sequences_data(
     seed: int = 42,
     sft_data_folder: str = "sft_training_data",
     verbose: bool = False,
-):
+) -> tuple[list[TrainingDataPoint], SAEInfo]:
     device = torch.device("cpu")
     dtype = torch.bfloat16
     random.seed(seed)
@@ -117,9 +323,7 @@ def create_activating_sequences_data(
             )
         )
 
-    with open(save_filename, "wb") as f:
-        pickle.dump(training_data, f)
-    print(f"Saved {len(training_data)} datapoints to {save_filename}")
+    return training_data, sae_info
 
 
 def parse_yes_no_qas(response: str) -> list[dict[str, str]] | None:
@@ -183,7 +387,7 @@ def create_yes_no_data(
     use_decoder: bool = True,
     max_features: int | None = None,
     verbose: bool = False,
-):
+) -> tuple[list[TrainingDataPoint], SAEInfo]:
     question_gen_prompt = """
 I would like for you to generate four Yes / No questions about the feature's explanation. 2 should have the answer be Yes, and 2 should have the answer be No.
 
@@ -313,15 +517,14 @@ Please generate four Yes / No questions, and try have some variety in the phrasi
                 print(tokenizer.decode(training_datapoint.input_ids))
                 print(training_datapoint.labels)
             training_data.append(training_datapoint)
-    with open(save_filename, "wb") as f:
-        pickle.dump(training_data, f)
-    print(f"Saved {len(training_data)} datapoints to {save_filename}")
     print(f"Incorrect count: {incorrect_count}")
+
+    return training_data, sae_info
 
 
 @torch.no_grad()
 def construct_train_dataset(
-    cfg: SelfInterpTrainingConfig,
+    custom_dataset_params: SAEExplanationDatasetConfig,
     dataset_size: int,
     layer: int,
     input_prompt: str,
@@ -337,7 +540,7 @@ def construct_train_dataset(
         # 2. Prepare feature vectors for steering
         # We use decoder weights (W_dec) as they map from the feature space back to the residual stream.
         # .clone() because otherwise we will save the entire W_dec in pickle for each training example
-        if cfg.use_decoder_vectors:
+        if custom_dataset_params.use_decoder_vectors:
             feature_vector = sae.W_dec[target_feature_idx].clone()
         else:
             feature_vector = sae.W_enc[:, target_feature_idx].clone()
@@ -439,27 +642,29 @@ def construct_eval_dataset(
 
 
 def load_sae_data_from_sft_data_file(
-    sft_data_file: str,
-    cfg: SelfInterpTrainingConfig,
+    dataset_config: DatasetLoaderConfig,
+    custom_dataset_params: SAEExplanationDatasetConfig,
     tokenizer: AutoTokenizer,
     device: torch.device,
     dtype: torch.dtype,
 ) -> tuple[list[TrainingDataPoint], SAEInfo]:
-    explanations: list[SAEExplained] = load_explanations_from_jsonl(sft_data_file)
+    explanations: list[SAEExplained] = load_explanations_from_jsonl(custom_dataset_params.sft_data_file)
     orig_sae_info = explanations[0].sae_info
     for data_point in explanations:
         assert data_point.sae_info == orig_sae_info
     sae_info = SAEInfo.model_validate(orig_sae_info)
 
-    sae = load_sae(sae_info.sae_repo_id, sae_info.sae_filename, sae_info.sae_layer, cfg.model_name, device, dtype)
+    sae = load_sae(
+        sae_info.sae_repo_id, sae_info.sae_filename, sae_info.sae_layer, dataset_config.model_name, device, dtype
+    )
 
     training_examples = [
         TrainingExample.with_positive_and_negative_examples(exp)
-        if cfg.positive_negative_examples
+        if custom_dataset_params.positive_negative_examples
         else TrainingExample.with_explanation_only(exp)
         for exp in explanations
     ]
-    print(f"Loaded {len(training_examples)} training examples from {sft_data_file}")
+    print(f"Loaded {len(training_examples)} training examples from {custom_dataset_params.sft_data_file}")
 
     train_features = set()
 
@@ -472,7 +677,7 @@ def load_sae_data_from_sft_data_file(
     print(f"Train features: {len(train_features)}")
 
     training_data: list[TrainingDataPoint] = construct_train_dataset(
-        cfg,
+        custom_dataset_params,
         len(training_examples),
         # dataset_size,
         layer=sae_info.sae_layer,
@@ -485,41 +690,41 @@ def load_sae_data_from_sft_data_file(
     return training_data, sae_info
 
 
-if __name__ == "__main__":
-    # cfg.sae_repo_id = "fnlp/Llama3_1-8B-Base-LXR-32x"
-    # cfg.model_name = "meta-llama/Llama-3.1-8B-Instruct"
+# if __name__ == "__main__":
+#     # cfg.sae_repo_id = "fnlp/Llama3_1-8B-Base-LXR-32x"
+#     # cfg.model_name = "meta-llama/Llama-3.1-8B-Instruct"
 
-    device = torch.device("cpu")
-    dtype = torch.bfloat16
+#     device = torch.device("cpu")
+#     dtype = torch.bfloat16
 
-    sae_repo_id = "adamkarvonen/qwen3-8b-saes"
-    model_name = "Qwen/Qwen3-8B"
-    sft_data_folder = "sft_training_data"
-    os.makedirs(sft_data_folder, exist_ok=True)
+#     sae_repo_id = "adamkarvonen/qwen3-8b-saes"
+#     model_name = "Qwen/Qwen3-8B"
+#     sft_data_folder = "sft_training_data"
+#     os.makedirs(sft_data_folder, exist_ok=True)
 
-    sae_layer_percents = [25, 50, 75]
-    # sae_layer_percents = [75]
-    # sae_layer_percents = [25]
-    num_features = 60_000
+#     sae_layer_percents = [25, 50, 75]
+#     # sae_layer_percents = [75]
+#     # sae_layer_percents = [25]
+#     num_features = 60_000
 
-    for layer_percent in sae_layer_percents:
-        create_activating_sequences_data(model_name, sae_repo_id, layer_percent, num_features=num_features)
+#     for layer_percent in sae_layer_percents:
+#         create_activating_sequences_data(model_name, sae_repo_id, layer_percent, num_features=num_features)
 
-    for layer_percent in sae_layer_percents:
-        explanations_file = (
-            f"data/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl"
-        )
+#     for layer_percent in sae_layer_percents:
+#         explanations_file = (
+#             f"data/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl"
+#         )
 
-        create_yes_no_data(
-            model_name,
-            explanations_file,
-            sft_data_folder,
-            device,
-            dtype,
-            seed=42,
-            use_decoder=True,
-            max_features=None,
-            # max_features=10,
-            verbose=False,
-            # verbose=True,
-        )
+#         create_yes_no_data(
+#             model_name,
+#             explanations_file,
+#             sft_data_folder,
+#             device,
+#             dtype,
+#             seed=42,
+#             use_decoder=True,
+#             max_features=None,
+#             # max_features=10,
+#             verbose=False,
+#             # verbose=True,
+#         )

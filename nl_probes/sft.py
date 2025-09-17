@@ -33,7 +33,14 @@ from nl_probes.configs.sft_config import SelfInterpTrainingConfig
 from nl_probes.dataset_classes.act_dataset_manager import ActDatasetLoader, DatasetLoaderConfig
 from nl_probes.dataset_classes.classification import ClassificationDatasetConfig, ClassificationDatasetLoader
 from nl_probes.dataset_classes.past_lens_dataset import PastLensDatasetConfig, PastLensDatasetLoader
-from nl_probes.dataset_classes.sae_training_data import load_sae_data_from_sft_data_file
+from nl_probes.dataset_classes.sae_training_data import (
+    SAEActivatingSequencesDatasetConfig,
+    SAEActivatingSequencesDatasetLoader,
+    SAEExplanationDatasetConfig,
+    SAEExplanationDatasetLoader,
+    SAEYesNoDatasetConfig,
+    SAEYesNoDatasetLoader,
+)
 from nl_probes.utils.activation_utils import get_hf_submodule
 from nl_probes.utils.common import load_model, load_tokenizer
 from nl_probes.utils.dataset_utils import (
@@ -672,7 +679,7 @@ def build_datasets(
 if __name__ == "__main__":
     main_train_size = 6000
     main_test_size = 250
-    classification_datasets_ = {
+    classification_datasets = {
         "geometry_of_truth": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
         "relations": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
         "sst2": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
@@ -717,16 +724,48 @@ if __name__ == "__main__":
     )
     dataset_loaders.append(past_lens_dataset_loader)
 
-    for dataset_name in classification_datasets_.keys():
+    for layer_percent in layer_percents:
+        dataset_config = DatasetLoaderConfig(
+            custom_dataset_params=SAEExplanationDatasetConfig(
+                sft_data_file=f"data/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl",
+                use_decoder_vectors=True,
+            ),
+            num_train=20000,
+            num_test=0,
+            splits=["train"],
+            model_name=model_name,
+            layer_percents=[layer_percent],
+            save_acts=True,
+        )
+        sae_explanation_dataset_loader = SAEExplanationDatasetLoader(dataset_config=dataset_config)
+
+        dataset_config = DatasetLoaderConfig(
+            custom_dataset_params=SAEActivatingSequencesDatasetConfig(
+                sae_repo_id="adamkarvonen/qwen3-8b-saes",
+                use_decoder_vectors=True,
+            ),
+            num_train=60000,
+            num_test=0,
+            splits=["train"],
+            model_name=model_name,
+            layer_percents=[layer_percent],
+            save_acts=True,
+        )
+        sae_activating_sequences_dataset_loader = SAEActivatingSequencesDatasetLoader(dataset_config=dataset_config)
+
+        dataset_loaders.append(sae_explanation_dataset_loader)
+        dataset_loaders.append(sae_activating_sequences_dataset_loader)
+
+    for dataset_name in classification_datasets.keys():
         classification_config = ClassificationDatasetConfig(
             classification_dataset_name=dataset_name,
         )
 
         dataset_config = DatasetLoaderConfig(
             custom_dataset_params=classification_config,
-            num_train=classification_datasets_[dataset_name]["num_train"],
-            num_test=classification_datasets_[dataset_name]["num_test"],
-            splits=classification_datasets_[dataset_name]["splits"],
+            num_train=classification_datasets[dataset_name]["num_train"],
+            num_test=classification_datasets[dataset_name]["num_test"],
+            splits=classification_datasets[dataset_name]["splits"],
             model_name=model_name,
             layer_percents=layer_percents,
             save_acts=True,
