@@ -1,8 +1,8 @@
 import json
 
 import torch
-from pydantic import BaseModel, ConfigDict, field_validator
-from transformers import AutoTokenizer
+from pydantic import BaseModel, ConfigDict, model_validator
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from detection_eval.detection_basemodels import SAEInfo
 from detection_eval.steering_hooks import SPECIAL_TOKEN, get_introspection_prefix
@@ -89,10 +89,13 @@ class EvalStepResult(BaseModel):
 
 
 class TrainingDataPoint(BaseModel):
-    """Training data point with tensors."""
+    """Training data point with tensors.
+    If steering_vectors is None, then we calculate the steering vectors on the fly
+    from the context_input_ids and context_positions."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
+    datapoint_type: str
     input_ids: list[int]
     labels: list[int]  # Can contain -100 for ignored tokens
     layer: int
@@ -100,15 +103,23 @@ class TrainingDataPoint(BaseModel):
     positions: list[int]
     feature_idx: int
     target_output: str
+    context_input_ids: list[int] | None
+    context_positions: list[int] | None
 
-    @field_validator("positions")
-    @classmethod
-    def _len_match(cls, pos, info):
-        # Ensure positions and steering_vectors align
-        sv = info.data.get("steering_vectors", None)
-        if sv is not None and len(pos) != sv.shape[0]:
-            raise ValueError("positions and steering_vectors must have the same length")
-        return pos
+    @model_validator(mode="after")
+    def _check_context_alignment(cls, values):
+        sv = values.steering_vectors
+        if sv is not None:
+            if len(values.positions) != sv.shape[0]:
+                raise ValueError("positions and steering_vectors must have the same length")
+            if values.context_positions is not None or values.context_input_ids is not None:
+                raise ValueError("context_* must be None when steering_vectors is provided")
+        else:
+            if values.context_positions is None or values.context_input_ids is None:
+                raise ValueError("context_* must be provided when steering_vectors is None")
+            if len(values.positions) != len(values.context_positions):
+                raise ValueError("positions and context_positions must have the same length")
+        return values
 
 
 class BatchData(BaseModel):
@@ -263,6 +274,9 @@ def create_training_datapoint(
         positions=positions,
         feature_idx=feature_idx,
         target_output=target_response,
+        datapoint_type="sft",  # TODO
+        context_input_ids=None,
+        context_positions=None,
     )
 
     return training_data_point

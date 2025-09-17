@@ -2,11 +2,8 @@ import os
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-import contextlib
-import datetime
 import gc
 import json
-import pickle
 import random
 
 # All necessary imports are now included above
@@ -15,9 +12,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import torch
-from huggingface_hub import login, whoami
 from peft import LoraConfig, PeftModel, get_peft_model
-from pydantic import BaseModel, ConfigDict, field_validator
 from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
 from transformers.models.auto.modeling_auto import AutoModelForCausalLM
@@ -42,7 +37,7 @@ from nl_probes.dataset_classes.sae_training_data import (
     SAEYesNoDatasetLoader,
 )
 from nl_probes.utils.activation_utils import get_hf_submodule
-from nl_probes.utils.common import load_model, load_tokenizer
+from nl_probes.utils.common import load_model, load_tokenizer, set_seed
 from nl_probes.utils.dataset_utils import (
     BatchData,
     EvalStepResult,
@@ -50,6 +45,7 @@ from nl_probes.utils.dataset_utils import (
     FeatureResult,
     TrainingDataPoint,
     construct_batch,
+    materialize_steering_vectors_for_batch,
 )
 
 
@@ -449,6 +445,7 @@ def train_model(
     dtype: torch.dtype,
     verbose: bool = False,
 ):
+    set_seed(cfg.seed)
     model = load_model(cfg.model_name, dtype)
 
     if cfg.gradient_checkpointing:
@@ -479,6 +476,8 @@ def train_model(
 
     oom_preflight_check(cfg, training_data, model, submodule, tokenizer, device, dtype)
 
+    set_seed(cfg.seed)
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr)
 
     total_training_steps = (cfg.num_epochs * len(training_data)) // cfg.train_batch_size
@@ -504,6 +503,11 @@ def train_model(
             desc=f"Training epoch {epoch + 1}",
         ):
             t_batch_list: list[TrainingDataPoint] = training_data[i : i + cfg.train_batch_size]
+
+            total = 0
+            for dp in t_batch_list:
+                total += len(dp.input_ids)
+            print(f"Total tokens: {total}")
 
             t_batch = construct_batch(t_batch_list, tokenizer, device)
 
@@ -639,7 +643,7 @@ def build_datasets(
     max_len_percentile: float | None = 0.999,
     window_mult: int | None = 20,
 ) -> tuple[list[TrainingDataPoint], dict[str, list[TrainingDataPoint]]]:
-    random.seed(cfg.seed)
+    set_seed(cfg.seed)
     all_training_data: list[TrainingDataPoint] = []
     # eval data will only be for classification datasets
     all_eval_data: dict[str, list[TrainingDataPoint]] = {}
@@ -667,7 +671,6 @@ def build_datasets(
         removed = before - len(all_training_data)
         print(f"Percentile trim: kept <= {threshold} tokens (p={p:.6f}). Removed {removed}/{before} examples.")
 
-    random.seed(cfg.seed)
     random.shuffle(all_training_data)
 
     if window_mult is not None:
@@ -678,22 +681,23 @@ def build_datasets(
 
 if __name__ == "__main__":
     main_train_size = 6000
+    main_train_size = 600
     main_test_size = 250
     classification_datasets = {
         "geometry_of_truth": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        "relations": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        "sst2": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        "md_gender": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        "snli": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        "ag_news": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["test"]},
-        "ner": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        "tense": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        "language_identification": {
-            "num_train": main_train_size,
-            "num_test": main_test_size,
-            "splits": ["test"],
-        },
-        "singular_plural": {"num_train": 0, "num_test": main_test_size, "splits": ["test"]},
+        # "relations": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        # "sst2": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        # "md_gender": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        # "snli": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        # "ag_news": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["test"]},
+        # "ner": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        # "tense": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        # "language_identification": {
+        #     "num_train": main_train_size,
+        #     "num_test": main_test_size,
+        #     "splits": ["test"],
+        # },
+        # "singular_plural": {"num_train": 0, "num_test": main_test_size, "splits": ["test"]},
     }
 
     hook_layer = 1
@@ -709,52 +713,52 @@ if __name__ == "__main__":
 
     dataset_loaders = []
 
-    dataset_config = DatasetLoaderConfig(
-        custom_dataset_params=PastLensDatasetConfig(),
-        num_train=300,
-        num_test=0,
-        splits=["train"],
-        model_name=model_name,
-        layer_percents=layer_percents,
-        save_acts=True,
-    )
+    # dataset_config = DatasetLoaderConfig(
+    #     custom_dataset_params=PastLensDatasetConfig(),
+    #     num_train=300,
+    #     num_test=0,
+    #     splits=["train"],
+    #     model_name=model_name,
+    #     layer_percents=layer_percents,
+    #     save_acts=True,
+    # )
 
-    past_lens_dataset_loader = PastLensDatasetLoader(
-        dataset_config=dataset_config,
-    )
-    dataset_loaders.append(past_lens_dataset_loader)
+    # past_lens_dataset_loader = PastLensDatasetLoader(
+    #     dataset_config=dataset_config,
+    # )
+    # dataset_loaders.append(past_lens_dataset_loader)
 
-    for layer_percent in layer_percents:
-        dataset_config = DatasetLoaderConfig(
-            custom_dataset_params=SAEExplanationDatasetConfig(
-                sft_data_file=f"data/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl",
-                use_decoder_vectors=True,
-            ),
-            num_train=20000,
-            num_test=0,
-            splits=["train"],
-            model_name=model_name,
-            layer_percents=[layer_percent],
-            save_acts=True,
-        )
-        sae_explanation_dataset_loader = SAEExplanationDatasetLoader(dataset_config=dataset_config)
+    # for layer_percent in layer_percents:
+    #     dataset_config = DatasetLoaderConfig(
+    #         custom_dataset_params=SAEExplanationDatasetConfig(
+    #             sft_data_file=f"data/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl",
+    #             use_decoder_vectors=True,
+    #         ),
+    #         num_train=20000,
+    #         num_test=0,
+    #         splits=["train"],
+    #         model_name=model_name,
+    #         layer_percents=[layer_percent],
+    #         save_acts=True,
+    #     )
+    #     sae_explanation_dataset_loader = SAEExplanationDatasetLoader(dataset_config=dataset_config)
 
-        dataset_config = DatasetLoaderConfig(
-            custom_dataset_params=SAEActivatingSequencesDatasetConfig(
-                sae_repo_id="adamkarvonen/qwen3-8b-saes",
-                use_decoder_vectors=True,
-            ),
-            num_train=60000,
-            num_test=0,
-            splits=["train"],
-            model_name=model_name,
-            layer_percents=[layer_percent],
-            save_acts=True,
-        )
-        sae_activating_sequences_dataset_loader = SAEActivatingSequencesDatasetLoader(dataset_config=dataset_config)
+    #     dataset_config = DatasetLoaderConfig(
+    #         custom_dataset_params=SAEActivatingSequencesDatasetConfig(
+    #             sae_repo_id="adamkarvonen/qwen3-8b-saes",
+    #             use_decoder_vectors=True,
+    #         ),
+    #         num_train=60000,
+    #         num_test=0,
+    #         splits=["train"],
+    #         model_name=model_name,
+    #         layer_percents=[layer_percent],
+    #         save_acts=True,
+    #     )
+    #     sae_activating_sequences_dataset_loader = SAEActivatingSequencesDatasetLoader(dataset_config=dataset_config)
 
-        dataset_loaders.append(sae_explanation_dataset_loader)
-        dataset_loaders.append(sae_activating_sequences_dataset_loader)
+    #     dataset_loaders.append(sae_explanation_dataset_loader)
+    #     dataset_loaders.append(sae_activating_sequences_dataset_loader)
 
     for dataset_name in classification_datasets.keys():
         classification_config = ClassificationDatasetConfig(

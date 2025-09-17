@@ -20,7 +20,13 @@ from nl_probes.utils.activation_utils import (
     collect_activations_multiple_layers,
     get_hf_submodule,
 )
-from nl_probes.utils.common import assert_no_peft_present, layer_percent_to_layer, load_model, load_tokenizer
+from nl_probes.utils.common import (
+    assert_no_peft_present,
+    layer_percent_to_layer,
+    load_model,
+    load_tokenizer,
+    set_seed,
+)
 from nl_probes.utils.dataset_utils import (
     BatchData,
     EvalStepResult,
@@ -119,12 +125,12 @@ def get_classification_datapoints(
     test_examples: int,
     random_seed: int,
 ) -> tuple[list[ClassificationDatapoint], list[ClassificationDatapoint]]:
+    set_seed(random_seed)
     all_examples = classification_dataset_manager.get_samples_from_groups(
         [dataset_name],
         num_qa_per_sample,
     )
 
-    random.seed(random_seed)
     random.shuffle(all_examples)
 
     assert len(all_examples) >= train_examples + test_examples, "Not enough examples to split"
