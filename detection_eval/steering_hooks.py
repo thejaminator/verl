@@ -146,72 +146,63 @@ def add_hook(
 
 
 def get_hf_activation_steering_hook(
-    vectors: list[torch.Tensor],  # list of length B, each tensor is (K, d_model).
-    positions: list[list[int]],  # shape [B, K]
+    vectors: list[torch.Tensor],  # len B, each tensor is (K_b, d_model)
+    positions: list[list[int]],  # len B, each list has length K_b
     steering_coefficient: float,
     device: torch.device,
     dtype: torch.dtype,
 ) -> Callable:
     """
     HF hook with debug prints to compare against vLLM.
-    Supports K target positions per batch element.
+    Supports a variable number of target positions per batch element.
 
     Semantics:
       For each batch item b and slot k, replace the residual at token index positions[b][k]
-      with the provided vector vectors[b][k], normalized to the original slot's norm and
-      scaled by `steering_coefficient`.
+      with normalize(vectors[b][k]) * ||resid[b, positions[b][k], :]|| * steering_coefficient.
+
+    We use a for loop instead of vectorized operations as it's simpler and we are just doing indexing in
+    a single layer, so the simplicity won out for now.
     """
 
-    # Expect a list of length B, each (K, d_model)
-    vec_BKD = torch.stack([v.to(device=device, dtype=dtype) for v in vectors], dim=0)  # (B, K, d)
+    # ---- move inputs to device and prepare ragged tensors ----
+    assert len(vectors) == len(positions), "vectors and positions must have same batch length"
+    B = len(vectors)
+    if B == 0:
+        raise ValueError("Empty batch")
 
-    pos_BK = torch.tensor(positions, dtype=torch.long, device=device)  # (B, K)
-
-    B, K, d_model = vec_BKD.shape
-
-    assert pos_BK.shape == (B, K)
-
-    # Precompute normalized features once
-    normalized_BKD = torch.nn.functional.normalize(vec_BKD, dim=-1).detach()  # (B, K, d)
+    # Pre-normalize once; we never backprop through these
+    normed_list = [torch.nn.functional.normalize(v_b, dim=-1).detach() for v_b in vectors]
 
     def hook_fn(module, _input, output):
+        # Normalize output API across model families
         if isinstance(output, tuple):
-            # e.g., Gemma may return (resid, hidden_states, ...)
             resid_BLD, *rest = output
             output_is_tuple = True
         else:
-            # e.g., Qwen returns just the residual
             resid_BLD = output
             output_is_tuple = False
 
         B_actual, L, d_model_actual = resid_BLD.shape
+        if B_actual != B:
+            raise ValueError(f"Batch mismatch: module B={B_actual}, provided vectors B={B}")
 
-        # Only touch the prompt forward pass (sequence length > 1)
+        # Only touch the prompt forward pass
         if L <= 1:
             return (resid_BLD, *rest) if output_is_tuple else resid_BLD
 
-        if d_model_actual != d_model:
-            raise ValueError(f"d_model mismatch: vectors {d_model} vs module {d_model_actual}")
+        # Per-batch element work. Vectorized over K_b where safe.
+        for b in range(B):
+            pos_b = positions[b]
+            pos_b = torch.tensor(pos_b, dtype=torch.long, device=device)
+            assert pos_b.min() >= 0
+            assert pos_b.max() < L
+            # Gather original activations at requested slots and compute norms
+            orig_KD = resid_BLD[b, pos_b, :]  # (K_b, d)
+            norms_K1 = orig_KD.norm(dim=-1, keepdim=True)  # (K_b, 1)
 
-        if B_actual != B:
-            raise ValueError(f"Batch mismatch: module has batch {B_actual}, but {B} vectors were provided")
-
-        if (pos_BK >= L).any() or (pos_BK < 0).any():
-            bad = pos_BK[(pos_BK >= L) | (pos_BK < 0)][0].item()
-            raise IndexError(f"position {bad} is out of bounds for length {L}")
-
-        # ---- gather original activations at each (b, k) slot ----
-        batch_idx_B1 = torch.arange(B, device=device).unsqueeze(1)  # (B, 1)
-        orig_BKD = resid_BLD[batch_idx_B1, pos_BK]  # (B, K, d)
-
-        # Norms per slot, detached
-        norms_BK1 = orig_BKD.norm(dim=-1, keepdim=True).detach()  # (B, K, 1)
-
-        # ---- build steered vectors ----
-        steered_BKD = (normalized_BKD * norms_BK1 * steering_coefficient).to(dtype)  # (B, K, d)
-
-        # ---- in-place replacement at all (b, k) positions ----
-        resid_BLD[batch_idx_B1, pos_BK] = steered_BKD
+            # Build steered vectors for this b
+            steered_KD = (normed_list[b] * norms_K1 * steering_coefficient).to(dtype)  # (K_b, d)
+            resid_BLD[b, pos_b, :] = steered_KD.detach()
 
         return (resid_BLD, *rest) if output_is_tuple else resid_BLD
 
