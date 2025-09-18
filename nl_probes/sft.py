@@ -499,7 +499,7 @@ def train_model(
     elif cfg.load_lora_path is not None:
         load_lora_path = Path(cfg.load_lora_path)
         assert load_lora_path.exists()
-        model.add_adapter(load_lora_path)
+        model.load_adapter(load_lora_path)
         # model = PeftModel.from_pretrained(model, load_lora_path, is_trainable=True)
         # model.print_trainable_parameters()
 
