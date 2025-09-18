@@ -193,9 +193,9 @@ def materialize_missing_steering_vectors(
     batch_points: list[TrainingDataPoint],
     tokenizer: AutoTokenizer,
     model: AutoModelForCausalLM,
-) -> None:
+) -> list[TrainingDataPoint]:
     """
-    In-place materialization of missing steering vectors for a heterogenous batch
+    Materialization of missing steering vectors for a heterogenous batch
     where different items can request activations from different layers.
 
     Steps:
@@ -203,7 +203,7 @@ def materialize_missing_steering_vectors(
       2) Build a left-padded batch from their context_input_ids.
       3) Register hooks for all unique requested layers and run exactly one forward pass.
       4) For each item, take activations at its requested layer and its context_positions,
-         then write back a [num_positions, D] CPU tensor to dp.steering_vectors.
+         then write back a [num_positions, D] tensor to dp.steering_vectors. Returns a new batch.
 
     No-op if every item already has steering_vectors.
     """
@@ -212,7 +212,7 @@ def materialize_missing_steering_vectors(
         (i, dp) for i, dp in enumerate(batch_points) if dp.steering_vectors is None
     ]
     if not to_fill:
-        return
+        return batch_points
 
     # Validate context fields
     for _, dp in to_fill:
@@ -265,24 +265,29 @@ def materialize_missing_steering_vectors(
         model.train()
     model.enable_adapters()
 
-    # Slice the right positions per item and write back
-    B = len(to_fill)
-    for b in range(B):
-        _, dp = to_fill[b]
+    # Build the new list, copying only items we change
+    new_batch: list[TrainingDataPoint] = list(batch_points)  # references by default
+    for b in range(len(to_fill)):
+        idx, dp = to_fill[b]
         layer = dp.layer
-        if layer not in acts_by_layer:
-            raise KeyError(f"No activations captured for requested layer {layer}")
-        acts_BLD = acts_by_layer[layer]  # [B, L, D]
-        idxs = [p + left_offsets[b] for p in positions_per_item[b]]
+        acts_BLD = acts_by_layer[layer]  # [B, L, D] on GPU
 
+        idxs = [p + left_offsets[b] for p in positions_per_item[b]]
         # Bounds check for safety
         L = acts_BLD.shape[1]
         if any(i < 0 or i >= L for i in idxs):
             raise IndexError(f"Activation index out of range for item {b}: {idxs} with L={L}")
 
-        vectors = acts_BLD[b, idxs, :].detach()  # [num_positions, D]
+        vectors = acts_BLD[b, idxs, :].detach().contiguous()
+
         assert len(vectors.shape) == 2, f"Expected 2D tensor, got vectors.shape={vectors.shape}"
-        dp.steering_vectors = vectors.to(device)
+
+        dp_new = dp.model_copy(deep=True)
+        dp_new.steering_vectors = vectors
+
+        new_batch[idx] = dp_new
+
+    return new_batch
 
 
 def find_pattern_in_tokens(

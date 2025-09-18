@@ -357,7 +357,7 @@ def run_evaluation(
             for j in range(len(e_batch)):
                 e_batch[j] = classification.get_prompt_tokens_only(e_batch[j])
 
-            materialize_missing_steering_vectors(e_batch, tokenizer, model)
+            e_batch = materialize_missing_steering_vectors(e_batch, tokenizer, model)
 
             e_batch = construct_batch(e_batch, tokenizer, device)
 
@@ -399,6 +399,46 @@ def score_eval_responses(
     return percent_format_correct, percent_ans_correct
 
 
+def eval_all_datasets(
+    cfg: SelfInterpTrainingConfig,
+    eval_datasets: dict[str, list[TrainingDataPoint]],
+    model: AutoModelForCausalLM,
+    tokenizer: PreTrainedTokenizer,
+    submodule: torch.nn.Module,
+    device: torch.device,
+    dtype: torch.dtype,
+    global_step: int,
+) -> None:
+    model.eval()
+    eval_results = {}
+    for ds in eval_datasets:
+        eval_responses = run_evaluation(
+            cfg=cfg,
+            eval_data=eval_datasets[ds],
+            model=model,
+            tokenizer=tokenizer,
+            submodule=submodule,
+            device=device,
+            dtype=dtype,
+            global_step=global_step,
+        )
+        percent_format_correct, percent_ans_correct = score_eval_responses(eval_responses, eval_datasets[ds])
+        eval_results[f"eval_format_correct/{ds}"] = percent_format_correct
+        eval_results[f"eval_ans_correct/{ds}"] = percent_ans_correct
+        print(f"Step {global_step} {ds} format correct: {percent_format_correct}, ans correct: {percent_ans_correct}")
+
+    wandb.log(
+        eval_results,
+        step=global_step,
+    )
+    wandb.summary.update(eval_results)
+    model.train()
+
+    # Have occasionally seen OOMs on first training step after eval, so clear cache here
+    torch.cuda.empty_cache()
+    gc.collect()
+
+
 def oom_preflight_check(
     cfg: SelfInterpTrainingConfig,
     training_data: list[TrainingDataPoint],
@@ -410,7 +450,7 @@ def oom_preflight_check(
 ) -> None:
     longest_prompt = max(training_data, key=lambda x: len(x.input_ids))
     long_prompts = [longest_prompt] * cfg.train_batch_size
-    materialize_missing_steering_vectors(long_prompts, tokenizer, model)
+    long_prompts = materialize_missing_steering_vectors(long_prompts, tokenizer, model)
     largest_possible_batch = construct_batch(long_prompts, tokenizer, device)
 
     dummy_optimizer = torch.optim.AdamW(model.parameters(), lr=0.0)
@@ -497,13 +537,10 @@ def train_model(
         ):
             t_batch_list: list[TrainingDataPoint] = training_data[i : i + cfg.train_batch_size]
 
-            materialize_missing_steering_vectors(t_batch_list, tokenizer, model)
+            t_batch_list = materialize_missing_steering_vectors(t_batch_list, tokenizer, model)
 
             t_batch = construct_batch(t_batch_list, tokenizer, device)
 
-            if i % 10000 == 0:
-                torch.cuda.empty_cache()
-                gc.collect()
             loss = train_features_batch(cfg, t_batch, model, submodule, device, dtype)
             loss.backward()
             clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
@@ -523,31 +560,7 @@ def train_model(
 
             # -------------------------------- evaluation --------------------------------
             if global_step % cfg.eval_steps == 0 and (cfg.eval_on_start or global_step > 0):
-                for ds in eval_datasets:
-                    eval_responses = run_evaluation(
-                        cfg=cfg,
-                        eval_data=eval_datasets[ds],
-                        model=model,
-                        tokenizer=tokenizer,
-                        submodule=submodule,
-                        device=device,
-                        dtype=dtype,
-                        global_step=global_step,
-                    )
-                    percent_format_correct, percent_ans_correct = score_eval_responses(
-                        eval_responses, eval_datasets[ds]
-                    )
-                    wandb.log(
-                        {
-                            f"eval/{ds}_format_correct": percent_format_correct,
-                            f"eval/{ds}_ans_correct": percent_ans_correct,
-                        },
-                        step=global_step,
-                    )
-                    print(
-                        f"Step {global_step} {ds} format correct: {percent_format_correct}, ans correct: {percent_ans_correct}"
-                    )
-                model.train()
+                eval_all_datasets(cfg, eval_datasets, model, tokenizer, submodule, device, dtype, global_step)
 
             if global_step % cfg.save_steps == 0 and global_step > 0:
                 model.save_pretrained(f"{cfg.save_dir}/step_{global_step}")
@@ -573,27 +586,7 @@ def train_model(
 
     # Final evaluation
     print("Running final evaluation...")
-    for ds in eval_datasets:
-        eval_responses = run_evaluation(
-            cfg=cfg,
-            eval_data=eval_datasets[ds],
-            model=model,
-            tokenizer=tokenizer,
-            submodule=submodule,
-            device=device,
-            dtype=dtype,
-            global_step=global_step,
-        )
-        percent_format_correct, percent_ans_correct = score_eval_responses(eval_responses, eval_datasets[ds])
-        wandb.log(
-            {
-                f"eval/{ds}_format_correct": percent_format_correct,
-                f"eval/{ds}_ans_correct": percent_ans_correct,
-            },
-            step=global_step,
-        )
-        print(f"Step {global_step} {ds} format correct: {percent_format_correct}, ans correct: {percent_ans_correct}")
-
+    eval_all_datasets(cfg, eval_datasets, model, tokenizer, submodule, device, dtype, global_step)
     wandb.finish()
 
     # Push to Hugging Face if configured
@@ -774,11 +767,11 @@ if __name__ == "__main__":
     all_dataset_loaders = [past_lens_dataset_loader] + classification_dataset_loaders
 
     iterations = [
-        {
-            "load_lora_path": None,
-            "dataset_loaders": classification_dataset_loaders,
-            "wandb_suffix": "_classification_only",
-        },
+        # {
+        #     "load_lora_path": None,
+        #     "dataset_loaders": classification_dataset_loaders,
+        #     "wandb_suffix": "_classification_only",
+        # },
         {
             "load_lora_path": None,
             "dataset_loaders": all_dataset_loaders,
@@ -788,6 +781,11 @@ if __name__ == "__main__":
             "load_lora_path": "checkpoints_act_pretrain/final",
             "dataset_loaders": classification_dataset_loaders,
             "wandb_suffix": "_act_pretrain_posttrain",
+        },
+        {
+            "load_lora_path": None,
+            "dataset_loaders": classification_dataset_loaders,
+            "wandb_suffix": "_classification_only",
         },
     ]
 
