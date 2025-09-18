@@ -1,6 +1,4 @@
 import asyncio
-import os
-import pickle
 import random
 import re
 from dataclasses import asdict, dataclass, field
@@ -21,7 +19,6 @@ from nl_probes.utils.dataset_utils import (
     SAEExplained,
     TrainingDataPoint,
     TrainingExample,
-    construct_batch,
     create_training_datapoint,
     load_explanations_from_jsonl,
 )
@@ -141,6 +138,7 @@ class SAEActivatingSequencesDatasetLoader(ActDatasetLoader):
 
     def create_dataset(self) -> None:
         training_data, sae_info = create_activating_sequences_data(
+            datapoint_type=self.dataset_config.dataset_name,
             model_name=self.dataset_config.model_name,
             sae_repo_id=self.dataset_params.sae_repo_id,
             sae_layer_percent=self.dataset_config.layer_percents[0],
@@ -176,6 +174,7 @@ class SAEYesNoDatasetLoader(ActDatasetLoader):
     def create_dataset(self) -> None:
         training_data, sae_info = create_yes_no_data(
             model_name=self.dataset_config.model_name,
+            dataset_type=self.dataset_config.dataset_name,
             sft_data_file=self.dataset_params.sft_data_file,
             sft_data_folder=self.dataset_config.dataset_folder,
             device=torch.device("cpu"),
@@ -217,6 +216,7 @@ class SAEExplanationDatasetLoader(ActDatasetLoader):
 
 
 def create_activating_sequences_data(
+    datapoint_type: str,
     model_name: str,
     sae_repo_id: str,
     sae_layer_percent: int,
@@ -283,6 +283,7 @@ def create_activating_sequences_data(
 
         training_data.append(
             create_training_datapoint(
+                datapoint_type=datapoint_type,
                 prompt=prompt,
                 target_response=output,
                 layer=sae_info.sae_layer,
@@ -349,6 +350,7 @@ def parse_yes_no_qas(response: str) -> list[dict[str, str]] | None:
 
 def create_yes_no_data(
     model_name: str,
+    dataset_type: str,
     sft_data_file: str,
     sft_data_folder: str,
     device: torch.device,
@@ -469,6 +471,7 @@ Please generate four Yes / No questions, and try have some variety in the phrasi
         for qa in qas:
             question_prompt = f"Answer with 'Yes' or 'No' only. {qa['question']}"
             training_datapoint = create_training_datapoint(
+                datapoint_type=dataset_type,
                 prompt=question_prompt,
                 target_response=qa["answer"],
                 layer=sae_info.sae_layer,
@@ -495,6 +498,7 @@ Please generate four Yes / No questions, and try have some variety in the phrasi
 @torch.no_grad()
 def construct_train_dataset(
     custom_dataset_params: SAEExplanationDatasetConfig,
+    dataset_type: str,
     dataset_size: int,
     layer: int,
     input_prompt: str,
@@ -518,6 +522,7 @@ def construct_train_dataset(
         feature_vector_1D = feature_vector.unsqueeze(0)
 
         training_data_point = create_training_datapoint(
+            datapoint_type=dataset_type,
             prompt=input_prompt,
             target_response=target_response,
             layer=layer,
@@ -598,12 +603,16 @@ def construct_eval_dataset(
         assert len(input_prompt_ids) > 0
 
         eval_data_point = TrainingDataPoint(
+            datapoint_type="eval",
             input_ids=input_prompt_ids,
             labels=labels,
-            steering_vectors=[feature_vector],
+            layer=sae.hook_layer,
+            steering_vectors=feature_vector,
             positions=positions,
             feature_idx=target_feature_idx,
             target_output="",
+            context_input_ids=None,
+            context_positions=None,
         )
 
         eval_data.append(eval_data_point)
@@ -648,7 +657,8 @@ def load_sae_data_from_sft_data_file(
 
     training_data: list[TrainingDataPoint] = construct_train_dataset(
         custom_dataset_params,
-        len(training_examples),
+        dataset_type=dataset_config.dataset_name,
+        dataset_size=len(training_examples),
         # dataset_size,
         layer=sae_info.sae_layer,
         input_prompt=EXPLANATION_PROMPT,

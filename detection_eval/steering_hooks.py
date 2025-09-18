@@ -146,81 +146,65 @@ def add_hook(
 
 
 def get_hf_activation_steering_hook(
-    vectors: list[torch.Tensor],  # [B, d_model]
-    positions: list[int],  # [B]
+    vectors: list[torch.Tensor],  # len B, each tensor is (K_b, d_model)
+    positions: list[list[int]],  # len B, each list has length K_b
     steering_coefficient: float,
     device: torch.device,
     dtype: torch.dtype,
 ) -> Callable:
     """
-    HF hook with debug prints to compare against vLLM
-    """
-    # ---- pack Python lists → torch tensors once, outside the hook ----
-    vec_BD = torch.stack(vectors).to(device, dtype)  # (B, d)
-    pos_B = torch.tensor(positions, dtype=torch.long, device=device)  # (B,)
-    B, d_model = vec_BD.shape
+    HF hook with debug prints to compare against vLLM.
+    Supports a variable number of target positions per batch element.
 
-    assert pos_B.shape == (B,)
-    vec_BD = vec_BD.to(device, dtype)
-    pos_B = pos_B.to(device)
+    Semantics:
+      For each batch item b and slot k, replace the residual at token index positions[b][k]
+      with normalize(vectors[b][k]) * ||resid[b, positions[b][k], :]|| * steering_coefficient.
+
+    We use a for loop instead of vectorized operations as it's simpler and we are just doing indexing in
+    a single layer, so the simplicity won out for now.
+    """
+
+    # ---- move inputs to device and prepare ragged tensors ----
+    assert len(vectors) == len(positions), "vectors and positions must have same batch length"
+    B = len(vectors)
+    if B == 0:
+        raise ValueError("Empty batch")
+
+    # Pre-normalize once; we never backprop through these
+    normed_list = [torch.nn.functional.normalize(v_b, dim=-1).detach() for v_b in vectors]
 
     def hook_fn(module, _input, output):
+        # Normalize output API across model families
         if isinstance(output, tuple):
-            # gemma
             resid_BLD, *rest = output
             output_is_tuple = True
         else:
-            # qwen
             resid_BLD = output
             output_is_tuple = False
-        # resid_BLD, *rest = output  # Gemma returns (resid, hidden_states, ...)
+
         B_actual, L, d_model_actual = resid_BLD.shape
+        if B_actual != B:
+            raise ValueError(f"Batch mismatch: module B={B_actual}, provided vectors B={B}")
 
-        # Only touch the *prompt* forward pass (sequence length > 1)
+        # Only touch the prompt forward pass
         if L <= 1:
-            if output_is_tuple:
-                return (resid_BLD, *rest)
-            else:
-                return resid_BLD
+            return (resid_BLD, *rest) if output_is_tuple else resid_BLD
 
-        # Safety: make sure every position is inside current sequence
-        if (pos_B >= L).any():
-            bad = pos_B[pos_B >= L].min().item()
-            raise IndexError(f"position {bad} is out of bounds for length {L}")
+        # Per-batch element work. Vectorized over K_b where safe.
+        for b in range(B):
+            pos_b = positions[b]
+            pos_b = torch.tensor(pos_b, dtype=torch.long, device=device)
+            assert pos_b.min() >= 0
+            assert pos_b.max() < L
+            # Gather original activations at requested slots and compute norms
+            orig_KD = resid_BLD[b, pos_b, :]  # (K_b, d)
+            norms_K1 = orig_KD.norm(dim=-1, keepdim=True)  # (K_b, 1)
 
-        # print("\n🎯 HF STEERING HOOK EXECUTING:")
-        # print(f"  Module: {type(module).__name__}")
-        # print(f"  Input shape: {resid_BLD.shape}")
-        # print(f"  Sequence length: {L}")
-        # print(f"  Expected batch size: {B}, actual: {B_actual}")
+            # Build steered vectors for this b
+            steered_KD = (normed_list[b] * norms_K1 * steering_coefficient).to(dtype)  # (K_b, d)
+            resid_BLD[b, pos_b, :] = steered_KD.detach()
 
-        # ---- compute norms of original activations at the target slots ----
-        batch_idx_B = torch.arange(B, device=device)  # (B,)
-        orig_BD = resid_BLD[batch_idx_B, pos_B]  # (B, d)
-
-        norms_B1 = orig_BD.norm(dim=-1, keepdim=True).detach()  # (B, 1)
-
-        # ---- build steered vectors ----
-        normalized_features = torch.nn.functional.normalize(vec_BD, dim=-1).detach()
-        steered_BD = normalized_features * norms_B1 * steering_coefficient  # (B, d)
-
-        # somehow verl explodes here and complains about dtype?
-        steered_BD = steered_BD.to(dtype)
-
-        # Calculate the change magnitude BEFORE applying
-        # change_magnitude = (steered_BD - orig_BD).norm(dim=-1)
-
-        # sometiems this blows up. not sure why.
-        # if change_magnitude.max() < 1e-4:
-        #     print("WARNING: Very small change magnitude in get_hf_activation_steering_hook")
-        #     raise ValueError("Very small change magnitude!")
-
-        # ---- in-place replacement via advanced indexing ----
-        resid_BLD[batch_idx_B, pos_B] = steered_BD
-        if output_is_tuple:
-            return (resid_BLD, *rest)
-        else:
-            return resid_BLD
+        return (resid_BLD, *rest) if output_is_tuple else resid_BLD
 
     return hook_fn
 

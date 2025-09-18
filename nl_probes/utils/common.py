@@ -1,6 +1,18 @@
+import random
+
+import numpy as np
 import torch
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
+
+def set_seed(seed: int) -> None:
+    """Seed Python, NumPy, and torch for reproducible runs."""
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 def load_model(

@@ -2,11 +2,8 @@ import os
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-import contextlib
-import datetime
 import gc
 import json
-import pickle
 import random
 
 # All necessary imports are now included above
@@ -15,9 +12,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import torch
-from huggingface_hub import login, whoami
 from peft import LoraConfig, PeftModel, get_peft_model
-from pydantic import BaseModel, ConfigDict, field_validator
 from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
 from transformers.models.auto.modeling_auto import AutoModelForCausalLM
@@ -42,7 +37,7 @@ from nl_probes.dataset_classes.sae_training_data import (
     SAEYesNoDatasetLoader,
 )
 from nl_probes.utils.activation_utils import get_hf_submodule
-from nl_probes.utils.common import load_model, load_tokenizer
+from nl_probes.utils.common import load_model, load_tokenizer, set_seed
 from nl_probes.utils.dataset_utils import (
     BatchData,
     EvalStepResult,
@@ -50,6 +45,7 @@ from nl_probes.utils.dataset_utils import (
     FeatureResult,
     TrainingDataPoint,
     construct_batch,
+    materialize_missing_steering_vectors,
 )
 
 
@@ -338,17 +334,6 @@ def save_logs(
         json.dump(all_run_results, f, indent=2)
 
 
-def has_active_lora(model: AutoModelForCausalLM) -> bool:
-    """
-    True ⇢ model is a PEFT/PeftModel object *and* at least one adapter is enabled.
-    """
-    return (
-        hasattr(model, "peft_config")  # it's a PeftModel
-        and bool(model.peft_config)  # at least one adapter is configured
-        and bool(getattr(model, "active_adapter", None))  # an adapter is currently selected
-    )
-
-
 def run_evaluation(
     cfg: SelfInterpTrainingConfig,
     eval_data: list[TrainingDataPoint],
@@ -371,6 +356,8 @@ def run_evaluation(
 
             for j in range(len(e_batch)):
                 e_batch[j] = classification.get_prompt_tokens_only(e_batch[j])
+
+            materialize_missing_steering_vectors(e_batch, tokenizer, model)
 
             e_batch = construct_batch(e_batch, tokenizer, device)
 
@@ -423,6 +410,7 @@ def oom_preflight_check(
 ) -> None:
     longest_prompt = max(training_data, key=lambda x: len(x.input_ids))
     long_prompts = [longest_prompt] * cfg.train_batch_size
+    materialize_missing_steering_vectors(long_prompts, tokenizer, model)
     largest_possible_batch = construct_batch(long_prompts, tokenizer, device)
 
     dummy_optimizer = torch.optim.AdamW(model.parameters(), lr=0.0)
@@ -449,13 +437,12 @@ def train_model(
     dtype: torch.dtype,
     verbose: bool = False,
 ):
+    set_seed(cfg.seed)
     model = load_model(cfg.model_name, dtype)
 
     if cfg.gradient_checkpointing:
         model.use_cache = False
         model.gradient_checkpointing_enable()
-
-    submodule = get_hf_submodule(model, cfg.hook_onto_layer)
 
     if cfg.use_lora and cfg.load_lora_path is None:
         lora_config = LoraConfig(
@@ -466,18 +453,23 @@ def train_model(
             bias="none",
             task_type="CAUSAL_LM",
         )
-
-        model = get_peft_model(model, lora_config)
-        model.print_trainable_parameters()
+        model.add_adapter(lora_config)
+        # model = get_peft_model(model, lora_config)
+        # model.print_trainable_parameters()
     elif cfg.load_lora_path is not None:
         load_lora_path = Path(cfg.load_lora_path)
         assert load_lora_path.exists()
-        model = PeftModel.from_pretrained(model, load_lora_path, is_trainable=True)
-        model.print_trainable_parameters()
+        model.add_adapter(load_lora_path)
+        # model = PeftModel.from_pretrained(model, load_lora_path, is_trainable=True)
+        # model.print_trainable_parameters()
 
     model.train()
 
+    submodule = get_hf_submodule(model, cfg.hook_onto_layer)
+
     oom_preflight_check(cfg, training_data, model, submodule, tokenizer, device, dtype)
+
+    set_seed(cfg.seed)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr)
 
@@ -504,6 +496,8 @@ def train_model(
             desc=f"Training epoch {epoch + 1}",
         ):
             t_batch_list: list[TrainingDataPoint] = training_data[i : i + cfg.train_batch_size]
+
+            materialize_missing_steering_vectors(t_batch_list, tokenizer, model)
 
             t_batch = construct_batch(t_batch_list, tokenizer, device)
 
@@ -639,7 +633,7 @@ def build_datasets(
     max_len_percentile: float | None = 0.999,
     window_mult: int | None = 20,
 ) -> tuple[list[TrainingDataPoint], dict[str, list[TrainingDataPoint]]]:
-    random.seed(cfg.seed)
+    set_seed(cfg.seed)
     all_training_data: list[TrainingDataPoint] = []
     # eval data will only be for classification datasets
     all_eval_data: dict[str, list[TrainingDataPoint]] = {}
@@ -667,7 +661,7 @@ def build_datasets(
         removed = before - len(all_training_data)
         print(f"Percentile trim: kept <= {threshold} tokens (p={p:.6f}). Removed {removed}/{before} examples.")
 
-    random.seed(cfg.seed)
+    set_seed(cfg.seed)
     random.shuffle(all_training_data)
 
     if window_mult is not None:
@@ -678,6 +672,7 @@ def build_datasets(
 
 if __name__ == "__main__":
     main_train_size = 6000
+    # main_train_size = 60
     main_test_size = 250
     classification_datasets = {
         "geometry_of_truth": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
@@ -704,57 +699,57 @@ if __name__ == "__main__":
     dtype = torch.bfloat16
 
     layer_percents = [25, 50, 75]
+    # layer_percents = [75]
 
     sft_data_folder = "sft_training_data"
 
-    dataset_loaders = []
-
     dataset_config = DatasetLoaderConfig(
         custom_dataset_params=PastLensDatasetConfig(),
-        num_train=300,
+        num_train=200_000,
         num_test=0,
         splits=["train"],
         model_name=model_name,
         layer_percents=layer_percents,
-        save_acts=True,
+        save_acts=False,
     )
 
     past_lens_dataset_loader = PastLensDatasetLoader(
         dataset_config=dataset_config,
     )
-    dataset_loaders.append(past_lens_dataset_loader)
 
-    for layer_percent in layer_percents:
-        dataset_config = DatasetLoaderConfig(
-            custom_dataset_params=SAEExplanationDatasetConfig(
-                sft_data_file=f"data/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl",
-                use_decoder_vectors=True,
-            ),
-            num_train=20000,
-            num_test=0,
-            splits=["train"],
-            model_name=model_name,
-            layer_percents=[layer_percent],
-            save_acts=True,
-        )
-        sae_explanation_dataset_loader = SAEExplanationDatasetLoader(dataset_config=dataset_config)
+    # for layer_percent in layer_percents:
+    #     dataset_config = DatasetLoaderConfig(
+    #         custom_dataset_params=SAEExplanationDatasetConfig(
+    #             sft_data_file=f"data/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl",
+    #             use_decoder_vectors=True,
+    #         ),
+    #         num_train=20000,
+    #         num_test=0,
+    #         splits=["train"],
+    #         model_name=model_name,
+    #         layer_percents=[layer_percent],
+    #         save_acts=True,
+    #     )
+    #     sae_explanation_dataset_loader = SAEExplanationDatasetLoader(dataset_config=dataset_config)
 
-        dataset_config = DatasetLoaderConfig(
-            custom_dataset_params=SAEActivatingSequencesDatasetConfig(
-                sae_repo_id="adamkarvonen/qwen3-8b-saes",
-                use_decoder_vectors=True,
-            ),
-            num_train=60000,
-            num_test=0,
-            splits=["train"],
-            model_name=model_name,
-            layer_percents=[layer_percent],
-            save_acts=True,
-        )
-        sae_activating_sequences_dataset_loader = SAEActivatingSequencesDatasetLoader(dataset_config=dataset_config)
+    #     dataset_config = DatasetLoaderConfig(
+    #         custom_dataset_params=SAEActivatingSequencesDatasetConfig(
+    #             sae_repo_id="adamkarvonen/qwen3-8b-saes",
+    #             use_decoder_vectors=True,
+    #         ),
+    #         num_train=60000,
+    #         num_test=0,
+    #         splits=["train"],
+    #         model_name=model_name,
+    #         layer_percents=[layer_percent],
+    #         save_acts=True,
+    #     )
+    #     sae_activating_sequences_dataset_loader = SAEActivatingSequencesDatasetLoader(dataset_config=dataset_config)
 
-        dataset_loaders.append(sae_explanation_dataset_loader)
-        dataset_loaders.append(sae_activating_sequences_dataset_loader)
+    #     dataset_loaders.append(sae_explanation_dataset_loader)
+    #     dataset_loaders.append(sae_activating_sequences_dataset_loader)
+
+    classification_dataset_loaders = []
 
     for dataset_name in classification_datasets.keys():
         classification_config = ClassificationDatasetConfig(
@@ -768,19 +763,31 @@ if __name__ == "__main__":
             splits=classification_datasets[dataset_name]["splits"],
             model_name=model_name,
             layer_percents=layer_percents,
-            save_acts=True,
+            save_acts=False,
         )
 
         classification_dataset_loader = ClassificationDatasetLoader(
             dataset_config=dataset_config,
         )
-        dataset_loaders.append(classification_dataset_loader)
+        classification_dataset_loaders.append(classification_dataset_loader)
+
+    all_dataset_loaders = [past_lens_dataset_loader] + classification_dataset_loaders
 
     iterations = [
         {
             "load_lora_path": None,
-            "dataset_loaders": dataset_loaders,
+            "dataset_loaders": classification_dataset_loaders,
+            "wandb_suffix": "_classification_only",
+        },
+        {
+            "load_lora_path": None,
+            "dataset_loaders": all_dataset_loaders,
             "wandb_suffix": "_act_pretrain",
+        },
+        {
+            "load_lora_path": "checkpoints_act_pretrain/final",
+            "dataset_loaders": classification_dataset_loaders,
+            "wandb_suffix": "_act_pretrain_posttrain",
         },
     ]
 
@@ -793,10 +800,10 @@ if __name__ == "__main__":
             hf_repo_name=hf_repo_name,
             # wandb_suffix=wandb_suffix,
             layer_percents=layer_percents,
-            train_batch_size=16,
+            train_batch_size=32,
             activation_collection_batch_size=64,
-            eval_steps=1000,
-            eval_on_start=False,
+            eval_steps=2000,
+            eval_on_start=True,
             **hyperparam_override,
         )
 
@@ -812,6 +819,10 @@ if __name__ == "__main__":
 
         # for debugging
         # all_training_data = all_training_data[:1000]
+        # eval_keys = list(all_eval_data.keys())
+        # assert len(eval_keys) == 1
+        # eval_key = eval_keys[0]
+        # all_eval_data = {eval_key: all_training_data[:]}
 
         print(f"training data: {len(all_training_data)}, eval data: {len(all_eval_data)}")
 

@@ -21,8 +21,9 @@ def test_positions(model_name):
     prompt = "This is a test prompt"
 
     datapoint = dataset_utils.create_training_datapoint(
-        prompt,
         "test",
+        prompt,
+        "test output",
         layer,
         num_positions,
         tokenizer,

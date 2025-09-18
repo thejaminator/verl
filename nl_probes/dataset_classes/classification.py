@@ -20,7 +20,13 @@ from nl_probes.utils.activation_utils import (
     collect_activations_multiple_layers,
     get_hf_submodule,
 )
-from nl_probes.utils.common import assert_no_peft_present, layer_percent_to_layer, load_model, load_tokenizer
+from nl_probes.utils.common import (
+    assert_no_peft_present,
+    layer_percent_to_layer,
+    load_model,
+    load_tokenizer,
+    set_seed,
+)
 from nl_probes.utils.dataset_utils import (
     BatchData,
     EvalStepResult,
@@ -36,8 +42,8 @@ class ClassificationDatasetConfig(BaseDatasetConfig):
     classification_dataset_name: str
     num_qa_per_sample: int = 3
     batch_size: int = 128
-    min_offset: int = -2
-    max_offset: int = -5
+    end_offset: int = -3
+    max_window_size: int = 20
 
 
 class ClassificationDatasetLoader(ActDatasetLoader):
@@ -58,10 +64,11 @@ class ClassificationDatasetLoader(ActDatasetLoader):
             for layer_percent in self.dataset_config.layer_percents
         ]
 
+        assert self.dataset_params.end_offset < 0, "Offset must be negative"
+        assert self.dataset_params.max_window_size > 0, "Max window size must be positive"
+
     def create_dataset(self) -> None:
-        dtype = torch.bfloat16
         tokenizer = load_tokenizer(self.dataset_config.model_name)
-        model = load_model(self.dataset_config.model_name, dtype)
 
         train_datapoints, test_datapoints = get_classification_datapoints(
             self.dataset_params.classification_dataset_name,
@@ -79,11 +86,14 @@ class ClassificationDatasetLoader(ActDatasetLoader):
             data = create_vector_dataset(
                 datapoints,
                 tokenizer,
-                model,
+                self.dataset_config.model_name,
                 self.dataset_params.batch_size,
                 self.act_layers,
-                self.dataset_params.min_offset,
-                self.dataset_params.max_offset,
+                end_offset=self.dataset_params.end_offset,
+                max_window_size=self.dataset_params.max_window_size,
+                save_acts=self.dataset_config.save_acts,
+                datapoint_type=self.dataset_config.dataset_name,
+                debug_print=False,
             )
 
             self.save_dataset(data, split)
@@ -119,12 +129,12 @@ def get_classification_datapoints(
     test_examples: int,
     random_seed: int,
 ) -> tuple[list[ClassificationDatapoint], list[ClassificationDatapoint]]:
+    set_seed(random_seed)
     all_examples = classification_dataset_manager.get_samples_from_groups(
         [dataset_name],
         num_qa_per_sample,
     )
 
-    random.seed(random_seed)
     random.shuffle(all_examples)
 
     assert len(all_examples) >= train_examples + test_examples, "Not enough examples to split"
@@ -150,18 +160,24 @@ def view_tokens(tokens_L: list[int], tokenizer: AutoTokenizer, offset: int) -> N
 def create_vector_dataset(
     datapoints: list[ClassificationDatapoint],
     tokenizer: AutoTokenizer,
-    model: AutoModelForCausalLM,
+    model_name: str,
     batch_size: int,
     act_layers: list[int],
-    min_offset: int,
-    max_offset: int,
+    end_offset: int,
+    max_window_size: int,
+    save_acts: bool,
+    datapoint_type: str,
     debug_print: bool = False,
 ) -> list[TrainingDataPoint]:
     training_data = []
 
-    submodules = {layer: get_hf_submodule(model, layer) for layer in act_layers}
+    assert tokenizer.padding_side == "left", "Padding side must be left"
+    device = torch.device("cpu")
 
-    all_acts = []
+    if save_acts:
+        model = load_model(model_name, torch.bfloat16)
+        submodules = {layer: get_hf_submodule(model, layer) for layer in act_layers}
+        device = model.device
 
     for i in tqdm(range(0, len(datapoints), batch_size), desc="Collecting activations"):
         batch_datapoints = datapoints[i : i + batch_size]
@@ -174,39 +190,62 @@ def create_vector_dataset(
             return_tensors="pt",
             add_special_tokens=False,
             padding=True,
-        ).to(model.device)
+        ).to(device)
 
-        acts_BLD_by_layer_dict = collect_activations_multiple_layers(
-            model, submodules, tokenized_prompts, min_offset, max_offset
-        )
+        if save_acts:
+            acts_BLD_by_layer_dict = collect_activations_multiple_layers(
+                model, submodules, tokenized_prompts, None, None
+            )
+            for layer in acts_BLD_by_layer_dict.keys():
+                acts_BLD_by_layer_dict[layer] = acts_BLD_by_layer_dict[layer].to("cpu", non_blocking=True)
 
-        # Doing 2 for loops to try reduce gpu / cpu syncs
+        tokenized_prompts["input_ids"] = tokenized_prompts["input_ids"].cpu()
+        tokenized_prompts["attention_mask"] = tokenized_prompts["attention_mask"].cpu()
+
         for layer in act_layers:
-            acts_BLD_by_layer_dict[layer] = acts_BLD_by_layer_dict[layer].to("cpu", non_blocking=True)
-
-        all_acts.append((batch_datapoints, tokenized_prompts, acts_BLD_by_layer_dict))
-
-    for batch_datapoints, tokenized_prompts, acts_BLD_by_layer_dict in tqdm(all_acts, desc="Creating vector dataset"):
-        for layer in acts_BLD_by_layer_dict.keys():
-            acts_BLD = acts_BLD_by_layer_dict[layer]
-            L = acts_BLD.shape[1]
             for j in range(len(batch_datapoints)):
-                offset = random.randint(0, L - 1)
-                # clone and detach to avoid saving with pickle issues
-                acts_D = acts_BLD[j, offset, :].clone().detach()
-                acts_1D = acts_D.unsqueeze(0)
+                attn_mask_L = tokenized_prompts["attention_mask"][j].bool()
+                input_ids_L = tokenized_prompts["input_ids"][j, attn_mask_L]
+                L = len(input_ids_L)
+                end_pos = L + end_offset
+
+                assert L > 0, f"L={L}"
+                assert end_pos > 0, f"end_pos={end_pos}"
+
+                k = random.randint(1, max_window_size)
+                k = min(k, end_pos + 1)
+                assert k > 0, f"k={k}"
+                begin_pos = end_pos - k + 1
+                positions_K = list(range(begin_pos, end_pos + 1))
+                assert len(positions_K) == k
+
                 # assert tokenized_prompts["input_ids"][j][offset + 1] == tokenizer.eos_token_id
                 if debug_print:
-                    view_tokens(tokenized_prompts["input_ids"][j], tokenizer, offset)
+                    view_tokens(input_ids_L, tokenizer, positions_K[-1])
                 classification_prompt = f"{batch_datapoints[j].classification_prompt}"
+
+                if save_acts is False:
+                    acts_KD = None
+                    context_input_ids = input_ids_L
+                    context_positions = positions_K
+                else:
+                    acts_LD = acts_BLD_by_layer_dict[layer][j, attn_mask_L]
+                    acts_KD = acts_LD[positions_K]
+                    assert acts_KD.shape[0] == k
+                    context_input_ids = None
+                    context_positions = None
+
                 training_data_point = create_training_datapoint(
+                    datapoint_type=datapoint_type,
                     prompt=classification_prompt,
                     target_response=batch_datapoints[j].target_response,
                     layer=layer,
-                    num_positions=1,
+                    num_positions=k,
                     tokenizer=tokenizer,
-                    acts_BD=acts_1D,
+                    acts_BD=acts_KD,
                     feature_idx=-1,
+                    context_input_ids=context_input_ids,
+                    context_positions=context_positions,
                 )
                 if training_data_point is None:
                     continue
