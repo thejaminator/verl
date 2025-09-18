@@ -8,14 +8,15 @@ from dataclasses import dataclass
 from typing import Literal
 
 import pandas as pd
-from datasets import load_dataset
 from tqdm import tqdm
+
+from datasets import load_dataset
 
 logger = logging.getLogger(__name__)
 
 YES_TOKEN = "Yes"
 NO_TOKEN = "No"
-DEFAULT_DATA_DIR = "classification_datasets"
+DEFAULT_DATA_DIR = "datasets/classification_datasets"
 
 
 @dataclass
