@@ -43,7 +43,7 @@ class ClassificationDatasetConfig(BaseDatasetConfig):
     num_qa_per_sample: int = 3
     batch_size: int = 128
     end_offset: int = -3
-    max_window_size: int = 1
+    max_window_size: int = 20
 
 
 class ClassificationDatasetLoader(ActDatasetLoader):
@@ -68,9 +68,7 @@ class ClassificationDatasetLoader(ActDatasetLoader):
         assert self.dataset_params.max_window_size > 0, "Max window size must be positive"
 
     def create_dataset(self) -> None:
-        dtype = torch.bfloat16
         tokenizer = load_tokenizer(self.dataset_config.model_name)
-        model = load_model(self.dataset_config.model_name, dtype)
 
         train_datapoints, test_datapoints = get_classification_datapoints(
             self.dataset_params.classification_dataset_name,
@@ -88,7 +86,7 @@ class ClassificationDatasetLoader(ActDatasetLoader):
             data = create_vector_dataset(
                 datapoints,
                 tokenizer,
-                model,
+                self.dataset_config.model_name,
                 self.dataset_params.batch_size,
                 self.act_layers,
                 end_offset=self.dataset_params.end_offset,
@@ -162,7 +160,7 @@ def view_tokens(tokens_L: list[int], tokenizer: AutoTokenizer, offset: int) -> N
 def create_vector_dataset(
     datapoints: list[ClassificationDatapoint],
     tokenizer: AutoTokenizer,
-    model: AutoModelForCausalLM,
+    model_name: str,
     batch_size: int,
     act_layers: list[int],
     end_offset: int,
@@ -174,8 +172,12 @@ def create_vector_dataset(
     training_data = []
 
     assert tokenizer.padding_side == "left", "Padding side must be left"
+    device = torch.device("cpu")
 
-    submodules = {layer: get_hf_submodule(model, layer) for layer in act_layers}
+    if save_acts:
+        model = load_model(model_name, torch.bfloat16)
+        submodules = {layer: get_hf_submodule(model, layer) for layer in act_layers}
+        device = model.device
 
     for i in tqdm(range(0, len(datapoints), batch_size), desc="Collecting activations"):
         batch_datapoints = datapoints[i : i + batch_size]
@@ -188,7 +190,7 @@ def create_vector_dataset(
             return_tensors="pt",
             add_special_tokens=False,
             padding=True,
-        ).to(model.device)
+        ).to(device)
 
         if save_acts:
             acts_BLD_by_layer_dict = collect_activations_multiple_layers(

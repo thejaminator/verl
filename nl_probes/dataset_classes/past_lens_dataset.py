@@ -23,8 +23,10 @@ from nl_probes.utils.dataset_utils import (
 
 @dataclass
 class PastLensDatasetConfig(BaseDatasetConfig):
-    min_k: int = 3
-    max_k: int = 20
+    min_k_tokens: int = 1
+    max_k_tokens: int = 20
+    min_k_activations: int = 1
+    max_k_activations: int = 20
     batch_size: int = 128
     max_length: int = 512
 
@@ -44,11 +46,15 @@ class PastLensDatasetLoader(ActDatasetLoader):
         assert self.dataset_config.splits == ["train"], "Past lens dataset only supports train split right now"
         assert self.dataset_config.num_test == 0, "Past lens dataset only supports train split right now"
 
+        if self.dataset_config.num_train < self.dataset_params.batch_size:
+            raise ValueError(
+                f"num_train {self.dataset_config.num_train} must be greater than or equal to batch_size {self.dataset_params.batch_size}"
+            )
+
     def create_dataset(self) -> None:
         tokenizer = load_tokenizer(self.dataset_config.model_name)
         dataset = hf_mixed_dataset_to_generator(tokenizer)
 
-        device = torch.device("cuda")
         dtype = torch.bfloat16
 
         training_data = collect_past_lens_acts(
@@ -57,7 +63,6 @@ class PastLensDatasetLoader(ActDatasetLoader):
             tokenizer=tokenizer,
             dataset=dataset,
             num_datapoints=self.dataset_config.num_train,
-            device=device,
             dtype=dtype,
         )
 
@@ -167,7 +172,6 @@ def collect_past_lens_acts(
     tokenizer: AutoTokenizer,
     dataset: Generator,
     num_datapoints: int,
-    device: torch.device,
     dtype: torch.dtype,
 ) -> list[TrainingDataPoint]:
     random.seed(dataset_config.seed)
@@ -178,9 +182,11 @@ def collect_past_lens_acts(
         for layer_percent in dataset_config.layer_percents
     ]
 
-    model = load_model(dataset_config.model_name, dtype)
-
-    submodules = {layer: get_hf_submodule(model, layer) for layer in layers}
+    device = torch.device("cpu")
+    if dataset_config.save_acts:
+        model = load_model(dataset_config.model_name, dtype)
+        submodules = {layer: get_hf_submodule(model, layer) for layer in layers}
+        device = model.device
 
     training_data = []
 
@@ -190,58 +196,72 @@ def collect_past_lens_acts(
             inputs.append(next(dataset))
 
         tokenized_inputs = tokenizer(
-            inputs, return_tensors="pt", padding=True, truncation=True, max_length=custom_dataset_params.max_length
+            inputs,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=custom_dataset_params.max_length,
+            add_special_tokens=False,
         ).to(device)
 
-        acts_BLD_by_layer_dict = collect_activations_multiple_layers(
-            model, submodules, tokenized_inputs, min_offset=None, max_offset=None
-        )
+        if dataset_config.save_acts:
+            acts_BLD_by_layer_dict = collect_activations_multiple_layers(
+                model, submodules, tokenized_inputs, min_offset=None, max_offset=None
+            )
+            for layer in acts_BLD_by_layer_dict.keys():
+                acts_BLD_by_layer_dict[layer] = acts_BLD_by_layer_dict[layer].to("cpu", non_blocking=True)
 
         attn_mask_BL = tokenized_inputs["attention_mask"].cpu()
         input_ids_BL = tokenized_inputs["input_ids"].cpu()
 
         for layer in layers:
-            acts_BLD_by_layer_dict[layer] = acts_BLD_by_layer_dict[layer].cpu()
-            acts_BLD = acts_BLD_by_layer_dict[layer]
             for j in range(len(inputs)):
-                attn_mask_L = attn_mask_BL[j]
-                input_ids_L = input_ids_BL[j]
-                acts_LD = acts_BLD[j]
+                attn_mask_L = attn_mask_BL[j].bool()
+                input_ids_L = input_ids_BL[j, attn_mask_L]
+                L = len(input_ids_L)
 
-                k = random.randint(custom_dataset_params.min_k, custom_dataset_params.max_k)
-
-                # Find the first non-padding position (where attention mask is 1)
-                valid_positions = torch.where(attn_mask_L == 1)[0]
+                k_prev = random.randint(custom_dataset_params.min_k_tokens, custom_dataset_params.max_k_tokens)
+                k_acts = random.randint(
+                    custom_dataset_params.min_k_activations, custom_dataset_params.max_k_activations
+                )
 
                 # Skip if sequence is too short (less than k+1 valid tokens)
-                if len(valid_positions) < k + 1:
+                if len(input_ids_L) < k_prev + k_acts + 1:
                     continue
 
                 # Select a random position that's at least k tokens from the start
-                # valid_positions[k:] gives us positions starting from the (k+1)th valid token
-                valid_indices = valid_positions[k:]  # Positions at least k tokens from start
+                selected_act_begin_idx = random.randint(k_prev, L - k_acts - 1)
+                selected_act_positions = list(range(selected_act_begin_idx, selected_act_begin_idx + k_acts))
+                selected_tokens_positions = list(range(selected_act_begin_idx - k_prev, selected_act_begin_idx))
+                max_position = selected_act_positions[-1]
+                input_ids_L = input_ids_L[: max_position + 1]
 
-                # Randomly select one of these valid positions
-                selected_idx = valid_indices[random.randint(0, len(valid_indices) - 1)].item()
+                past_tokens = input_ids_L[selected_tokens_positions]
+                past_text = tokenizer.decode(past_tokens, skip_special_tokens=True)
+                prompt = f"Can you predict the previous {k_prev} tokens that came before this?"
 
-                # Get the activation at the selected position
-                selected_act = acts_LD[selected_idx]  # Shape: [D]
-                selected_act_1D = selected_act.unsqueeze(0)  # (1, D)
-
-                past_tokens = input_ids_L[selected_idx - k : selected_idx]
-
-                past_text = tokenizer.decode(past_tokens)
-
-                prompt = f"Can you predict the previous {k} tokens that came before this?"
+                if dataset_config.save_acts:
+                    acts_LD = acts_BLD_by_layer_dict[layer][j, attn_mask_L]
+                    selected_acts_KD = acts_LD[selected_act_positions]
+                    assert selected_acts_KD.shape[0] == k_acts
+                    context_input_ids = None
+                    context_positions = None
+                else:
+                    selected_acts_KD = None
+                    context_input_ids = input_ids_L
+                    context_positions = selected_act_positions
 
                 training_data_point = create_training_datapoint(
+                    datapoint_type=dataset_config.dataset_name,
                     prompt=prompt,
                     target_response=past_text,
                     layer=layer,
-                    num_positions=1,
+                    num_positions=k_acts,
                     tokenizer=tokenizer,
-                    acts_BD=selected_act_1D,
+                    acts_BD=selected_acts_KD,
                     feature_idx=-1,
+                    context_input_ids=context_input_ids,
+                    context_positions=context_positions,
                 )
                 training_data.append(training_data_point)
 

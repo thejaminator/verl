@@ -444,8 +444,6 @@ def train_model(
         model.use_cache = False
         model.gradient_checkpointing_enable()
 
-    submodule = get_hf_submodule(model, cfg.hook_onto_layer)
-
     if cfg.use_lora and cfg.load_lora_path is None:
         lora_config = LoraConfig(
             r=cfg.lora_r,
@@ -466,6 +464,8 @@ def train_model(
         # model.print_trainable_parameters()
 
     model.train()
+
+    submodule = get_hf_submodule(model, cfg.hook_onto_layer)
 
     oom_preflight_check(cfg, training_data, model, submodule, tokenizer, device, dtype)
 
@@ -672,23 +672,23 @@ def build_datasets(
 
 if __name__ == "__main__":
     main_train_size = 6000
-    main_train_size = 600
+    # main_train_size = 60
     main_test_size = 250
     classification_datasets = {
         "geometry_of_truth": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        # "relations": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        # "sst2": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        # "md_gender": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        # "snli": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        # "ag_news": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["test"]},
-        # "ner": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        # "tense": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        # "language_identification": {
-        #     "num_train": main_train_size,
-        #     "num_test": main_test_size,
-        #     "splits": ["test"],
-        # },
-        # "singular_plural": {"num_train": 0, "num_test": main_test_size, "splits": ["test"]},
+        "relations": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "sst2": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "md_gender": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "snli": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "ag_news": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["test"]},
+        "ner": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "tense": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "language_identification": {
+            "num_train": main_train_size,
+            "num_test": main_test_size,
+            "splits": ["test"],
+        },
+        "singular_plural": {"num_train": 0, "num_test": main_test_size, "splits": ["test"]},
     }
 
     hook_layer = 1
@@ -699,25 +699,23 @@ if __name__ == "__main__":
     dtype = torch.bfloat16
 
     layer_percents = [25, 50, 75]
+    # layer_percents = [75]
 
     sft_data_folder = "sft_training_data"
 
-    dataset_loaders = []
+    dataset_config = DatasetLoaderConfig(
+        custom_dataset_params=PastLensDatasetConfig(),
+        num_train=200_000,
+        num_test=0,
+        splits=["train"],
+        model_name=model_name,
+        layer_percents=layer_percents,
+        save_acts=False,
+    )
 
-    # dataset_config = DatasetLoaderConfig(
-    #     custom_dataset_params=PastLensDatasetConfig(),
-    #     num_train=300,
-    #     num_test=0,
-    #     splits=["train"],
-    #     model_name=model_name,
-    #     layer_percents=layer_percents,
-    #     save_acts=True,
-    # )
-
-    # past_lens_dataset_loader = PastLensDatasetLoader(
-    #     dataset_config=dataset_config,
-    # )
-    # dataset_loaders.append(past_lens_dataset_loader)
+    past_lens_dataset_loader = PastLensDatasetLoader(
+        dataset_config=dataset_config,
+    )
 
     # for layer_percent in layer_percents:
     #     dataset_config = DatasetLoaderConfig(
@@ -751,6 +749,8 @@ if __name__ == "__main__":
     #     dataset_loaders.append(sae_explanation_dataset_loader)
     #     dataset_loaders.append(sae_activating_sequences_dataset_loader)
 
+    classification_dataset_loaders = []
+
     for dataset_name in classification_datasets.keys():
         classification_config = ClassificationDatasetConfig(
             classification_dataset_name=dataset_name,
@@ -769,13 +769,25 @@ if __name__ == "__main__":
         classification_dataset_loader = ClassificationDatasetLoader(
             dataset_config=dataset_config,
         )
-        dataset_loaders.append(classification_dataset_loader)
+        classification_dataset_loaders.append(classification_dataset_loader)
+
+    all_dataset_loaders = [past_lens_dataset_loader] + classification_dataset_loaders
 
     iterations = [
         {
             "load_lora_path": None,
-            "dataset_loaders": dataset_loaders,
+            "dataset_loaders": classification_dataset_loaders,
+            "wandb_suffix": "_classification_only",
+        },
+        {
+            "load_lora_path": None,
+            "dataset_loaders": all_dataset_loaders,
             "wandb_suffix": "_act_pretrain",
+        },
+        {
+            "load_lora_path": "checkpoints_act_pretrain/final",
+            "dataset_loaders": classification_dataset_loaders,
+            "wandb_suffix": "_act_pretrain_posttrain",
         },
     ]
 
@@ -788,10 +800,10 @@ if __name__ == "__main__":
             hf_repo_name=hf_repo_name,
             # wandb_suffix=wandb_suffix,
             layer_percents=layer_percents,
-            train_batch_size=16,
+            train_batch_size=32,
             activation_collection_batch_size=64,
-            eval_steps=1000,
-            eval_on_start=False,
+            eval_steps=2000,
+            eval_on_start=True,
             **hyperparam_override,
         )
 
@@ -807,6 +819,10 @@ if __name__ == "__main__":
 
         # for debugging
         # all_training_data = all_training_data[:1000]
+        # eval_keys = list(all_eval_data.keys())
+        # assert len(eval_keys) == 1
+        # eval_key = eval_keys[0]
+        # all_eval_data = {eval_key: all_training_data[:]}
 
         print(f"training data: {len(all_training_data)}, eval data: {len(all_eval_data)}")
 
