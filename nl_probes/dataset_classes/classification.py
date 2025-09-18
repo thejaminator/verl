@@ -81,8 +81,11 @@ class ClassificationDatasetLoader(ActDatasetLoader):
         for split in self.dataset_config.splits:
             if split == "train":
                 datapoints = train_datapoints
+                save_acts = self.dataset_config.save_acts
             else:
                 datapoints = test_datapoints
+                save_acts = True
+
             data = create_vector_dataset(
                 datapoints,
                 tokenizer,
@@ -91,7 +94,7 @@ class ClassificationDatasetLoader(ActDatasetLoader):
                 self.act_layers,
                 end_offset=self.dataset_params.end_offset,
                 max_window_size=self.dataset_params.max_window_size,
-                save_acts=self.dataset_config.save_acts,
+                save_acts=save_acts,
                 datapoint_type=self.dataset_config.dataset_name,
                 debug_print=False,
             )
