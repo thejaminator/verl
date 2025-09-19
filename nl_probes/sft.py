@@ -353,7 +353,7 @@ def train_model(
             bias="none",
             task_type="CAUSAL_LM",
         )
-        model.add_adapter(lora_config, is_trainable=True)
+        model.add_adapter(lora_config)
         # model = get_peft_model(model, lora_config)
         # model.print_trainable_parameters()
     elif cfg.load_lora_path is not None:
