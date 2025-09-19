@@ -62,6 +62,10 @@ for _, row in data.iterrows():
 
 # so, I'm working with the pydantic objects we've been using. They are pretty simple, but you could revert to strings / dicts if you want
 
+# note: This model was only trained on binary Yes / No questions. It appears to work for open ended questions as well, but you may get better results by formatting the prompt as a Yes / No question.
+# format example: Answer with 'Yes' or 'No' only. Can we say this is in Russian?
+# Also note: You don't need to add the layer number or ??? to the prompt - that will be done for you in the next cell
+
 print(raw_datapoints[0])
 
 print(f"\nThe activation prompt is: {raw_datapoints[0].activation_prompt}")
