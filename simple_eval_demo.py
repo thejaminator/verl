@@ -108,6 +108,8 @@ save_acts = True
 batch_size = 128
 
 # if you want to use a trained model organism, pass the path to the lora here
+# NOTE: For the current code, if collecting activations from a different LoRA, make sure save_acts is True
+# If save_acts is False, we collect the activations on the fly from the base model with no LoRA (although we could support passing in a LoRA for activation collection)
 activation_lora_path = None
 # %%
 
