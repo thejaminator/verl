@@ -1,174 +1,136 @@
 # %%
+"""
+Clean, single-file, notebook-style evaluation and plotting script.
+
+Key improvements:
+- Canonical method keys (strings only) -> JSON-safe round-trips
+- Dataset name canonicalization (strip 'classification_' prefix)
+- Robust JSON load/save + migration from old shapes (including 'null' keys)
+- Plotting that tolerates missing datasets/methods
+- Minimal, readable, hackable helpers
+
+Python: 3.11
+"""
+
+from __future__ import annotations
+
+import json
 import math
-import os
-import pickle
-import random
-from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any
 
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
-from peft import PeftModel
-from pydantic import BaseModel
-from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
-import nl_probes.dataset_classes.classification_dataset_manager as classification_dataset_manager
-from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prefix
-from nl_probes.dataset_classes.act_dataset_manager import ActDatasetLoader, BaseDatasetConfig, DatasetLoaderConfig
-from nl_probes.dataset_classes.classification import ClassificationDatasetConfig, ClassificationDatasetLoader
-from nl_probes.utils.activation_utils import (
-    collect_activations_multiple_layers,
-    get_hf_submodule,
+# External project imports (assumed available in your env)
+from nl_probes.dataset_classes.act_dataset_manager import DatasetLoaderConfig
+from nl_probes.dataset_classes.classification import (
+    ClassificationDatasetConfig,
+    ClassificationDatasetLoader,
 )
-from nl_probes.utils.common import (
-    assert_no_peft_present,
-    layer_percent_to_layer,
-    load_model,
-    load_tokenizer,
-    set_seed,
-)
-from nl_probes.utils.dataset_utils import (
-    BatchData,
-    EvalStepResult,
-    FeatureResult,
-    TrainingDataPoint,
-    construct_batch,
-    create_training_datapoint,
-    get_prompt_tokens_only,
-)
-from nl_probes.utils.eval import parse_answer, run_evaluation, score_eval_responses
+from nl_probes.utils.activation_utils import get_hf_submodule
+from nl_probes.utils.common import load_model, load_tokenizer
+from nl_probes.utils.eval import parse_answer, run_evaluation
 
-# %%
+# -----------------------------
+# Configuration - tune here
+# -----------------------------
 
-main_test_size = 250
-classification_datasets = {
-    "geometry_of_truth": {"num_train": 0, "num_test": main_test_size, "splits": ["test"]},
-    "relations": {"num_train": 0, "num_test": main_test_size, "splits": ["test"]},
-    "sst2": {"num_train": 0, "num_test": main_test_size, "splits": ["test"]},
-    "md_gender": {"num_train": 0, "num_test": main_test_size, "splits": ["test"]},
-    "snli": {"num_train": 0, "num_test": main_test_size, "splits": ["test"]},
-    "ag_news": {"num_train": 0, "num_test": main_test_size, "splits": ["test"]},
-    "ner": {"num_train": 0, "num_test": main_test_size, "splits": ["test"]},
-    "tense": {"num_train": 0, "num_test": main_test_size, "splits": ["test"]},
-    "language_identification": {
-        "num_train": 0,
-        "num_test": main_test_size,
-        "splits": ["test"],
-    },
-    "singular_plural": {"num_train": 0, "num_test": main_test_size, "splits": ["test"]},
-}
+RESULTS_FILENAME = "0919_classification_results.json"
 
-lora_paths_with_labels = {
-    "checkpoints_act_pretrain/final": "Pretrain Mix",
-    "checkpoints_act_pretrain_posttrain/final": "Pretrain Mix -> 1 Classification Epoch",
-    "checkpoints_classification_only_2_epochs/final": "2 Classification Epochs",
-    None: "Original",
-}
+# When False: skip expensive eval and try to load from RESULTS_FILENAME
+RUN_FRESH_EVAL = True
 
-all_eval_data = {}
-
-model_name = "Qwen/Qwen3-8B"
-dtype = torch.bfloat16
-device = torch.device("cuda")
-tokenizer = load_tokenizer(model_name)
-
-classification_dataset_loaders: list[ClassificationDatasetLoader] = []
-layer_percents = [25, 50, 75]
-batch_size = 128
-steering_coefficient = 2.0
-hook_layer = 1
-generation_kwargs = {
+# Model and eval config
+MODEL_NAME = "Qwen/Qwen3-8B"
+HOOK_LAYER = 1
+DTYPE = torch.bfloat16
+BATCH_SIZE = 128
+STEERING_COEFFICIENT = 2.0
+GENERATION_KWARGS = {
     "do_sample": False,
     "temperature": 0.0,
     "max_new_tokens": 10,
 }
 
-for dataset_name in classification_datasets.keys():
-    classification_config = ClassificationDatasetConfig(
-        classification_dataset_name=dataset_name,
-    )
+# Dataset selection
+MAIN_TEST_SIZE = 250
+CLASSIFICATION_DATASETS: dict[str, dict[str, Any]] = {
+    "geometry_of_truth": {"num_train": 0, "num_test": MAIN_TEST_SIZE, "splits": ["test"]},
+    "relations": {"num_train": 0, "num_test": MAIN_TEST_SIZE, "splits": ["test"]},
+    "sst2": {"num_train": 0, "num_test": MAIN_TEST_SIZE, "splits": ["test"]},
+    "md_gender": {"num_train": 0, "num_test": MAIN_TEST_SIZE, "splits": ["test"]},
+    "snli": {"num_train": 0, "num_test": MAIN_TEST_SIZE, "splits": ["test"]},
+    "ag_news": {"num_train": 0, "num_test": MAIN_TEST_SIZE, "splits": ["test"]},
+    "ner": {"num_train": 0, "num_test": MAIN_TEST_SIZE, "splits": ["test"]},
+    "tense": {"num_train": 0, "num_test": MAIN_TEST_SIZE, "splits": ["test"]},
+    "language_identification": {"num_train": 0, "num_test": MAIN_TEST_SIZE, "splits": ["test"]},
+    "singular_plural": {"num_train": 0, "num_test": MAIN_TEST_SIZE, "splits": ["test"]},
+}
 
-    dataset_config = DatasetLoaderConfig(
-        custom_dataset_params=classification_config,
-        num_train=classification_datasets[dataset_name]["num_train"],
-        num_test=classification_datasets[dataset_name]["num_test"],
-        splits=classification_datasets[dataset_name]["splits"],
-        model_name=model_name,
-        layer_percents=layer_percents,
-        save_acts=False,
-    )
+# Groupings for plotting
+IID_DATASETS = [
+    "geometry_of_truth",
+    "relations",
+    "sst2",
+    "md_gender",
+    "snli",
+    "ner",
+    "tense",
+]
+OOD_DATASETS = [
+    "ag_news",
+    "language_identification",
+    "singular_plural",
+]
 
-    classification_dataset_loader = ClassificationDatasetLoader(
-        dataset_config=dataset_config,
-    )
-    classification_dataset_loaders.append(classification_dataset_loader)
-
-all_eval_data: dict[str, list[TrainingDataPoint]] = {}
-
-for dataset_loader in classification_dataset_loaders:
-    if "test" in dataset_loader.dataset_config.splits:
-        all_eval_data[dataset_loader.dataset_config.dataset_name] = dataset_loader.load_dataset("test")
-
-# %%
-
-model = load_model(model_name, dtype, load_in_8bit=False)
-submodule = get_hf_submodule(model, hook_layer)
-# %%
-all_results = {}
-for dataset_name in all_eval_data.keys():
-    eval_data = all_eval_data[dataset_name]
-    all_results[dataset_name] = {}
-    for lora_path in lora_paths_with_labels.keys():
-        results = run_evaluation(
-            eval_data=eval_data,
-            model=model,
-            tokenizer=tokenizer,
-            submodule=submodule,
-            device=device,
-            dtype=dtype,
-            global_step=-1,
-            lora_path=lora_path,
-            eval_batch_size=batch_size,
-            steering_coefficient=steering_coefficient,
-            generation_kwargs=generation_kwargs,
-        )
-        all_results[dataset_name][lora_path] = results
-# %%
-
-print(all_results.keys())
-first_key = list(all_results.keys())[0]
-print(all_results[first_key].keys())
-# print(all_results)
-# %%
+# Layer percent settings used by loaders
+LAYER_PERCENTS = [25, 50, 75]
 
 
-def format_results(results: list[FeatureResult], eval_data: list[TrainingDataPoint]) -> list[dict[str, str]]:
-    formatted_results = []
-    for result, eval_data_point in zip(results, eval_data, strict=True):
-        cleaned_response = parse_answer(result.api_response)
-        target_response = parse_answer(eval_data_point.target_output)
-        formatted_results.append(
-            {
-                "response": cleaned_response,
-                "target_response": target_response,
-            }
-        )
-    return formatted_results
+# Canonical method list - keys must be strings to be JSON-safe.
+@dataclass(frozen=True)
+class Method:
+    key: str  # canonical JSON-safe key
+    label: str  # pretty label for plots
+    lora_path: str | None  # filesystem path or None for baseline
+
+
+METHODS: list[Method] = [
+    Method(key="original", label="Original", lora_path=None),
+    Method(key="act_pretrain", label="Pretrain Mix", lora_path="checkpoints_act_pretrain/final"),
+    Method(
+        key="act_pretrain_posttrain",
+        label="Pretrain Mix -> 1 Classification Epoch",
+        lora_path="checkpoints_act_pretrain_posttrain/final",
+    ),
+    Method(
+        key="classification_only_2_epochs",
+        label="2 Classification Epochs",
+        lora_path="checkpoints_classification_only_2_epochs/final",
+    ),
+]
+
+# Convenience dicts
+LABEL_BY_METHOD_KEY: dict[str, str] = {m.key: m.label for m in METHODS}
+METHOD_KEY_BY_LORA_PATH: dict[str | None, str] = {m.lora_path: m.key for m in METHODS}
+
+# -----------------------------
+# Lightweight helpers
+# -----------------------------
+
+
+def canonical_dataset_id(name: str) -> str:
+    """Strip 'classification_' prefix if present so keys match your IID/OOD lists."""
+    if name.startswith("classification_"):
+        return name[len("classification_") :]
+    return name
 
 
 def proportion_confidence(correct: int, total: int, z: float = 1.96) -> tuple[float, float, float, float]:
-    """
-    Compute proportion statistics.
-
-    Returns (p, se, lower, upper)
-    - p: proportion correct (in [0,1])
-    - se: standard error of the proportion (sqrt(p*(1-p)/n))
-    - lower, upper: normal-approximation confidence interval (clamped to [0,1])
-
-    Uses normal approx: CI = p +/- z * se. Default z=1.96 gives ~95% CI.
-    """
+    """Return p, se, lower, upper for a binomial proportion with normal approx CI."""
     if total <= 0:
         return 0.0, 0.0, 0.0, 0.0
     p = correct / total
@@ -178,37 +140,13 @@ def proportion_confidence(correct: int, total: int, z: float = 1.96) -> tuple[fl
     return p, se, lower, upper
 
 
-def analyze_results(results: list[dict]) -> dict[str, float]:
-    clean_responses = []
-
-    correct = 0
-    is_correct_list = []
-    for result in results:
-        cleaned_response = parse_answer(result["response"])
-        clean_responses.append(cleaned_response)
-        target_response = result["target_response"].lower()
-        is_correct = target_response == cleaned_response
-        is_correct_list.append(is_correct)
-        if is_correct:
-            correct += 1
-        else:
-            # continue
-            print(result["response"])
-            print(cleaned_response)
-            print(target_response)
-            print("--------------------------------")
-
-    n = len(results)
-    p, se, lower, upper = proportion_confidence(correct, n)  # default 95% CI (z=1.96)
-
-    print(f"{correct=}")
-    print(f"{n=}")
-    print(f"percent_correct = {p:.4f} ({p * 100:.2f}%)")
-    print(f"standard_error = {se:.6f}")
-    print(f"95% CI (normal approx) = [{lower:.4f}, {upper:.4f}] ({lower * 100:.2f}%, {upper * 100:.2f}%)")
-    print(f"len(set(clean_responses))={len(set(clean_responses))}")
-
-    # return values in case you want to plot programmatically
+def score_predictions(cleaned_responses: list[str], target_responses: list[str]) -> dict[str, Any]:
+    """Compute correctness stats given cleaned model outputs and cleaned targets."""
+    assert len(cleaned_responses) == len(target_responses)
+    n = len(cleaned_responses)
+    is_correct_list = [cr == tr for cr, tr in zip(cleaned_responses, target_responses)]
+    correct = sum(is_correct_list)
+    p, se, lower, upper = proportion_confidence(correct, n)
     return {
         "correct": correct,
         "n": n,
@@ -220,496 +158,336 @@ def analyze_results(results: list[dict]) -> dict[str, float]:
     }
 
 
-lora_paths_with_labels = {
-    "checkpoints_act_pretrain_posttrain/final": "SAE + Classification",
-    "checkpoints_classification_only_2_epochs/final": "Classification Only",
-    None: "Original",
-}
-
-
-final_results = {}
-for dataset_name in all_eval_data.keys():
-    eval_data = all_eval_data[dataset_name]
-    final_results[dataset_name] = {}
-    for lora_path in lora_paths_with_labels.keys():
-        results = all_results[dataset_name][lora_path]
-        results = format_results(results, eval_data)
-
-        final_results[dataset_name][lora_path] = analyze_results(results)
+def method_key_from_lora_path(lora_path: str | None) -> str:
+    """Map an on-disk LoRA path or None to a canonical method key."""
+    key = METHOD_KEY_BY_LORA_PATH.get(lora_path)
+    if key is not None:
+        return key
+    # Fallback for unregistered paths - stable, JSON-safe, hackable
+    sanitized = str(lora_path).replace("/", "_").replace("\\", "_")
+    return f"custom__{sanitized}"
 
 
 # %%
+# Tokenizer and dataset loading
 
-from pathlib import Path
-from typing import Any
+tokenizer = load_tokenizer(MODEL_NAME)
 
-import matplotlib.pyplot as plt
+classification_dataset_loaders: list[ClassificationDatasetLoader] = []
+for dataset_name, dcfg in CLASSIFICATION_DATASETS.items():
+    classification_config = ClassificationDatasetConfig(
+        classification_dataset_name=dataset_name,
+    )
+    dataset_config = DatasetLoaderConfig(
+        custom_dataset_params=classification_config,
+        num_train=dcfg["num_train"],
+        num_test=dcfg["num_test"],
+        splits=dcfg["splits"],
+        model_name=MODEL_NAME,
+        layer_percents=LAYER_PERCENTS,
+        save_acts=False,
+    )
+    classification_dataset_loaders.append(ClassificationDatasetLoader(dataset_config=dataset_config))
+
+# Pull test sets for evaluation
+all_eval_data: dict[str, list[Any]] = {}
+for loader in classification_dataset_loaders:
+    if "test" in loader.dataset_config.splits:
+        ds_id = canonical_dataset_id(loader.dataset_config.dataset_name)
+        all_eval_data[ds_id] = loader.load_dataset("test")
+
+print(f"Loaded datasets: {list(all_eval_data.keys())}")
+
+# %%
+# Model and submodule
+
+device = torch.device("cuda")
+dtype = torch.bfloat16
+print(f"Using device={device}, dtype={dtype}")
+
+model = load_model(MODEL_NAME, dtype, load_in_8bit=False)
+submodule = get_hf_submodule(model, HOOK_LAYER)
+
+# %%
+# Evaluation (fast path: load JSON if available, heavy path: run fresh)
 
 
-def plot_classification_results(
-    all_results: dict[str, dict[str | None, dict[str, Any]]],
-    lora_paths_with_labels: dict[str | None, str],
-    iid_ds: list[str],
-    ood_ds: list[str],
-    *,
-    save_dir: str | Path | None = None,
-) -> None:
+def run_eval_for_datasets(eval_data_by_ds: dict[str, list[Any]]) -> dict[str, dict[str, Any]]:
     """
-    Make a bar chart per dataset with accuracy and standard error bars.
-
-    Args:
-        all_results: mapping like all_results[dataset_name][lora_path] -> result dict
-                    where each result dict has keys like 'p', 'se', 'n', etc.
-        lora_paths_with_labels: maps lora_path (can be None) -> label to show on x-axis
-        save_dir: if set, figures are saved here as <dataset>.<file_format>
-        file_format: e.g. 'png' or 'pdf'
-        dpi: figure DPI when saving
-        as_percentage: show accuracy in percent if True, else 0-1
-        annotate: write value above each bar
-
     Returns:
-        List of saved file paths (empty if not saving).
+        results[dataset_id][method_key] -> metrics dict
     """
-    if save_dir is not None:
-        save_dir = Path(save_dir)
-        save_dir.mkdir(parents=True, exist_ok=True)
+    out: dict[str, dict[str, Any]] = {}
+    for ds_id, eval_data in eval_data_by_ds.items():
+        out[ds_id] = {}
+        for m in METHODS:
+            # Heavy call - returns list of FeatureResult-like with .api_response
+            raw_results = run_evaluation(
+                eval_data=eval_data,
+                model=model,
+                tokenizer=tokenizer,
+                submodule=submodule,
+                device=device,
+                dtype=dtype,
+                global_step=-1,
+                lora_path=m.lora_path,
+                eval_batch_size=BATCH_SIZE,
+                steering_coefficient=STEERING_COEFFICIENT,
+                generation_kwargs=GENERATION_KWARGS,
+            )
 
-    # Define colors and line styles for consistency
-    colors = ["#2E86AB", "#A23B72", "#F18F01", "#000000"]
-    markers = ["o", "o", "o", "o"]
-    linestyles = ["--", "--", "--", "--"]
-
-    # Create first plot for IID datasets
-    plt.figure(figsize=(10, 6))
-
-    for idx, (lora_path, label) in enumerate(lora_paths_with_labels.items()):
-        iid_scores = []
-        for dataset in iid_ds:
-            iid_scores.append(all_results[dataset][lora_path]["p"])
-
-        plt.plot(
-            range(len(iid_ds)),
-            iid_scores,
-            label=label,
-            marker=markers[idx],
-            color=colors[idx],
-            linestyle=linestyles[idx],
-            linewidth=2,
-            markersize=8,
-            alpha=0.8,
-        )
-
-    # Add random chance baseline
-    plt.axhline(y=0.5, color="red", linestyle=":", linewidth=1.5, alpha=0.7, label="Random Chance Baseline")
-
-    # Customize IID plot
-    plt.xlabel("Dataset", fontsize=12)
-    plt.ylabel("Accuracy", fontsize=12)
-    plt.title("IID (In-Distribution) Dataset Performance", fontsize=14, fontweight="bold")
-    plt.xticks(range(len(iid_ds)), iid_ds, rotation=45, ha="right")
-    plt.legend(loc="best", fontsize=10)
-    plt.grid(True, alpha=0.3, linestyle="--")
-    plt.ylim([0.45, 1.0])
-    plt.tight_layout()
-    plt.show()
-
-    # Create second plot for OOD datasets
-    plt.figure(figsize=(10, 6))
-
-    for idx, (lora_path, label) in enumerate(lora_paths_with_labels.items()):
-        ood_scores = []
-        for dataset in ood_ds:
-            ood_scores.append(all_results[dataset][lora_path]["p"])
-
-        plt.plot(
-            range(len(ood_ds)),
-            ood_scores,
-            label=label,
-            marker=markers[idx],
-            color=colors[idx],
-            linestyle=linestyles[idx],
-            linewidth=2,
-            markersize=8,
-            alpha=0.8,
-        )
-
-    # Add random chance baseline
-    plt.axhline(y=0.5, color="red", linestyle=":", linewidth=1.5, alpha=0.7, label="Random Chance Baseline")
-
-    # Customize OOD plot
-    plt.xlabel("Dataset", fontsize=12)
-    plt.ylabel("Accuracy", fontsize=12)
-    plt.title("OOD (Out-of-Distribution) Dataset Performance", fontsize=14, fontweight="bold")
-    plt.xticks(range(len(ood_ds)), ood_ds, rotation=45, ha="right")
-    plt.legend(loc="best", fontsize=10)
-    plt.grid(True, alpha=0.3, linestyle="--")
-    plt.ylim([0.45, 1.0])
-    plt.tight_layout()
-    plt.show()
-
-    # Calculate and print average scores for each method
-    print("\n=== Average Performance ===")
-    for lora_path, label in lora_paths_with_labels.items():
-        iid_avg = np.mean([all_results[ds][lora_path]["p"] for ds in iid_ds])
-        ood_avg = np.mean([all_results[ds][lora_path]["p"] for ds in ood_ds])
-        print(f"\n{label}:")
-        print(f"  IID Average: {iid_avg:.4f}")
-        print(f"  OOD Average: {ood_avg:.4f}")
-        print(f"  Overall Average: {np.mean([iid_avg, ood_avg]):.4f}")
+            cleaned = [parse_answer(r.api_response) for r in raw_results]
+            targets = [parse_answer(dp.target_output) for dp in eval_data]
+            metrics = score_predictions(cleaned, targets)
+            out[ds_id][m.key] = metrics
+            print(f"[{ds_id}] {m.label}: p={metrics['p']:.3f} n={metrics['n']}")
+    return out
 
 
-iid_ds = [
-    "classification_geometry_of_truth",
-    "classification_relations",
-    "classification_sst2",
-    "classification_md_gender",
-    "classification_snli",
-    # "classification_ag_news",
-    "classification_ner",
-    "classification_tense",
-    # "classification_language_identification",
-    # "classification_singular_plural",
-]
-
-ood_ds = [
-    "classification_ag_news",
-    "classification_language_identification",
-    "classification_singular_plural",
-]
+def save_results_json(path: str | Path, results_by_ds: dict[str, dict[str, Any]]) -> None:
+    meta = {
+        "schema_version": 1,
+        "model_name": MODEL_NAME,
+        "hook_layer": HOOK_LAYER,
+        "dtype": str(dtype),
+        "batch_size": BATCH_SIZE,
+        "steering_coefficient": STEERING_COEFFICIENT,
+        "generation_kwargs": GENERATION_KWARGS,
+        "methods": {m.key: {"label": m.label, "lora_path": m.lora_path} for m in METHODS},
+    }
+    blob = {"meta": meta, "results": results_by_ds}
+    with open(path, "w") as f:
+        json.dump(blob, f)
+    print(f"Saved results to {path}")
 
 
-plot_classification_results(final_results, lora_paths_with_labels, iid_ds, ood_ds, save_dir=None)
+def load_and_migrate_results_json(path: str | Path) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """
+    Load results with robustness:
+    - If file has new schema: return meta, results
+    - If file has old shape (dataset -> lora_path or 'null' -> metrics): migrate to method keys
+    """
+    with open(path, "r") as f:
+        data = json.load(f)
+
+    # New schema check
+    if isinstance(data, dict) and "results" in data and "meta" in data:
+        meta = data["meta"]
+        results = data["results"]
+        # ensure keys are canonical dataset ids
+        migrated: dict[str, dict[str, Any]] = {}
+        for ds_name, per_method in results.items():
+            ds_id = canonical_dataset_id(ds_name)
+            migrated[ds_id] = {}
+            for method_key, metrics in per_method.items():
+                # already method keys as strings
+                migrated[ds_id][str(method_key)] = metrics
+        return meta, migrated
+
+    # Old schema - likely dataset -> {lora_path_or_null: metrics}
+    migrated_results: dict[str, dict[str, Any]] = {}
+    for ds_name, per_key in data.items():
+        ds_id = canonical_dataset_id(ds_name)
+        migrated_results[ds_id] = {}
+        if not isinstance(per_key, dict):
+            continue
+        for raw_key, metrics in per_key.items():
+            # raw_key might be None serialized as "null" or "None"
+            if raw_key in ("null", "None", "", "none"):
+                lora_path = None
+            else:
+                lora_path = raw_key
+            mkey = method_key_from_lora_path(lora_path)
+            migrated_results[ds_id][mkey] = metrics
+
+    meta = {
+        "schema_version": 0,
+        "note": "Migrated from legacy shape without explicit meta.",
+        "methods": {m.key: {"label": m.label, "lora_path": m.lora_path} for m in METHODS},
+    }
+    return meta, migrated_results
+
+
+# Orchestrate load-or-run
+results_by_ds: dict[str, dict[str, Any]] = {}
+meta_loaded: dict[str, Any] | None = None
+
+if not RUN_FRESH_EVAL and Path(RESULTS_FILENAME).exists():
+    print(f"Loading existing results from {RESULTS_FILENAME}")
+    meta_loaded, results_by_ds = load_and_migrate_results_json(RESULTS_FILENAME)
+else:
+    print("Running fresh evaluation - this can be slow.")
+    results_by_ds = run_eval_for_datasets(all_eval_data)
+    save_results_json(RESULTS_FILENAME, results_by_ds)
 
 # %%
-import math
-from pathlib import Path
-from typing import Any
-
-import matplotlib.pyplot as plt
-import numpy as np
+# Plotting utilities - robust to missing entries
 
 
-def _extract_p_se_n(res: dict[str, Any]) -> tuple[float | None, float | None, int | None]:
-    """
-    Return (p, se, n) in 0-1 units if available. Falls back to compute p from correct/n.
-    If SE is missing but a 95% CI is given, infer SE from CI width.
-    """
-    p = res.get("p")
-    n = res.get("n")
-
-    if p is None and "correct" in res and "n" in res and res["n"]:
-        p = res["correct"] / res["n"]
-
-    se = res.get("se")
-    if se is None and "ci_lower" in res and "ci_upper" in res:
-        se = (res["ci_upper"] - res["ci_lower"]) / (2 * 1.96)
-
+def _score_and_err(result: dict[str, Any] | None) -> tuple[float, float, float]:
+    """Return (p, lower_err, upper_err). If missing, return (nan,0,0)."""
+    if not result:
+        return float("nan"), 0.0, 0.0
+    p = result.get("p")
     if p is None:
-        return None, None, n
-    if se is None:
-        se = 0.0
+        n = result.get("n", 0) or 0
+        c = result.get("correct", 0) or 0
+        p = (c / n) if n else float("nan")
+    lower = result.get("ci_lower")
+    upper = result.get("ci_upper")
+    if lower is not None and upper is not None and isinstance(p, (int, float)):
+        return float(p), max(0.0, float(p) - float(lower)), max(0.0, float(upper) - float(p))
+    se = result.get("se")
+    if se is not None and isinstance(p, (int, float)):
+        return float(p), float(se), float(se)
+    return float(p) if isinstance(p, (int, float)) else float("nan"), 0.0, 0.0
 
-    return float(p), float(se), (int(n) if n is not None else None)
 
-
-def _build_matrices(
-    all_results: dict[str, dict[str | None, dict[str, Any]]],
-    lora_paths_with_labels: dict[str | None, str],
+def plot_group(
+    group_name: str,
     datasets: list[str],
-    as_percentage: bool,
-) -> tuple[list[str], list[str], list[str | None], np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Returns:
-        ds_list: kept datasets in given order if present in all_results
-        model_labels: labels aligned with order_lps
-        order_lps: LoRA path keys in the order given by lora_paths_with_labels but filtered to those present
-        Y: shape (M, N) values (percent or 0-1)
-        E: shape (M, N) standard errors in same units
-        N: shape (M, N) sample sizes (nan if missing)
-    """
-    ds_list = [d for d in datasets if d in all_results]
-    # Only keep models that appear at least once in the chosen datasets
-    present_lps = set()
-    for d in ds_list:
-        present_lps |= set(all_results[d].keys())
-    order_lps = [lp for lp in lora_paths_with_labels.keys() if lp in present_lps]
-    model_labels = [lora_paths_with_labels[lp] for lp in order_lps]
-
-    M, N = len(order_lps), len(ds_list)
-    Y = np.full((M, N), np.nan, dtype=float)
-    E = np.zeros((M, N), dtype=float)
-    Nmat = np.full((M, N), np.nan, dtype=float)
-
-    scale = 100.0 if as_percentage else 1.0
-
-    for j, ds in enumerate(ds_list):
-        per_model = all_results.get(ds, {})
-        for i, lp in enumerate(order_lps):
-            if lp not in per_model:
-                continue
-            p, se, n = _extract_p_se_n(per_model[lp])
-            if p is None:
-                continue
-            Y[i, j] = p * scale
-            E[i, j] = se * scale
-            if n is not None:
-                Nmat[i, j] = float(n)
-
-    return ds_list, model_labels, order_lps, Y, E, Nmat
-
-
-def plot_multi_dataset_lines(
-    all_results: dict[str, dict[str | None, dict[str, Any]]],
-    lora_paths_with_labels: dict[str | None, str],
-    datasets: list[str],
+    results: dict[str, dict[str, Any]],
+    label_by_key: dict[str, str],
     *,
-    title: str,
-    as_percentage: bool = True,
-    annotate: bool = False,
-    save_path: str | Path | None = None,
-    dpi: int = 150,
-):
-    ds_list, model_labels, order_lps, Y, E, Nmat = _build_matrices(
-        all_results, lora_paths_with_labels, datasets, as_percentage
-    )
-    if len(ds_list) == 0 or len(model_labels) == 0:
+    baseline: float | None = 0.5,
+) -> None:
+    present = [ds for ds in datasets if ds in results]
+    missing = [ds for ds in datasets if ds not in results]
+    if missing:
+        print(f"[plot {group_name}] Skipping missing datasets: {missing}")
+
+    if not present:
+        print(f"[plot {group_name}] Nothing to plot.")
         return
 
-    fig_w = max(6.5, 0.9 * len(ds_list) + 2.0)
-    fig = plt.figure(figsize=(fig_w, 4.2))
-    ax = plt.gca()
+    x = np.arange(len(present))
+    plt.figure(figsize=(10, 6))
 
-    x = np.arange(len(ds_list))
-    for i, label in enumerate(model_labels):
-        y = Y[i]
-        e = E[i]
-        ax.errorbar(x, y, yerr=e, fmt="o-", capsize=3, label=label)
-        if annotate:
-            for xi, yi in zip(x, y):
-                if not np.isnan(yi):
-                    ax.text(xi, yi, f"{yi:.1f}" + ("%" if as_percentage else ""), ha="center", va="bottom", fontsize=8)
+    # For consistent legend order, iterate methods in METHODS order but include only those present
+    for m in METHODS:
+        y = []
+        yerr_low = []
+        yerr_high = []
+        any_present = False
+        for ds in present:
+            r = results[ds].get(m.key)
+            p, el, eh = _score_and_err(r)
+            if not np.isnan(p):
+                any_present = True
+            y.append(p)
+            yerr_low.append(el)
+            yerr_high.append(eh)
+        if any_present:
+            plt.errorbar(
+                x,
+                y,
+                yerr=[yerr_low, yerr_high],
+                label=label_by_key.get(m.key, m.key),
+                marker="o",
+                linestyle="--",
+                linewidth=2,
+                markersize=6,
+                alpha=0.9,
+                capsize=4,
+            )
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(ds_list, rotation=20, ha="right")
-    ax.set_ylabel("Accuracy (%)" if as_percentage else "Accuracy")
-    ax.set_title(title)
-    ax.set_ylim(0, 100 if as_percentage else 1.0)
-    ax.yaxis.grid(True, linestyle="--", alpha=0.4)
-    ax.legend(ncols=min(3, len(model_labels)), frameon=False)
+    if baseline is not None:
+        plt.axhline(y=baseline, linestyle=":", linewidth=1.5, alpha=0.7, label=f"Baseline {baseline:.2f}")
 
-    fig.tight_layout()
-    if save_path is not None:
-        save_path = Path(save_path)
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+    plt.xlabel("Dataset")
+    plt.ylabel("Accuracy")
+    plt.title(group_name)
+    plt.xticks(x, present, rotation=45, ha="right")
+    plt.legend(loc="best", fontsize=10)
+    plt.grid(True, alpha=0.3, linestyle="--")
+    plt.ylim([0.45, 1.0])
+    plt.tight_layout()
     plt.show()
-    plt.close(fig)
 
 
-def plot_multi_dataset_grouped_bars(
-    all_results: dict[str, dict[str | None, dict[str, Any]]],
-    lora_paths_with_labels: dict[str | None, str],
-    datasets: list[str],
-    *,
-    title: str,
-    as_percentage: bool = True,
-    annotate: bool = False,
-    save_path: str | Path | None = None,
-    dpi: int = 150,
-):
-    ds_list, model_labels, order_lps, Y, E, Nmat = _build_matrices(
-        all_results, lora_paths_with_labels, datasets, as_percentage
-    )
-    if len(ds_list) == 0 or len(model_labels) == 0:
-        return
+def print_averages(
+    datasets_iid: list[str],
+    datasets_ood: list[str],
+    results: dict[str, dict[str, Any]],
+    label_by_key: dict[str, str],
+) -> None:
+    print("\n=== Average Performance ===")
+    for m in METHODS:
+        iid_vals = [results.get(ds, {}).get(m.key, {}).get("p") for ds in datasets_iid]
+        iid_vals = [v for v in iid_vals if isinstance(v, (int, float))]
+        ood_vals = [results.get(ds, {}).get(m.key, {}).get("p") for ds in datasets_ood]
+        ood_vals = [v for v in ood_vals if isinstance(v, (int, float))]
 
-    M, N = Y.shape
-    fig_w = max(6.5, 0.9 * N + 2.5)
-    fig = plt.figure(figsize=(fig_w, 4.2))
-    ax = plt.gca()
-
-    x = np.arange(N)
-    width = 0.82 / max(1, M)
-    offsets = (np.arange(M) - (M - 1) / 2.0) * width
-
-    bars_all = []
-    for i, label in enumerate(model_labels):
-        xi = x + offsets[i]
-        bars = ax.bar(xi, Y[i], yerr=E[i], width=width, capsize=3, label=label)
-        bars_all.append(bars)
-        if annotate:
-            for b, yi in zip(bars, Y[i]):
-                if not np.isnan(yi):
-                    ax.text(
-                        b.get_x() + b.get_width() / 2.0,
-                        yi,
-                        f"{yi:.1f}" + ("%" if as_percentage else ""),
-                        ha="center",
-                        va="bottom",
-                        fontsize=8,
-                    )
-
-    xticklabels = []
-    for j, ds in enumerate(ds_list):
-        # show n from the first model that has it
-        n_any = None
-        for i in range(M):
-            val = Nmat[i, j]
-            if not np.isnan(val):
-                n_any = int(val)
-                break
-        xticklabels.append(f"{ds}\n(n={n_any})" if n_any is not None else ds)
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(xticklabels, rotation=0)
-    ax.set_ylabel("Accuracy (%)" if as_percentage else "Accuracy")
-    ax.set_title(title)
-    ax.set_ylim(0, 100 if as_percentage else 1.0)
-    ax.yaxis.grid(True, linestyle="--", alpha=0.4)
-    ax.legend(ncols=min(3, len(model_labels)), frameon=False)
-
-    fig.tight_layout()
-    if save_path is not None:
-        save_path = Path(save_path)
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
-    plt.show()
-    plt.close(fig)
-
-
-def plot_group_summary_averages(
-    all_results: dict[str, dict[str | None, dict[str, Any]]],
-    lora_paths_with_labels: dict[str | None, str],
-    datasets: list[str],
-    *,
-    title_suffix: str,
-    as_percentage: bool = True,
-    save_dir: str | Path | None = None,
-    dpi: int = 150,
-):
-    """
-    Makes two figures:
-      1) Micro-average bars per model (weighted by n). Error bar uses binomial SE over total N.
-      2) Macro-average bars per model (mean across datasets). Error bar is SE of the mean across datasets.
-    """
-    ds_list, model_labels, order_lps, Y, E, Nmat = _build_matrices(
-        all_results, lora_paths_with_labels, datasets, as_percentage
-    )
-    if len(ds_list) == 0 or len(model_labels) == 0:
-        return
-
-    scale = 100.0 if as_percentage else 1.0
-
-    # ---------- Micro-average ----------
-    p_micro = []
-    se_micro = []
-    for i in range(len(model_labels)):
-        vals = Y[i] / scale  # back to 0-1
-        ns = Nmat[i]
-        mask = ~np.isnan(vals) & ~np.isnan(ns) & (ns > 0)
-        if not np.any(mask):
-            p_micro.append(np.nan)
-            se_micro.append(0.0)
+        if not iid_vals and not ood_vals:
             continue
-        total_n = float(np.nansum(ns[mask]))
-        total_correct = float(np.nansum(vals[mask] * ns[mask]))
-        p_hat = total_correct / total_n
-        # Binomial SE
-        se_hat = math.sqrt(max(1e-12, p_hat * (1 - p_hat) / total_n))
-        p_micro.append(p_hat * scale)
-        se_micro.append(se_hat * scale)
 
-    # ---------- Macro-average ----------
-    p_macro = []
-    se_macro = []
-    for i in range(len(model_labels)):
-        vals = Y[i]  # already in chosen units
-        mask = ~np.isnan(vals)
-        if not np.any(mask):
-            p_macro.append(np.nan)
-            se_macro.append(0.0)
-            continue
-        mean = float(np.nanmean(vals[mask]))
-        std = float(np.nanstd(vals[mask], ddof=1)) if np.sum(mask) > 1 else 0.0
-        se = std / math.sqrt(max(1, int(np.sum(mask))))
-        p_macro.append(mean)
-        se_macro.append(se)
+        iid_avg = float(np.mean(iid_vals)) if iid_vals else float("nan")
+        ood_avg = float(np.mean(ood_vals)) if ood_vals else float("nan")
+        overall = np.nanmean([iid_avg, ood_avg])
 
-    def _plot_summary(vals: list[float], errs: list[float], title: str, fname: str | None):
-        fig = plt.figure(figsize=(max(6.0, 1.2 * len(model_labels)), 3.8))
-        ax = plt.gca()
-        x = np.arange(len(model_labels))
-        bars = ax.bar(x, vals, yerr=errs, capsize=4)
-        ax.set_xticks(x)
-        ax.set_xticklabels(model_labels, rotation=0)
-        ax.set_ylabel("Accuracy (%)" if as_percentage else "Accuracy")
-        ax.set_title(title)
-        ax.set_ylim(0, 100 if as_percentage else 1.0)
-        ax.yaxis.grid(True, linestyle="--", alpha=0.4)
-        for b, v in zip(bars, vals):
-            if not np.isnan(v):
-                ax.text(
-                    b.get_x() + b.get_width() / 2.0,
-                    v,
-                    f"{v:.1f}" + ("%" if as_percentage else ""),
-                    ha="center",
-                    va="bottom",
-                    fontsize=9,
-                )
-        fig.tight_layout()
-        if fname is not None:
-            p = Path(fname)
-            p.parent.mkdir(parents=True, exist_ok=True)
-            fig.savefig(p, dpi=dpi, bbox_inches="tight")
-        plt.show()
-        plt.close(fig)
+        print(f"\n{label_by_key.get(m.key, m.key)}:")
+        print(f"  IID Average: {iid_avg:.4f}" if not np.isnan(iid_avg) else "  IID Average: n/a")
+        print(f"  OOD Average: {ood_avg:.4f}" if not np.isnan(ood_avg) else "  OOD Average: n/a")
+        print(f"  Overall Average: {overall:.4f}" if not np.isnan(overall) else "  Overall Average: n/a")
 
-    save_dir = Path(save_dir) if save_dir is not None else None
-    micro_name = (save_dir / f"summary_micro_{title_suffix}.png") if save_dir is not None else None
-    macro_name = (save_dir / f"summary_macro_{title_suffix}.png") if save_dir is not None else None
 
-    _plot_summary(
-        p_micro, se_micro, f"Micro-average accuracy - {title_suffix}", str(micro_name) if micro_name else None
+# %%
+# Plot IID and OOD
+
+plot_group("IID (In-Distribution) Dataset Performance", IID_DATASETS, results_by_ds, LABEL_BY_METHOD_KEY, baseline=0.5)
+plot_group(
+    "OOD (Out-of-Distribution) Dataset Performance", OOD_DATASETS, results_by_ds, LABEL_BY_METHOD_KEY, baseline=0.5
+)
+print_averages(IID_DATASETS, OOD_DATASETS, results_by_ds, LABEL_BY_METHOD_KEY)
+
+# %%
+# Inspect a single dataset's per-example correctness, if you have raw predictions in-memory.
+# This cell is optional - it shows how you could re-run scoring on a dataset interactively.
+
+
+def analyze_results_debug(
+    eval_data: list[Any],
+    raw_api_responses: list[str],
+) -> dict[str, Any]:
+    """
+    Convenience to debug a single method on a single dataset.
+    Prints first few mismatches and returns stats.
+    """
+    cleaned = [parse_answer(x) for x in raw_api_responses]
+    targets = [parse_answer(dp.target_output) for dp in eval_data]
+
+    stats = score_predictions(cleaned, targets)
+
+    # Print a handful of mismatches for quick inspection
+    mismatches = [(i, c, t) for i, (c, t, ok) in enumerate(zip(cleaned, targets, stats["is_correct_list"])) if not ok][
+        :10
+    ]
+    if mismatches:
+        print("\nFirst few mismatches (index, response, target):")
+        for i, c, t in mismatches:
+            print(f"{i:4d}: {c!r} vs {t!r}")
+
+    print(
+        f"\ncorrect={stats['correct']}, n={stats['n']}, p={stats['p']:.4f} "
+        f"95%CI=[{stats['ci_lower']:.4f},{stats['ci_upper']:.4f}]"
     )
-    _plot_summary(
-        p_macro, se_macro, f"Macro-average accuracy - {title_suffix}", str(macro_name) if macro_name else None
-    )
+    return stats
 
 
-plot_multi_dataset_lines(
-    final_results,
-    lora_paths_with_labels,
-    iid_ds,
-    title="IID datasets",
-    as_percentage=True,
-    annotate=False,
-    save_path=None,
-)
-plot_multi_dataset_lines(
-    final_results,
-    lora_paths_with_labels,
-    ood_ds,
-    title="OOD datasets",
-    as_percentage=True,
-    annotate=False,
-    save_path=None,
-)
-# %%
-# If you prefer grouped bars instead of lines
-plot_multi_dataset_grouped_bars(all_results, lora_paths_with_labels, iid_ds, title="IID datasets")
-plot_multi_dataset_grouped_bars(all_results, lora_paths_with_labels, ood_ds, title="OOD datasets")
-
-# Optional summaries
-plot_group_summary_averages(
-    all_results, lora_paths_with_labels, iid_ds, title_suffix="IID", as_percentage=True, save_dir=None
-)
-plot_group_summary_averages(
-    all_results, lora_paths_with_labels, ood_ds, title_suffix="OOD", as_percentage=True, save_dir=None
-)
-# %%
-results_filename = "0919_classification_results_multiple_datasets_layer_1_decoder.json"
-import json
-
-with open(results_filename, "w") as f:
-    json.dump(all_results, f)
-# %%
+# Example usage (uncomment to run live on one dataset and one method):
+# ds = "sst2"
+# method = METHODS[0]  # Original
+# fresh_raw = run_evaluation(
+#     eval_data=all_eval_data[ds],
+#     model=model,
+#     tokenizer=tokenizer,
+#     submodule=submodule,
+#     device=device,
+#     dtype=dtype,
+#     global_step=-1,
+#     lora_path=method.lora_path,
+#     eval_batch_size=BATCH_SIZE,
+#     steering_coefficient=STEERING_COEFFICIENT,
+#     generation_kwargs=GENERATION_KWARGS,
+# )
+# analyze_results_debug(all_eval_data[ds], [r.api_response for r in fresh_raw])
