@@ -174,6 +174,7 @@ def create_vector_dataset(
     min_window_size: int,
     save_acts: bool,
     datapoint_type: str,
+    lora_path: str | None = None,
     debug_print: bool = False,
 ) -> list[TrainingDataPoint]:
     training_data = []
@@ -185,6 +186,9 @@ def create_vector_dataset(
         model = load_model(model_name, torch.bfloat16)
         submodules = {layer: get_hf_submodule(model, layer) for layer in act_layers}
         device = model.device
+
+    if lora_path is not None:
+        model.add_adapter(lora_path, is_trainable=False)
 
     for i in tqdm(range(0, len(datapoints), batch_size), desc="Collecting activations"):
         batch_datapoints = datapoints[i : i + batch_size]
