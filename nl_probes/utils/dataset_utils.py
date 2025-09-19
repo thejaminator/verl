@@ -113,8 +113,6 @@ class TrainingDataPoint(BaseModel):
         if sv is not None:
             if len(values.positions) != sv.shape[0]:
                 raise ValueError("positions and steering_vectors must have the same length")
-            if values.context_positions is not None or values.context_input_ids is not None:
-                raise ValueError("context_* must be None when steering_vectors is provided")
         else:
             if values.context_positions is None or values.context_input_ids is None:
                 raise ValueError("context_* must be provided when steering_vectors is None")
@@ -187,6 +185,29 @@ def construct_batch(
         positions=batch_positions,
         feature_indices=batch_feature_indices,
     )
+
+
+def get_prompt_tokens_only(
+    training_data_point: TrainingDataPoint,
+) -> TrainingDataPoint:
+    """User prompt should be labeled as -100"""
+    prompt_tokens = []
+    prompt_labels = []
+
+    response_token_seen = False
+    for i in range(len(training_data_point.input_ids)):
+        if training_data_point.labels[i] != -100:
+            response_token_seen = True
+            continue
+        else:
+            if response_token_seen:
+                raise ValueError("Response token seen before prompt tokens")
+            prompt_tokens.append(training_data_point.input_ids[i])
+            prompt_labels.append(training_data_point.labels[i])
+    new = training_data_point.model_copy()
+    new.input_ids = prompt_tokens
+    new.labels = prompt_labels
+    return new
 
 
 def materialize_missing_steering_vectors(

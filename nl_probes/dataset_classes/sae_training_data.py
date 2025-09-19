@@ -169,8 +169,6 @@ class SAEYesNoDatasetLoader(ActDatasetLoader):
 
         self.dataset_config.dataset_name = f"sae_yes_no_{self.dataset_params.sft_data_file}"
 
-        raise ValueError("May be broken, please review before using")
-
     def create_dataset(self) -> None:
         training_data, sae_info = create_yes_no_data(
             model_name=self.dataset_config.model_name,
