@@ -1,7 +1,7 @@
 # requirements.txt records the full set of dependencies for development
 accelerate
 codetiming
-datasets
+datasets==3.6.0
 dill
 # flash-attn
 hydra-core
