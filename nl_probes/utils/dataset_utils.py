@@ -106,6 +106,7 @@ class TrainingDataPoint(BaseModel):
     target_output: str
     context_input_ids: list[int] | None
     context_positions: list[int] | None
+    ds_label: str | None  # label from the dataset
 
     @model_validator(mode="after")
     def _check_context_alignment(cls, values):
@@ -349,6 +350,7 @@ def create_training_datapoint(
     feature_idx: int,
     context_input_ids: list[int] | None = None,
     context_positions: list[int] | None = None,
+    ds_label: str | None = None,
 ) -> TrainingDataPoint:
     prefix = get_introspection_prefix(layer, num_positions)
     assert prefix not in prompt, f"Prefix {prefix} found in prompt {prompt}"
@@ -407,6 +409,7 @@ def create_training_datapoint(
         datapoint_type=datapoint_type,
         context_input_ids=context_input_ids,
         context_positions=context_positions,
+        ds_label=ds_label,
     )
 
     return training_data_point

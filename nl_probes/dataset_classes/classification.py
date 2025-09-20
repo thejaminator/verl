@@ -109,6 +109,7 @@ class ClassificationDatapoint(BaseModel):
     activation_prompt: str
     classification_prompt: str
     target_response: str
+    ds_label: str | None
 
 
 def get_classification_datapoints_from_context_qa_examples(
@@ -122,6 +123,7 @@ def get_classification_datapoints_from_context_qa_examples(
                 activation_prompt=example.context,
                 classification_prompt=question,
                 target_response=answer,
+                ds_label=example.ds_label,
             )
             datapoints.append(datapoint)
 
@@ -252,6 +254,7 @@ def create_vector_dataset(
                     feature_idx=-1,
                     context_input_ids=input_ids_L,
                     context_positions=positions_K,
+                    ds_label=batch_datapoints[j].ds_label,
                 )
                 if training_data_point is None:
                     continue
