@@ -163,6 +163,7 @@ def view_tokens(tokens_L: list[int], tokenizer: AutoTokenizer, offset: int) -> N
                 print(f"Token {i}: {tokenizer.decode(tokens_L[i])}")
 
 
+@torch.no_grad()
 def create_vector_dataset(
     datapoints: list[ClassificationDatapoint],
     tokenizer: AutoTokenizer,
@@ -207,11 +208,9 @@ def create_vector_dataset(
             acts_BLD_by_layer_dict = collect_activations_multiple_layers(
                 model, submodules, tokenized_prompts, None, None
             )
-            for layer in acts_BLD_by_layer_dict.keys():
-                acts_BLD_by_layer_dict[layer] = acts_BLD_by_layer_dict[layer].to("cpu", non_blocking=True)
 
-        tokenized_prompts["input_ids"] = tokenized_prompts["input_ids"].cpu()
-        tokenized_prompts["attention_mask"] = tokenized_prompts["attention_mask"].cpu()
+        tokenized_prompts["input_ids"] = tokenized_prompts["input_ids"]
+        tokenized_prompts["attention_mask"] = tokenized_prompts["attention_mask"]
 
         for layer in act_layers:
             for j in range(len(batch_datapoints)):
