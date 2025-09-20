@@ -43,7 +43,8 @@ class ClassificationDatasetConfig(BaseDatasetConfig):
     classification_dataset_name: str
     num_qa_per_sample: int = 3
     batch_size: int = 128
-    end_offset: int = -3
+    min_end_offset: int = -3
+    max_end_offset: int = -5
     max_window_size: int = 20
     min_window_size: int = 1
 
@@ -66,7 +67,11 @@ class ClassificationDatasetLoader(ActDatasetLoader):
             for layer_percent in self.dataset_config.layer_percents
         ]
 
-        assert self.dataset_params.end_offset < 0, "Offset must be negative"
+        assert self.dataset_params.min_end_offset < 0, "Min end offset must be negative"
+        assert self.dataset_params.max_end_offset < 0, "Max end offset must be negative"
+        assert self.dataset_params.max_end_offset <= self.dataset_params.min_end_offset, (
+            "Max end offset must be less than or equal to min end offset"
+        )
         assert self.dataset_params.max_window_size > 0, "Max window size must be positive"
 
     def create_dataset(self) -> None:
@@ -94,7 +99,8 @@ class ClassificationDatasetLoader(ActDatasetLoader):
                 self.dataset_config.model_name,
                 self.dataset_params.batch_size,
                 self.act_layers,
-                end_offset=self.dataset_params.end_offset,
+                min_end_offset=self.dataset_params.min_end_offset,
+                max_end_offset=self.dataset_params.max_end_offset,
                 max_window_size=self.dataset_params.max_window_size,
                 min_window_size=self.dataset_params.min_window_size,
                 save_acts=save_acts,
@@ -172,7 +178,8 @@ def create_vector_dataset(
     model_name: str,
     batch_size: int,
     act_layers: list[int],
-    end_offset: int,
+    min_end_offset: int,
+    max_end_offset: int,
     max_window_size: int,
     min_window_size: int,
     save_acts: bool,
@@ -180,6 +187,9 @@ def create_vector_dataset(
     lora_path: str | None = None,
     debug_print: bool = False,
 ) -> list[TrainingDataPoint]:
+    assert min_end_offset < 0, "Min end offset must be negative"
+    assert max_end_offset < 0, "Max end offset must be negative"
+    assert max_end_offset <= min_end_offset, "Max end offset must be less than or equal to min end offset"
     training_data = []
 
     assert tokenizer.padding_side == "left", "Padding side must be left"
@@ -219,6 +229,7 @@ def create_vector_dataset(
                 attn_mask_L = tokenized_prompts["attention_mask"][j].bool()
                 input_ids_L = tokenized_prompts["input_ids"][j, attn_mask_L]
                 L = len(input_ids_L)
+                end_offset = random.randint(max_end_offset, min_end_offset)
                 end_pos = L + end_offset
 
                 assert L > 0, f"L={L}"

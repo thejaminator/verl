@@ -556,17 +556,22 @@ if __name__ == "__main__":
 
     layer_percents = [25, 50, 75]
     # layer_percents = [75]
+    # save_acts = True
+    save_acts = True
 
     sft_data_folder = "sft_training_data"
 
     dataset_config = DatasetLoaderConfig(
-        custom_dataset_params=PastLensDatasetConfig(),
+        custom_dataset_params=PastLensDatasetConfig(
+            max_k_activations=1,
+            max_k_tokens=1,
+        ),
         num_train=200_000,
         num_test=0,
         splits=["train"],
         model_name=model_name,
         layer_percents=layer_percents,
-        save_acts=False,
+        save_acts=save_acts,
     )
 
     past_lens_dataset_loader = PastLensDatasetLoader(
@@ -636,7 +641,7 @@ if __name__ == "__main__":
             splits=classification_datasets[dataset_name]["splits"],
             model_name=model_name,
             layer_percents=layer_percents,
-            save_acts=False,
+            save_acts=save_acts,
         )
 
         classification_dataset_loader = ClassificationDatasetLoader(
