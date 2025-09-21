@@ -271,7 +271,7 @@ def materialize_missing_steering_vectors(
 
     # Prepare hooks for all unique requested layers
     layers_needed = sorted({dp.layer for _, dp in to_fill})
-    submodules = {layer: get_hf_submodule(model, layer, use_lora=False) for layer in layers_needed}
+    submodules = {layer: get_hf_submodule(model, layer, use_lora=True) for layer in layers_needed}
 
     # Run a single pass with dropout off, then restore the previous train/eval mode
     was_training = model.training
