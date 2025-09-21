@@ -1,6 +1,7 @@
 import json
 
 import torch
+from peft import PeftModel
 from pydantic import BaseModel, ConfigDict, model_validator
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -214,7 +215,7 @@ def get_prompt_tokens_only(
 def materialize_missing_steering_vectors(
     batch_points: list[TrainingDataPoint],
     tokenizer: AutoTokenizer,
-    model: AutoModelForCausalLM,
+    model: PeftModel,
 ) -> list[TrainingDataPoint]:
     """
     Materialization of missing steering vectors for a heterogenous batch
@@ -229,6 +230,7 @@ def materialize_missing_steering_vectors(
 
     No-op if every item already has steering_vectors.
     """
+    assert isinstance(model, PeftModel), "Model must be a PeftModel"
     # Select datapoints that need generation
     to_fill: list[tuple[int, TrainingDataPoint]] = [
         (i, dp) for i, dp in enumerate(batch_points) if dp.steering_vectors is None
@@ -274,18 +276,17 @@ def materialize_missing_steering_vectors(
     # Run a single pass with dropout off, then restore the previous train/eval mode
     was_training = model.training
     model.eval()
-    model.disable_adapters()
-    # [layer] -> [B, L, D], where B == len(to_fill)
-    acts_by_layer = collect_activations_multiple_layers(
-        model=model,
-        submodules=submodules,
-        inputs_BL=inputs_BL,
-        min_offset=None,
-        max_offset=None,
-    )
+    with model.disable_adapter():
+        # [layer] -> [B, L, D], where B == len(to_fill)
+        acts_by_layer = collect_activations_multiple_layers(
+            model=model,
+            submodules=submodules,
+            inputs_BL=inputs_BL,
+            min_offset=None,
+            max_offset=None,
+        )
     if was_training:
         model.train()
-    model.enable_adapters()
 
     # Build the new list, copying only items we change
     new_batch: list[TrainingDataPoint] = list(batch_points)  # references by default

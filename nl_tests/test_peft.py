@@ -13,13 +13,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 @pytest.mark.parametrize("model_name", ["facebook/opt-125m"])
+@torch.no_grad()
 def test_enable_disable_adapters_simple(model_name):
     tok = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(model_name).eval()
 
     inputs = tok("hello world", return_tensors="pt")
-    with torch.no_grad():
-        base_logits = model(**inputs).logits.clone()
+    base_logits = model(**inputs).logits.clone()
 
     # Non-zero LoRA init so it actually does something without training
     lora_cfg = LoraConfig(
@@ -31,22 +31,19 @@ def test_enable_disable_adapters_simple(model_name):
         task_type="CAUSAL_LM",
         init_lora_weights=False,  # <- key simplification
     )
-    model.add_adapter(lora_cfg)
+    model = get_peft_model(model, lora_cfg)
 
     # ON
-    model.enable_adapters()
-    with torch.no_grad():
-        logits_on = model(**inputs).logits
+    logits_on = model(**inputs).logits
+    # model.disable_adapters()
 
     # OFF
-    model.disable_adapters()
-    with torch.no_grad():
+    with model.disable_adapter():
         logits_off = model(**inputs).logits
+    # model.enable_adapters()
 
     # Back ON
-    model.enable_adapters()
-    with torch.no_grad():
-        logits_restored = model(**inputs).logits
+    logits_restored = model(**inputs).logits
 
     # Assertions
     assert (logits_on - logits_off).abs().max().item() > 1e-6, "Adapters did not change logits"

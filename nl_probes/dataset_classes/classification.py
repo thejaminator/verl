@@ -201,7 +201,7 @@ def create_vector_dataset(
         device = model.device
 
     if lora_path is not None:
-        model.add_adapter(lora_path, is_trainable=False)
+        model = PeftModel.from_pretrained(model, lora_path)
 
     for i in tqdm(range(0, len(datapoints), batch_size), desc="Collecting activations"):
         batch_datapoints = datapoints[i : i + batch_size]

@@ -344,6 +344,8 @@ def train_model(
         model.use_cache = False
         model.gradient_checkpointing_enable()
 
+    submodule = get_hf_submodule(model, cfg.hook_onto_layer)
+
     if cfg.use_lora and cfg.load_lora_path is None:
         lora_config = LoraConfig(
             r=cfg.lora_r,
@@ -353,22 +355,15 @@ def train_model(
             bias="none",
             task_type="CAUSAL_LM",
         )
-        model.add_adapter(lora_config)
-        # model = get_peft_model(model, lora_config)
-        # model.print_trainable_parameters()
+        model = get_peft_model(model, lora_config, autocast_adapter_dtype=True)
     elif cfg.load_lora_path is not None:
         load_lora_path = Path(cfg.load_lora_path)
         assert load_lora_path.exists()
-        model.load_adapter(
-            load_lora_path,
-            is_trainable=True,
-        )
-        # model = PeftModel.from_pretrained(model, load_lora_path, is_trainable=True)
-        # model.print_trainable_parameters()
+        model = PeftModel.from_pretrained(model, load_lora_path, is_trainable=True, autocast_adapter_dtype=True)
+
+    model.print_trainable_parameters()
 
     model.train()
-
-    submodule = get_hf_submodule(model, cfg.hook_onto_layer)
 
     oom_preflight_check(cfg, training_data, model, submodule, tokenizer, device, dtype)
 
