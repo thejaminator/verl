@@ -7,10 +7,10 @@ from fractions import Fraction
 from typing import Generator, Literal
 
 import torch
-from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
+from datasets import load_dataset
 from detection_eval.steering_hooks import get_introspection_prefix
 from nl_probes.dataset_classes.act_dataset_manager import ActDatasetLoader, BaseDatasetConfig, DatasetLoaderConfig
 from nl_probes.utils.activation_utils import collect_activations_multiple_layers, get_hf_submodule
@@ -208,11 +208,9 @@ def collect_past_lens_acts(
             acts_BLD_by_layer_dict = collect_activations_multiple_layers(
                 model, submodules, tokenized_inputs, min_offset=None, max_offset=None
             )
-            for layer in acts_BLD_by_layer_dict.keys():
-                acts_BLD_by_layer_dict[layer] = acts_BLD_by_layer_dict[layer].to("cpu", non_blocking=True)
 
-        attn_mask_BL = tokenized_inputs["attention_mask"].cpu()
-        input_ids_BL = tokenized_inputs["input_ids"].cpu()
+        attn_mask_BL = tokenized_inputs["attention_mask"]
+        input_ids_BL = tokenized_inputs["input_ids"]
 
         for layer in layers:
             for j in range(len(inputs)):
