@@ -119,6 +119,20 @@ METHODS: list[Method] = [
 ]
 
 LABEL_BY_LORA_PATH: dict[str, str] = {m.lora_path: m.label for m in METHODS}
+
+# Optional external baselines keyed by dataset id; set to None to skip plotting.
+LINEAR_PROBE_BASELINE: dict[str, Any] | None = {
+    "label": "Linear Probe Baseline",
+    "values": {
+        "ag_news": 0.8338,
+        "geometry_of_truth": 0.8760,
+        "language_identification": 0.8862,
+        "md_gender": 0.9382,
+        "singular_plural": 0.9618,
+        "sst2": 0.8227,
+        "tense": 0.9484,
+    },
+}
 # -----------------------------
 # Lightweight helpers
 # -----------------------------
@@ -288,6 +302,7 @@ def plot_group(
     label_by_key: dict[str, str],
     *,
     baseline: float | None = 0.5,
+    extra_series: list[dict[str, Any]] | None = None,
 ) -> None:
     present = [ds for ds in datasets if ds in results]
     missing = [ds for ds in datasets if ds not in results]
@@ -336,6 +351,36 @@ def plot_group(
                 capsize=4,
             )
 
+    if extra_series:
+        for series in extra_series:
+            values = series.get("values") or series.get("data") or {}
+            if not isinstance(values, dict):
+                continue
+            y = []
+            any_present = False
+            for ds in present:
+                val = values.get(ds)
+                if val is None:
+                    y.append(np.nan)
+                else:
+                    any_present = True
+                    y.append(float(val))
+            if not any_present:
+                continue
+            label = series.get("label", "Extra")
+            valid = [v for v in y if not np.isnan(v)]
+            display_label = f"{label} (avg={np.mean(valid):.3f})" if valid else label
+            plt.plot(
+                x,
+                y,
+                marker="s",
+                linestyle="-",
+                linewidth=1.5,
+                markersize=5,
+                alpha=0.8,
+                label=display_label,
+            )
+
     if baseline is not None:
         plt.axhline(y=baseline, linestyle=":", linewidth=1.5, alpha=0.7, label=f"Baseline {baseline:.2f}")
 
@@ -359,6 +404,7 @@ plot_group(
     results_by_ds,
     LABEL_BY_LORA_PATH,
     baseline=0.5,
+    extra_series=[LINEAR_PROBE_BASELINE] if LINEAR_PROBE_BASELINE else None,
 )
 plot_group(
     "OOD (Out-of-Distribution) Dataset Performance, Single Token",
@@ -366,6 +412,7 @@ plot_group(
     results_by_ds,
     LABEL_BY_LORA_PATH,
     baseline=0.5,
+    extra_series=[LINEAR_PROBE_BASELINE] if LINEAR_PROBE_BASELINE else None,
 )
 # %%
 # Inspect a single dataset's per-example correctness, if you have raw predictions in-memory.
