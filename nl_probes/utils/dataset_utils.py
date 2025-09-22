@@ -230,13 +230,14 @@ def materialize_missing_steering_vectors(
 
     No-op if every item already has steering_vectors.
     """
-    assert isinstance(model, PeftModel), "Model must be a PeftModel"
     # Select datapoints that need generation
     to_fill: list[tuple[int, TrainingDataPoint]] = [
         (i, dp) for i, dp in enumerate(batch_points) if dp.steering_vectors is None
     ]
     if not to_fill:
         return batch_points
+
+    assert isinstance(model, PeftModel), "Model must be a PeftModel"
 
     # Validate context fields
     for _, dp in to_fill:

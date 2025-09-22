@@ -35,3 +35,4 @@ plotly
 anthropic
 openai
 tenacity
+matplotlib
