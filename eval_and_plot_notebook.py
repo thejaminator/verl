@@ -89,34 +89,36 @@ OOD_DATASETS = [
 # Layer percent settings used by loaders
 LAYER_PERCENTS = [25, 50, 75]
 
+KEY_FOR_NONE = "original"
 
-# Canonical method list - keys must be strings to be JSON-safe.
+
 @dataclass(frozen=True)
 class Method:
-    key: str  # canonical JSON-safe key
-    label: str  # pretty label for plots
-    lora_path: str | None  # filesystem path or None for baseline
+    label: str
+    lora_path: str
 
 
 METHODS: list[Method] = [
-    Method(key="original", label="Original", lora_path=None),
-    Method(key="act_pretrain", label="Pretrain Mix", lora_path="checkpoints_act_pretrain/final"),
+    Method(label="Original", lora_path=KEY_FOR_NONE),
     Method(
-        key="act_pretrain_posttrain",
-        label="Pretrain Mix -> 1 Classification Epoch",
-        lora_path="checkpoints_act_pretrain_posttrain/final",
+        label="Past Lens Pretrain Mix -> 1 Classification Epoch",
+        lora_path="checkpoints_act_only_1_token_-3_-5_classification_posttrain/final",
     ),
     Method(
-        key="classification_only_2_epochs",
+        label="SAE Pretrain Mix -> 1 Classification Epoch",
+        lora_path="checkpoints_sae_pretrain_1_token_-3_-5_classification_posttrain/final",
+    ),
+    Method(
+        label="SAE and Past Lens Pretrain Mix -> 1 Classification Epoch",
+        lora_path="checkpoints_all_pretrain_1_token_-3_-5_sae_explanation_posttrain/final",
+    ),
+    Method(
         label="2 Classification Epochs",
-        lora_path="checkpoints_classification_only_2_epochs/final",
+        lora_path="checkpoints_classification_only_1_token_-3_-5_2_epochs/final",
     ),
 ]
 
-# Convenience dicts
-LABEL_BY_METHOD_KEY: dict[str, str] = {m.key: m.label for m in METHODS}
-METHOD_KEY_BY_LORA_PATH: dict[str | None, str] = {m.lora_path: m.key for m in METHODS}
-
+LABEL_BY_LORA_PATH: dict[str, str] = {m.lora_path: m.label for m in METHODS}
 # -----------------------------
 # Lightweight helpers
 # -----------------------------
@@ -158,16 +160,6 @@ def score_predictions(cleaned_responses: list[str], target_responses: list[str])
     }
 
 
-def method_key_from_lora_path(lora_path: str | None) -> str:
-    """Map an on-disk LoRA path or None to a canonical method key."""
-    key = METHOD_KEY_BY_LORA_PATH.get(lora_path)
-    if key is not None:
-        return key
-    # Fallback for unregistered paths - stable, JSON-safe, hackable
-    sanitized = str(lora_path).replace("/", "_").replace("\\", "_")
-    return f"custom__{sanitized}"
-
-
 # %%
 # Tokenizer and dataset loading
 
@@ -177,6 +169,9 @@ classification_dataset_loaders: list[ClassificationDatasetLoader] = []
 for dataset_name, dcfg in CLASSIFICATION_DATASETS.items():
     classification_config = ClassificationDatasetConfig(
         classification_dataset_name=dataset_name,
+        max_end_offset=-5,
+        min_end_offset=-3,
+        max_window_size=1,
     )
     dataset_config = DatasetLoaderConfig(
         custom_dataset_params=classification_config,
@@ -221,6 +216,11 @@ def run_eval_for_datasets(eval_data_by_ds: dict[str, list[Any]]) -> dict[str, di
     for ds_id, eval_data in eval_data_by_ds.items():
         out[ds_id] = {}
         for m in METHODS:
+            # we do this as None is not convenient to store in JSON
+            if m.lora_path == KEY_FOR_NONE:
+                lora_path = None
+            else:
+                lora_path = m.lora_path
             # Heavy call - returns list of FeatureResult-like with .api_response
             raw_results = run_evaluation(
                 eval_data=eval_data,
@@ -230,7 +230,7 @@ def run_eval_for_datasets(eval_data_by_ds: dict[str, list[Any]]) -> dict[str, di
                 device=device,
                 dtype=dtype,
                 global_step=-1,
-                lora_path=m.lora_path,
+                lora_path=lora_path,
                 eval_batch_size=BATCH_SIZE,
                 steering_coefficient=STEERING_COEFFICIENT,
                 generation_kwargs=GENERATION_KWARGS,
@@ -239,73 +239,9 @@ def run_eval_for_datasets(eval_data_by_ds: dict[str, list[Any]]) -> dict[str, di
             cleaned = [parse_answer(r.api_response) for r in raw_results]
             targets = [parse_answer(dp.target_output) for dp in eval_data]
             metrics = score_predictions(cleaned, targets)
-            out[ds_id][m.key] = metrics
+            out[ds_id][m.lora_path] = metrics
             print(f"[{ds_id}] {m.label}: p={metrics['p']:.3f} n={metrics['n']}")
     return out
-
-
-def save_results_json(path: str | Path, results_by_ds: dict[str, dict[str, Any]]) -> None:
-    meta = {
-        "schema_version": 1,
-        "model_name": MODEL_NAME,
-        "hook_layer": HOOK_LAYER,
-        "dtype": str(dtype),
-        "batch_size": BATCH_SIZE,
-        "steering_coefficient": STEERING_COEFFICIENT,
-        "generation_kwargs": GENERATION_KWARGS,
-        "methods": {m.key: {"label": m.label, "lora_path": m.lora_path} for m in METHODS},
-    }
-    blob = {"meta": meta, "results": results_by_ds}
-    with open(path, "w") as f:
-        json.dump(blob, f)
-    print(f"Saved results to {path}")
-
-
-def load_and_migrate_results_json(path: str | Path) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
-    """
-    Load results with robustness:
-    - If file has new schema: return meta, results
-    - If file has old shape (dataset -> lora_path or 'null' -> metrics): migrate to method keys
-    """
-    with open(path, "r") as f:
-        data = json.load(f)
-
-    # New schema check
-    if isinstance(data, dict) and "results" in data and "meta" in data:
-        meta = data["meta"]
-        results = data["results"]
-        # ensure keys are canonical dataset ids
-        migrated: dict[str, dict[str, Any]] = {}
-        for ds_name, per_method in results.items():
-            ds_id = canonical_dataset_id(ds_name)
-            migrated[ds_id] = {}
-            for method_key, metrics in per_method.items():
-                # already method keys as strings
-                migrated[ds_id][str(method_key)] = metrics
-        return meta, migrated
-
-    # Old schema - likely dataset -> {lora_path_or_null: metrics}
-    migrated_results: dict[str, dict[str, Any]] = {}
-    for ds_name, per_key in data.items():
-        ds_id = canonical_dataset_id(ds_name)
-        migrated_results[ds_id] = {}
-        if not isinstance(per_key, dict):
-            continue
-        for raw_key, metrics in per_key.items():
-            # raw_key might be None serialized as "null" or "None"
-            if raw_key in ("null", "None", "", "none"):
-                lora_path = None
-            else:
-                lora_path = raw_key
-            mkey = method_key_from_lora_path(lora_path)
-            migrated_results[ds_id][mkey] = metrics
-
-    meta = {
-        "schema_version": 0,
-        "note": "Migrated from legacy shape without explicit meta.",
-        "methods": {m.key: {"label": m.label, "lora_path": m.lora_path} for m in METHODS},
-    }
-    return meta, migrated_results
 
 
 # Orchestrate load-or-run
@@ -314,11 +250,13 @@ meta_loaded: dict[str, Any] | None = None
 
 if not RUN_FRESH_EVAL and Path(RESULTS_FILENAME).exists():
     print(f"Loading existing results from {RESULTS_FILENAME}")
-    meta_loaded, results_by_ds = load_and_migrate_results_json(RESULTS_FILENAME)
+    with open(RESULTS_FILENAME, "r") as f:
+        results_by_ds = json.load(f)
 else:
     print("Running fresh evaluation - this can be slow.")
     results_by_ds = run_eval_for_datasets(all_eval_data)
-    save_results_json(RESULTS_FILENAME, results_by_ds)
+    with open(RESULTS_FILENAME, "w") as f:
+        json.dump(results_by_ds, f)
 
 # %%
 # Plotting utilities - robust to missing entries
@@ -370,7 +308,7 @@ def plot_group(
         yerr_high = []
         any_present = False
         for ds in present:
-            r = results[ds].get(m.key)
+            r = results[ds].get(m.lora_path)
             p, el, eh = _score_and_err(r)
             if not np.isnan(p):
                 any_present = True
@@ -379,7 +317,7 @@ def plot_group(
             yerr_high.append(eh)
         if any_present:
             # Build legend label with per-plot average over non-NaN values
-            base_label = label_by_key.get(m.key, m.key)
+            base_label = label_by_key.get(m.lora_path, m.lora_path)
             if len(base_label) > 22:
                 base_label = base_label.replace(" -> ", "->\n ")
             valid = [v for v in y if not np.isnan(v)]
@@ -405,48 +343,30 @@ def plot_group(
     plt.ylabel("Accuracy")
     plt.title(group_name)
     plt.xticks(x, present, rotation=45, ha="right")
-    plt.legend(loc="best", fontsize=10)
+    # plt.legend(loc="best", fontsize=10)
+    plt.legend(bbox_to_anchor=(0.5, 1.25), loc="center", ncol=3, fontsize=9)
     plt.grid(True, alpha=0.3, linestyle="--")
     plt.ylim([0.45, 1.0])
     plt.tight_layout()
     plt.show()
 
 
-def print_averages(
-    datasets_iid: list[str],
-    datasets_ood: list[str],
-    results: dict[str, dict[str, Any]],
-    label_by_key: dict[str, str],
-) -> None:
-    print("\n=== Average Performance ===")
-    for m in METHODS:
-        iid_vals = [results.get(ds, {}).get(m.key, {}).get("p") for ds in datasets_iid]
-        iid_vals = [v for v in iid_vals if isinstance(v, (int, float))]
-        ood_vals = [results.get(ds, {}).get(m.key, {}).get("p") for ds in datasets_ood]
-        ood_vals = [v for v in ood_vals if isinstance(v, (int, float))]
-
-        if not iid_vals and not ood_vals:
-            continue
-
-        iid_avg = float(np.mean(iid_vals)) if iid_vals else float("nan")
-        ood_avg = float(np.mean(ood_vals)) if ood_vals else float("nan")
-        overall = np.nanmean([iid_avg, ood_avg])
-
-        print(f"\n{label_by_key.get(m.key, m.key)}:")
-        print(f"  IID Average: {iid_avg:.4f}" if not np.isnan(iid_avg) else "  IID Average: n/a")
-        print(f"  OOD Average: {ood_avg:.4f}" if not np.isnan(ood_avg) else "  OOD Average: n/a")
-        print(f"  Overall Average: {overall:.4f}" if not np.isnan(overall) else "  Overall Average: n/a")
-
-
-# %%
 # Plot IID and OOD
 
-plot_group("IID (In-Distribution) Dataset Performance", IID_DATASETS, results_by_ds, LABEL_BY_METHOD_KEY, baseline=0.5)
 plot_group(
-    "OOD (Out-of-Distribution) Dataset Performance", OOD_DATASETS, results_by_ds, LABEL_BY_METHOD_KEY, baseline=0.5
+    "IID (In-Distribution) Dataset Performance, Single Token",
+    IID_DATASETS,
+    results_by_ds,
+    LABEL_BY_LORA_PATH,
+    baseline=0.5,
 )
-print_averages(IID_DATASETS, OOD_DATASETS, results_by_ds, LABEL_BY_METHOD_KEY)
-
+plot_group(
+    "OOD (Out-of-Distribution) Dataset Performance, Single Token",
+    OOD_DATASETS,
+    results_by_ds,
+    LABEL_BY_LORA_PATH,
+    baseline=0.5,
+)
 # %%
 # Inspect a single dataset's per-example correctness, if you have raw predictions in-memory.
 # This cell is optional - it shows how you could re-run scoring on a dataset interactively.
@@ -498,3 +418,5 @@ def analyze_results_debug(
 #     generation_kwargs=GENERATION_KWARGS,
 # )
 # analyze_results_debug(all_eval_data[ds], [r.api_response for r in fresh_raw])
+
+# %%
