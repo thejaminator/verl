@@ -378,11 +378,18 @@ def plot_group(
             yerr_low.append(el)
             yerr_high.append(eh)
         if any_present:
+            # Build legend label with per-plot average over non-NaN values
+            base_label = label_by_key.get(m.key, m.key)
+            if len(base_label) > 22:
+                base_label = base_label.replace(" -> ", "->\n ")
+            valid = [v for v in y if not np.isnan(v)]
+            label = f"{base_label} (avg={np.mean(valid):.3f})" if valid else base_label
+
             plt.errorbar(
                 x,
                 y,
                 yerr=[yerr_low, yerr_high],
-                label=label_by_key.get(m.key, m.key),
+                label=label,
                 marker="o",
                 linestyle="--",
                 linewidth=2,
