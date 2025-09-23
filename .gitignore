@@ -129,3 +129,5 @@ log
 outputs
 .history
 *checkpoints*
+*model_lora*
+*sft_outputs*
