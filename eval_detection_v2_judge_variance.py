@@ -680,7 +680,6 @@ async def evaluate_sentence_matching_repeated(
     mean_precision, _ = _mean_and_sample_variance(precisions)
     mean_recall, _ = _mean_and_sample_variance(recalls)
     range_f1 = (max(f1s) - min(f1s)) if len(f1s) > 0 else 0.0
-    assert len(f1s) == 8
 
     # Use the first run as a base container and override metrics/metadata
     base = results[0]
