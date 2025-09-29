@@ -301,7 +301,7 @@ def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData]) -> li
     # if bin_scores:
     # Discretize scores into bins of 0.2
     # experiment : disable binning
-    # to_rewards = to_rewards.map(bin_score)
+    to_rewards = to_rewards.map(bin_score)
 
     return to_rewards
 
