@@ -27,7 +27,7 @@ if __name__ == "__main__":
             "data/qwen_hard_negatives_20000_30000_layer_percent_75.jsonl",
         ],
         eval_path="data/qwen_hard_negatives_20000_30000_layer_percent_50.jsonl",
-        max_train_samples=20_000,
+        max_train_samples=400,
         use_feature_vector=True,
         mini_batches=8,
         split_into_grad_accum=64,
