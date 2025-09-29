@@ -17,25 +17,22 @@ if __name__ == "__main__":
         # model_name="google/gemma-2-2b-it",
         # model_name="thejaminator/gemma-introspection-20250821-merged",  # loras don't get merged automatically
         # sae_repo_id="google/gemma-scope-9b-it-res",
-        clip_ratio_low=0.2,
-        clip_ratio_high=0.28,
-        loss_agg_mode="seq-mean-token-sum-norm",
-        model_name="thejaminator/16sep_5e6_lr_prompt_64-step-20-fixed",  # init from step 20
+        model_name="thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
         train_path=[
             "data/qwen_hard_negatives_20000_30000_layer_percent_25.jsonl",
             "data/qwen_hard_negatives_20000_30000_layer_percent_50.jsonl",
             "data/qwen_hard_negatives_20000_30000_layer_percent_75.jsonl",
         ],
         eval_path="data/qwen_hard_negatives_20000_30000_layer_percent_50.jsonl",
-        max_train_samples=20_000,
+        max_train_samples=10_000,
         use_feature_vector=True,
         mini_batches=8,
-        split_into_grad_accum=128,
-        use_hf_rollout_instead_of_vllm=False,
+        split_into_grad_accum=64,
+        use_hf_rollout_instead_of_vllm=True,
         enable_thinking=False,  # Actually, this doesn't do anything, I hardcoded verl/utils/dataset/rl_dataset.py to disable it.
-        max_seq_length=800,
+        max_seq_length=500,
         max_prompt_length=300,
-        max_response_length=500,
+        max_response_length=200,
         num_generations=32,  # Bigger group size since noisy explanations
         prompt_batch_size=64,  # number of prompts in rollout batch. will be multiplied by num_generations.
         # split_into_grad_accum=64,  # prompt_batch_size * num_generations gets split by grad accum.
@@ -56,7 +53,8 @@ if __name__ == "__main__":
         # learning_rate=5e-4,  # Increased by order of magnitude for LoRA (was 5e-6)
         entropy_coeff=0.0005,
         grad_clip=0.4,
-        ppo_epochs=2,
+        clip_ratio=0.2,
+        ppo_epochs=1,
         loss_kl_penalty=0.001,  # Note: we are calculating KL w.r.t to the base model without SFT, which is weird.
         lora_rank=64,  # Recommended >=32 for good convergence, using 64 for 4B model
         lora_alpha=128,  # Typically 2x lora_rank
@@ -64,8 +62,8 @@ if __name__ == "__main__":
         use_shm=False,
         layered_summon=False,
         max_steps=4000,
-        output_dir="/workspace/checkpoints/5e-6_kl_64_clip_std_higher",
-        hub_repo_id="thejaminator/16sep_5e6_lr_prompt_64_clip_std_higher",
+        output_dir="/workspace/18sep_5e6_lr_prompt_64_hf_seq_norm",
+        hub_repo_id="thejaminator/18sep_5e6_lr_prompt_64_hf_seq_norm",
         save_steps=10,  # saving causes OOM. Why?
         n_gpus=1,
         use_wandb=True,

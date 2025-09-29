@@ -9,7 +9,7 @@ Based on the verl documentation and examples.
 """
 
 import os
-from typing import Any
+from typing import Any, Literal
 
 from slist import Slist
 from transformers import AutoTokenizer, PreTrainedTokenizer
@@ -65,6 +65,9 @@ class VerlParams(BaseModel):
     max_train_samples: int | None = None
     max_steps: int = 100
     learning_rate: float = 5e-6
+    loss_agg_mode: Literal["token-mean", "seq-mean-token-sum", "seq-mean-token-mean", "seq-mean-token-sum-norm"] = (
+        "token-mean"
+    )
 
     # GRPO specific
     num_generations: int = 4
@@ -470,7 +473,7 @@ def launch_verl_training(params: VerlParams, train_parquet: str, eval_parquet: s
         "actor_rollout_ref.actor.use_kl_loss=true",
         # dr grpo settings to prevent long rollouts due to bias
         # "actor_rollout_ref.actor.use_kl_loss=false",
-        # "actor_rollout_ref.actor.loss_agg_mode=seq-mean-token-sum-norm",
+        f"actor_rollout_ref.actor.loss_agg_mode={params.loss_agg_mode}",
         f"algorithm.norm_adv_by_std_in_grpo={params.norm_adv_by_std_in_grpo}",
         # end dr grpo settings
         # Model configuration
