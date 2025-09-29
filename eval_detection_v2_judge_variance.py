@@ -345,6 +345,11 @@ class DetectionResult(BaseModel):
     precision: float
     recall: float
     f1_score: float
+    # When running repeated judge calls, we aggregate and record variance
+    f1_variance: float | None = None
+    f1_samples: int | None = None
+    # Range across repeats (max - min)
+    f1_range: float | None = None
     explanation_used: str
     evaluation_response: str
     explanation_history: ChatHistory
@@ -506,8 +511,17 @@ def create_evaluation_prompt(batch: MixedSentencesBatch) -> str:
     prompt += """</sentences>
 
 Please carefully analyze each sentence and determine which ones match the SAE feature explanation provided above.
-You should expect to find between 4-8 matching sentences. Analyze each sentence independently and only include ones that match the explanation.
+You should expect to find between 0-8 matching sentences. 
+It is possible that there are no matching sentences.
+If there are no matching sentences, return an empty list.
+Otherwise return a maximum of 8 sentence numbers that match the explanation.
+Analyze each sentence independently and only include ones that match the explanation.
 Provide your final answer as a JSON object with an "answer" field containing a list of sentence numbers that match the explanation."""
+    # prompt += """</sentences>
+
+    # Please carefully analyze each sentence and determine which ones match the SAE feature explanation provided above.
+    # You should expect to find between 4-8 matching sentences. Analyze each sentence independently and only include ones that match the explanation.
+    # Provide your final answer as a JSON object with an "answer" field containing a list of sentence numbers that match the explanation."""
 
     return prompt
 
@@ -521,6 +535,7 @@ async def evaluate_sentence_matching(
     caller: Caller,
     explainer_model: str,
     detection_config: InferenceConfig,
+    repeat_idx: int,
 ) -> DetectionResult | None:
     """
     Use GPT-5-mini to identify which sentences match the explanation.
@@ -539,7 +554,7 @@ async def evaluate_sentence_matching(
     # Keep evaluation model constant as requested (GPT-5-mini)
     config = detection_config
     try:
-        response = await caller.call_with_schema(chat_history, config=config, schema=AnswerSchema)
+        response = await caller.call_with_schema(chat_history, config=config, schema=AnswerSchema, try_number=repeat_idx)
     except ContentPolicyError as e:
         print(f"Content policy error: {e}")
         return None
@@ -631,6 +646,68 @@ async def generate_explanations_for_model(
     return explanations.flatten_list()
 
 
+def _mean_and_sample_variance(values: list[float]) -> tuple[float, float]:
+    if len(values) == 0:
+        return 0.0, 0.0
+    if len(values) == 1:
+        return values[0], 0.0
+    mean = sum(values) / len(values)
+    # sample variance with ddof=1
+    var = sum((v - mean) * (v - mean) for v in values) / (len(values) - 1)
+    return mean, var
+
+
+async def evaluate_sentence_matching_repeated(
+    batch: MixedSentencesBatch,
+    caller: Caller,
+    explainer_model: str,
+    detection_config: InferenceConfig,
+    repeats: int,
+) -> DetectionResult | None:
+    # Run the judge multiple times in parallel
+    single_runs: Slist[DetectionResult | None] = await Slist(range(repeats)).par_map_async(
+        lambda _i: evaluate_sentence_matching(batch, caller, explainer_model, detection_config, _i)
+    )
+    results = single_runs.flatten_option()
+    if len(results) == 0:
+        return None
+
+    # Aggregate metrics
+    f1s = [r.f1_score for r in results]
+    precisions = [r.precision for r in results]
+    recalls = [r.recall for r in results]
+    mean_f1, var_f1 = _mean_and_sample_variance(f1s)
+    mean_precision, _ = _mean_and_sample_variance(precisions)
+    mean_recall, _ = _mean_and_sample_variance(recalls)
+    range_f1 = (max(f1s) - min(f1s)) if len(f1s) > 0 else 0.0
+    assert len(f1s) == 8
+
+    # Use the first run as a base container and override metrics/metadata
+    base = results[0]
+    aggregated_response = (
+        f"repeats={repeats}, mean_f1={mean_f1:.4f}, var_f1={var_f1:.6f}, range_f1={range_f1:.6f}, "
+        f"f1s={[round(x, 4) for x in f1s]}"
+    )
+    return DetectionResult(
+        target_sae_id=base.target_sae_id,
+        predicted_indices=base.predicted_indices,
+        true_indices=base.true_indices,
+        precision=mean_precision,
+        recall=mean_recall,
+        f1_score=mean_f1,
+        f1_variance=var_f1,
+        f1_samples=len(f1s),
+        f1_range=range_f1,
+        explanation_used=base.explanation_used,
+        evaluation_response=aggregated_response,
+        explanation_history=base.explanation_history,
+        evaluation_history=base.evaluation_history,
+        explainer_model=base.explainer_model,
+        positive_examples=base.positive_examples,
+        negative_examples=base.negative_examples,
+    )
+
+
 async def run_evaluation_for_explanations(
     explanations: Slist[SAETrainTestWithExplanation],
     caller: Caller,
@@ -657,10 +734,11 @@ async def run_evaluation_for_explanations(
 
     print(f"Created {len(detection_batches)} evaluation batches")
 
-    # Run evaluations
+    # Run evaluations: call the judge 8 times per SAE and aggregate
+    REPEATS_PER_SAE = 8
     _evaluation_results: Slist[DetectionResult | None] = await Slist(detection_batches).par_map_async(
-        lambda batch_and_model: evaluate_sentence_matching(
-            batch_and_model[0], caller, batch_and_model[1], detection_config
+        lambda batch_and_model: evaluate_sentence_matching_repeated(
+            batch_and_model[0], caller, batch_and_model[1], detection_config, REPEATS_PER_SAE
         ),
         max_par=max_par,
         tqdm=True,
@@ -1116,12 +1194,29 @@ async def main(
         avg_precision = evaluation_results.map(lambda x: x.precision).sum() / len(evaluation_results)
         avg_recall = evaluation_results.map(lambda x: x.recall).sum() / len(evaluation_results)
         avg_f1 = evaluation_results.map(lambda x: x.f1_score).sum() / len(evaluation_results)
+        f1_vars_present = evaluation_results.filter(lambda x: x.f1_variance is not None)
+        avg_f1_variance = (
+            f1_vars_present.map(lambda x: x.f1_variance or 0.0).sum() / len(f1_vars_present)
+            if len(f1_vars_present) > 0
+            else 0.0
+        )
+        f1_ranges_present = evaluation_results.filter(lambda x: x.f1_range is not None)
+        avg_f1_range = (
+            f1_ranges_present.map(lambda x: x.f1_range or 0.0).sum() / len(f1_ranges_present)
+            if len(f1_ranges_present) > 0
+            else 0.0
+        )
 
         print(f"\n{model_name}:")
         print(f"  Evaluated {len(evaluation_results)} SAEs")
         print(f"  Average Precision: {avg_precision:.3f}")
         print(f"  Average Recall: {avg_recall:.3f}")
         print(f"  Average F1-Score: {avg_f1:.3f}")
+        if len(f1_vars_present) > 0:
+            print(f"  Average F1 variance (8 repeats): {avg_f1_variance:.6f}")
+            print(f"  Average F1 std (8 repeats): {avg_f1_variance ** 0.5:.6f}")
+        if len(f1_ranges_present) > 0:
+            print(f"  Average (max-min) F1 range (8 repeats): {avg_f1_range:.6f}")
 
         # Save detailed evaluation results
         safe_model_name = model_name.replace("/", "_").replace(":", "_")
@@ -1171,25 +1266,37 @@ async def main(
     # # Plot precision vs recall by model
     # plot_precision_vs_recall_by_model(groupby_by_model, rename_map)
 
+    # Overall average variance across all SAEs (regardless of model)
+    all_with_var = all_detection_results.filter(lambda x: x.f1_variance is not None)
+    if len(all_with_var) > 0:
+        overall_avg_var = all_with_var.map(lambda x: x.f1_variance or 0.0).sum() / len(all_with_var)
+        print("\n----------------------------------------------")
+        print(f"Overall average F1 variance (8 repeats): {overall_avg_var:.6f} across {len(all_with_var)} SAEs")
+        print(f"Overall average F1 std (8 repeats): {overall_avg_var ** 0.5:.6f}")
+    all_with_range = all_detection_results.filter(lambda x: x.f1_range is not None)
+    if len(all_with_range) > 0:
+        overall_avg_range = all_with_range.map(lambda x: x.f1_range or 0.0).sum() / len(all_with_range)
+        print(f"Overall average (max-min) F1 range (8 repeats): {overall_avg_range:.6f} across {len(all_with_range)} SAEs")
+
 
 if __name__ == "__main__":
     # Define explainer models to test
     explainer_models = Slist(
         [
-            ModelInfo(
-                model="gpt-5-mini-2025-08-07",
-                display_name="GPT-5-mini<br>(extrospecting<br>sentences)",
-                # reasoning_effort="low",
-                reasoning_effort="medium",
-            ),
-            # # "thejaminator/qwen-hook-layer-9"
             # ModelInfo(
-            #     model="thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
-            #     display_name="No-CoT Qwen-3-8B<br>(Introspecting<br>sentences)",
-            #     use_steering=True,
-            #     hook_onto_layer=1,
-            #     enable_thinking=False,
+            #     model="gpt-5-mini-2025-08-07",
+            #     display_name="GPT-5-mini<br>(extrospecting<br>sentences)",
+            #     # reasoning_effort="low",
+            #     reasoning_effort="medium",
             # ),
+            # # "thejaminator/qwen-hook-layer-9"
+            ModelInfo(
+                model="thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
+                display_name="No-CoT Qwen-3-8B<br>(Introspecting<br>sentences)",
+                use_steering=True,
+                hook_onto_layer=1,
+                enable_thinking=False,
+            ),
             # # lora_path = "thejaminator/12sep_grp16_1e5_lr-step-60"  # f1 0.6
             # # lora_path = "thejaminator/1e5_lr_prompt_64-step-20"  # f1 0.6
             # ModelInfo(
@@ -1230,18 +1337,19 @@ if __name__ == "__main__":
         # sae_file = "hard_negatives_0_to_82000.jsonl"
         # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
         # Which to use for constructing explanations vs testing detection?
-        saes_to_test = 200
+        saes_to_test = 160
         sae_start_index = 0
         # sae_start_index = 20_000  # not in train set for the trained model
 
         hard_negatives_config = SAEExperimentConfig(
             test_target_activating_sentences=Slist([0, 1, 2, 3, 4, 5, 6, 7, 8]),
+            # test_target_activating_sentences=Slist([4, 5, 6, 7, 8]),
             train_activating_sentences=16,
             train_hard_negative_sentences=2,  # provide 8 hard negatives for training
             train_hard_negative_saes=8,
             # Note: total 34 hard negative SAEs to sample from``
-            test_hard_negative_saes=24,  # 24 * 4 = 96 hard negatives for testing
-            test_hard_negative_sentences=4,
+            test_hard_negative_saes=4,  # 24 * 4 = 96 hard negatives for testing
+            test_hard_negative_sentences=8,
             saes_to_test=saes_to_test,
             best_of_n=None,  # Set to an integer (e.g., 3, 5) to enable best-of-n
             sae_start_index=sae_start_index,

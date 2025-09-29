@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 pio.renderers.default = "browser"
 
 # Read the CSV file
-df = pd.read_csv('16sep_step_1.csv')
+df = pd.read_csv('17sep_step239.csv')
 
 
 def plot_max_min_gap(df, step: list[int]):
@@ -226,12 +226,93 @@ def plot_group_range(df, step: list[int]):
 
     fig.show()
 
+def plot_std_reward(df, step: list[int], min_max_threshold: float = 0.0):
+    # Normalize 'step' column to numeric for reliable filtering
+    df['step'] = pd.to_numeric(df['step'], errors='coerce')
+    df = df[df['step'].isin(step)].copy()
+    assert len(df) > 0, f"No data for step(s) {step}"
+    
+    # Ensure score is numeric
+    df['score'] = pd.to_numeric(df['score'])
+    
+    # Compute per-SAE range (max - min) across selected steps
+    sae_range = df.groupby('sae')['score'].agg(lambda s: s.max() - s.min())
+    eligible_saes = sae_range[sae_range >= min_max_threshold].index
+    filtered_df = df[df['sae'].isin(eligible_saes)].copy()
+
+    if filtered_df.empty:
+        print(f"No SAEs meet range threshold >= {min_max_threshold} for steps {step}.")
+        return
+
+    # Compute std of reward per eligible SAE; drop NaNs from single-observation groups
+    sae_std_reward = filtered_df.groupby('sae')['score'].std().dropna()
+
+    print(f"Std Reward per SAE (steps {step}, range >= {min_max_threshold}):")
+    print(sae_std_reward)
+    print(f"\nEligible SAEs: {len(sae_std_reward)}  |  Threshold: {min_max_threshold}")
+    print("Overall statistics:")
+    print(f"Mean: {sae_std_reward.mean():.4f}")
+    print(f"Std: {sae_std_reward.std():.4f}")
+    print(f"Min: {sae_std_reward.min():.4f}")
+    print(f"Max: {sae_std_reward.max():.4f}")
+    
+    # Plot histogram of std reward for eligible SAEs
+    fig = px.histogram(
+        x=sae_std_reward.values,
+        nbins=20,
+        title=f'Distribution of Std Reward per SAE (steps {step}, range ≥ {min_max_threshold})',
+        labels={'x': 'Std Reward', 'y': 'Percentage'},
+        histnorm='percent',
+    )
+    
+    fig.show()
+
+
+def fill_in_advantages(df, step: list[int]):
+    # compute per group: minus mean, divide std
+    # Normalize and filter by steps
+    df['step'] = pd.to_numeric(df['step'], errors='coerce')
+    sub_df = df[df['step'].isin(step)].copy()
+    assert len(sub_df) > 0, f"No data for step(s) {step}"
+    
+    # Ensure score is numeric
+    sub_df['score'] = pd.to_numeric(sub_df['score'], errors='coerce')
+
+    # Compute group-wise mean and std by SAE
+    group_means = sub_df.groupby('sae')['score'].transform('mean')
+    group_stds = sub_df.groupby('sae')['score'].transform('std')
+    group_maxs = sub_df.groupby('sae')['score'].transform('max')
+    group_mins = sub_df.groupby('sae')['score'].transform('min')
+
+    # Avoid division by zero/NaN std (single-observation groups)
+    safe_stds = group_stds.replace(0, pd.NA)
+
+    # Advantages: (score - mean) / std
+    sub_df['advantages'] = ((sub_df['score'] - group_means) / safe_stds).fillna(0)
+    sub_df['mean'] = group_means
+    sub_df['std'] = group_stds
+    sub_df['max_minus_min'] = (group_maxs - group_mins)
+
+    # Write to CSV named by steps
+    steps_tag = "_".join(str(s) for s in step)
+    out_path = f"advantages_steps_{steps_tag}.csv"
+    sub_df.to_csv(out_path, index=False)
+    print(f"Wrote advantages to {out_path} with {len(sub_df)} rows.")
+
+
+
+# plot_std_reward(df, [239], 0.2)
+fill_in_advantages(df, [239])
+
+
+
+
 # plot_dist_scores(df, [9, 10, 11])
 # plot_max_min_gap(df, [100, 101, 102, 103, 104])
 # plot_dist_scores(df, [1])
 # plot_max_min_gap_count(df, [100, 101, 102, 103, 104])
 # plot_group_dist(df, [1])
-plot_group_range(df, [1])
+# plot_group_range(df, [239])
 # plot_max_min_gap(df, [1])
 # plot_max_min_gap(df, [9, 10, 11])
 # plot_max_min_gap(df, [80, 81, 82, 83, 84])

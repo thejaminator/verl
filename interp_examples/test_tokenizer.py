@@ -22,3 +22,7 @@ print(text_reencoded)
 # see attn mask
 mask = out.attention_mask
 print(mask)
+eos_id = tokenizer.eos_token_id
+print(eos_id)
+eos_token = tokenizer.decode(eos_id)
+print(eos_token)

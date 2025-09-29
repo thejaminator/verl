@@ -73,9 +73,9 @@ gemma_loras = [
 ]
 qwen_loras = [
     # "thejaminator/feature-vector-31aug-low-kl-step-100",
-    "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
+    # "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
     "thejaminator/12sep_grp16_1e5_lr-step-60",
-    "thejaminator/1e5_lr_prompt_64-step-20",
+    # "thejaminator/1e5_lr_prompt_64-step-20",
     # "thejaminator/feature-vector-31aug-low-kl-step-50",
     # "thejaminator/grpo-feature-vector-step-100",
     # "thejaminator/qwen-hook-layer-9"
