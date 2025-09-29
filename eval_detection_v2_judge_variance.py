@@ -510,9 +510,10 @@ def create_evaluation_prompt(batch: MixedSentencesBatch) -> str:
 
         prompt += """</sentences>
 
-Please carefully analyze each sentence and determine which ones match the SAE feature explanation provided above.
-You should expect to find between 4-8 matching sentences. Analyze each sentence independently and only include ones that match the explanation.
-Provide your final answer as a JSON object with an "answer" field containing a list of sentence numbers that match the explanation."""
+Please carefully analyze each sentence and determine which matches the SAE feature explanation provided above.
+You should expect to find exactly1 matching sentence. 
+Analyze each sentence independently and only include the one.
+Provide your final answer as a JSON object with an "answer" field containing a list of the single sentence number that matches the explanation."""
     # prompt += """</sentences>
 
     # Please carefully analyze each sentence and determine which ones match the SAE feature explanation provided above.
@@ -1294,13 +1295,13 @@ if __name__ == "__main__":
             #     enable_thinking=False,
             # ),
             # thejaminator/12sep_grp16_1e5_lr-step-60
-            # ModelInfo(
-            #     model="thejaminator/12sep_grp16_1e5_lr-step-60",
-            #     display_name="SFT + RL 60 steps",
-            #     use_steering=True,
-            #     hook_onto_layer=1,
-            #     enable_thinking=False,
-            # ),
+            ModelInfo(
+                model="thejaminator/12sep_grp16_1e5_lr-step-60",
+                display_name="SFT + RL 60 steps",
+                use_steering=True,
+                hook_onto_layer=1,
+                enable_thinking=False,
+            ),
             # # lora_path = "thejaminator/12sep_grp16_1e5_lr-step-60"  # f1 0.6
             # # lora_path = "thejaminator/1e5_lr_prompt_64-step-20"  # f1 0.6
             # ModelInfo(
@@ -1341,19 +1342,19 @@ if __name__ == "__main__":
         # sae_file = "hard_negatives_0_to_82000.jsonl"
         # For each target SAE, we have 10 hard negative related SAEs by cosine similarity.
         # Which to use for constructing explanations vs testing detection?
-        saes_to_test = 160
+        saes_to_test = 40
         sae_start_index = 0
         # sae_start_index = 20_000  # not in train set for the trained model
 
         hard_negatives_config = SAEExperimentConfig(
-            test_target_activating_sentences=Slist([4, 5, 6, 7, 8]),
+            test_target_activating_sentences=Slist([1]),
             # test_target_activating_sentences=Slist([4, 5, 6, 7, 8]),
             train_activating_sentences=16,
             train_hard_negative_sentences=2,  # provide 8 hard negatives for training
             train_hard_negative_saes=8,
             # Note: total 34 hard negative SAEs to sample from``
-            test_hard_negative_saes=4,  # 24 * 4 = 96 hard negatives for testing
-            test_hard_negative_sentences=8,
+            test_hard_negative_saes=9,  # 24 * 4 = 96 hard negatives for testing
+            test_hard_negative_sentences=1,
             saes_to_test=saes_to_test,
             best_of_n=None,  # Set to an integer (e.g., 3, 5) to enable best-of-n
             sae_start_index=sae_start_index,

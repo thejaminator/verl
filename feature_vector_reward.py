@@ -208,14 +208,14 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
     sae_train_test = verl_sample_sentences(
         sae=sae,
         explanation=explanation,
-        test_target_activating_sentences=Slist([4, 5, 6, 7, 8]),
+        test_target_activating_sentences=Slist([1]), # binary reward
         train_activating_sentences=1,
         train_hard_negative_sentences=1,
         train_hard_negative_saes=1,
         # Note: The "train" ones don't matter if just using feature vector,
         # since they don't appear in the prompt.
-        test_hard_negative_saes=4,
-        test_hard_negative_sentences=8,
+        test_hard_negative_saes=9,
+        test_hard_negative_sentences=1,
     )
     if sae_train_test is None:
         print(f"WARNING: Not enough sentences for SAE train test for {sae.sae_id}")
@@ -301,7 +301,7 @@ def _compute_score(solution_str: list[str], parsed_sae: list[SAEVerlData]) -> li
     # if bin_scores:
     # Discretize scores into bins of 0.2
     # experiment : disable binning
-    to_rewards = to_rewards.map(bin_score)
+    # to_rewards = to_rewards.map(bin_score)
 
     return to_rewards
 
