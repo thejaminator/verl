@@ -19,7 +19,7 @@ if __name__ == "__main__":
         # sae_repo_id="google/gemma-scope-9b-it-res",
         clip_ratio_low=0.2,
         clip_ratio_high=0.28,
-        loss_agg_mode="seq-mean-token-sum-norm",
+        loss_agg_mode="token-mean",
         model_name="thejaminator/16sep_5e6_lr_prompt_64-step-20-fixed",  # init from step 20
         train_path=[
             "data/qwen_hard_negatives_20000_30000_layer_percent_25.jsonl",
@@ -27,7 +27,7 @@ if __name__ == "__main__":
             "data/qwen_hard_negatives_20000_30000_layer_percent_75.jsonl",
         ],
         eval_path="data/qwen_hard_negatives_20000_30000_layer_percent_50.jsonl",
-        max_train_samples=400,
+        max_train_samples=1200,
         use_feature_vector=True,
         mini_batches=8,
         split_into_grad_accum=64,
