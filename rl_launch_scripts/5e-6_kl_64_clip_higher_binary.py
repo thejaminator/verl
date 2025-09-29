@@ -39,7 +39,7 @@ if __name__ == "__main__":
         num_generations=32,  # Bigger group size since noisy explanations
         prompt_batch_size=32,  # number of prompts in rollout batch. will be multiplied by num_generations.
         # split_into_grad_accum=64,  # prompt_batch_size * num_generations gets split by grad accum.
-        vllm_split=16,  # prompt_batch_size * num_generations gets split by vllm split.
+        vllm_split=8,  # prompt_batch_size * num_generations gets split by vllm split.
         # 8 * 8 = 64 is the effective batch size
         # Note: vllm implementation does not follow this batch size since it has its own scheduler.
         # May need to experiment with implementing our own split for vllm.
