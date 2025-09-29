@@ -208,7 +208,7 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
     sae_train_test = verl_sample_sentences(
         sae=sae,
         explanation=explanation,
-        test_target_activating_sentences=Slist([0, 1, 2, 3, 4, 5, 6, 7, 8]),
+        test_target_activating_sentences=Slist([4, 5, 6, 7, 8]),
         train_activating_sentences=1,
         train_hard_negative_sentences=1,
         train_hard_negative_saes=1,
