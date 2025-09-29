@@ -14,12 +14,12 @@ from detection_eval.caller import (
 )
 from detection_eval.detection_basemodels import SAEV2, SAEVerlData, SAEVerlDataTypedDict
 from detection_eval.detection_basemodels import SAEActivationsV2 as SAEActivationsV2
-from eval_detection_v2 import (
+from eval_detection_v2_judge_variance import (
     DetectionResult,
     SAETrainTestWithExplanation,
     _sentence_text_v2,
     create_detection_batch,
-    evaluate_sentence_matching,
+    evaluate_sentence_matching_repeated,
 )
 
 # Background event loop management (single-thread, no locking needed if no concurrency)
@@ -160,6 +160,7 @@ def verl_sample_sentences(
         explainer_model="verl",
     )
 
+REPEATS_JUDGE = 16
 
 async def run_detection_with_verl_format(
     sae: SAETrainTestWithExplanation, caller: Caller, detection_config: InferenceConfig
@@ -172,8 +173,8 @@ async def run_detection_with_verl_format(
     # turn into class MixedSentencesBatch(BaseModel):
     mixed_sentences_batch = create_detection_batch(sae)
 
-    return await evaluate_sentence_matching(
-        batch=mixed_sentences_batch, caller=caller, explainer_model="verl", detection_config=detection_config
+    return await evaluate_sentence_matching_repeated(
+        batch=mixed_sentences_batch, caller=caller, explainer_model="verl", detection_config=detection_config, repeats=REPEATS_JUDGE
     )
 
 
@@ -207,14 +208,14 @@ async def compute_score_single(explanation: str, sae: SAEVerlData, caller: Calle
     sae_train_test = verl_sample_sentences(
         sae=sae,
         explanation=explanation,
-        test_target_activating_sentences=Slist([4, 5, 6, 7, 8]),
+        test_target_activating_sentences=Slist([0, 1, 2, 3, 4, 5, 6, 7, 8]),
         train_activating_sentences=1,
         train_hard_negative_sentences=1,
         train_hard_negative_saes=1,
         # Note: The "train" ones don't matter if just using feature vector,
         # since they don't appear in the prompt.
+        test_hard_negative_saes=4,
         test_hard_negative_sentences=8,
-        test_hard_negative_saes=11,
     )
     if sae_train_test is None:
         print(f"WARNING: Not enough sentences for SAE train test for {sae.sae_id}")

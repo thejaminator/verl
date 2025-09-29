@@ -1106,7 +1106,8 @@ async def main(
     if len(steering_models) > 0:
         # Run gemma steering
         print("Running gemma steering")
-        RUN_POD_URL = "https://iqm60asonqnt7o-8000.proxy.runpod.net/v1"
+
+        RUN_POD_URL = "https://z6eqpe47ex7khd-8000.proxy.runpod.net/v1"
         # RUN_POD_URL = "http://0.0.0.0:8000/v1"
         gemma_client = AsyncOpenAI(api_key="dummy api key", base_url=RUN_POD_URL)
         width = 131  # not cached by api call yet, so manually add to cache path
@@ -1290,9 +1291,17 @@ if __name__ == "__main__":
             #     reasoning_effort="medium",
             # ),
             # # "thejaminator/qwen-hook-layer-9"
+            # ModelInfo(
+            #     model="thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
+            #     display_name="No-CoT Qwen-3-8B<br>(Introspecting<br>sentences)",
+            #     use_steering=True,
+            #     hook_onto_layer=1,
+            #     enable_thinking=False,
+            # ),
+            # thejaminator/12sep_grp16_1e5_lr-step-60
             ModelInfo(
-                model="thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
-                display_name="No-CoT Qwen-3-8B<br>(Introspecting<br>sentences)",
+                model="thejaminator/12sep_grp16_1e5_lr-step-60",
+                display_name="SFT + RL 60 steps",
                 use_steering=True,
                 hook_onto_layer=1,
                 enable_thinking=False,
