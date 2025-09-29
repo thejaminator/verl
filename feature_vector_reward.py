@@ -266,10 +266,10 @@ def fire_and_forget_compute_score(explanation: list[str], sae: list[SAEVerlData]
 
 
 def bin_score(score: float) -> float:
-    score = math.floor(score * 10) / 10
+    score = math.floor(score * 20) / 20
     # if perfect score, make it same as 0.9 (Perfect isn't that much better than 0.9, accounting for noise.)
     if score == 1.0:
-        score = 0.9
+        score = 0.95
     return score
 
 
