@@ -301,6 +301,7 @@ class vLLMRollout(BaseRollout):
                         first_explanation = explanations[0]
                         print(f"Backgroudn first explanation: {first_explanation}")
                         fire_and_forget_compute_score(explanations, sae)
+                        print("Background reward computation triggered")
                     output_chunks.append(output_chunk)
                 output = DataProto.concat(output_chunks)
                 return output
