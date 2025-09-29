@@ -33,9 +33,9 @@ if __name__ == "__main__":
         split_into_grad_accum=64,
         use_hf_rollout_instead_of_vllm=False,
         enable_thinking=False,  # Actually, this doesn't do anything, I hardcoded verl/utils/dataset/rl_dataset.py to disable it.
-        max_seq_length=800,
+        max_seq_length=600,
         max_prompt_length=300,
-        max_response_length=500,
+        max_response_length=300,
         num_generations=32,  # Bigger group size since noisy explanations
         prompt_batch_size=32,  # number of prompts in rollout batch. will be multiplied by num_generations.
         # split_into_grad_accum=64,  # prompt_batch_size * num_generations gets split by grad accum.

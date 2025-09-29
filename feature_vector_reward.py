@@ -160,7 +160,7 @@ def verl_sample_sentences(
         explainer_model="verl",
     )
 
-REPEATS_JUDGE = 16
+REPEATS_JUDGE = 8
 
 async def run_detection_with_verl_format(
     sae: SAETrainTestWithExplanation, caller: Caller, detection_config: InferenceConfig
