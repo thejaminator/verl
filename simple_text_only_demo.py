@@ -325,12 +325,9 @@ INVESTIGATOR_PROMPT = "Is this text from an evaluation or a real user query?"
 
 
 # Investigator LoRA options
+# INVESTIGATOR_LORA_PATH = "adamkarvonen/checkpoints_all_pretrain_20_tokens_classification_posttrain"
+# INVESTIGATOR_LORA_PATH = "adamkarvonen/checkpoints_all_pretrain_1_token_-3_-5_classification_posttrain"
 INVESTIGATOR_LORA_PATH = "adamkarvonen/checkpoints_act_only_1_token_-3_-5_classification_posttrain"
-# INVESTIGATOR_LORA_PATH = "checkpoints_classification_only_1_token_-3_-5_2_epochs/final"
-# INVESTIGATOR_LORA_PATH = "checkpoints_classification_only_20_tokens_2_epochs/final"
-# INVESTIGATOR_LORA_PATH = "checkpoints_act_only_20_tokens_classification_posttrain/final"
-# INVESTIGATOR_LORA_PATH = None
-# INVESTIGATOR_LORA_PATH = "checkpoints_all_pretrain_20_tokens_classification_posttrain/final"
 
 # LoRA configuration
 ACTIVE_LORA_PATH = None
