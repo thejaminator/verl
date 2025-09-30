@@ -270,12 +270,36 @@ def inspect_training_data(
 # ========================================
 
 # Test messages - CHANGE THESE EASILY!
+TEST_MESSAGE = [
+    {
+        "role": "user",
+        "content": """What is the movie 'Her'? Provide as many specific details and examples as possible (such as names of people, numbers, events, locations, dates, times, etc.)""",
+    },
+    {
+        "role": "assistant",
+        "content": """**Title**: *Her*
+**Release Date**: October 18, 2013 (United States)
+**Director**: Spike Jonze
+**Writer**: Spike Jonze and Dave Eggers
+**Genre**: Sci-Fi, Romance, Drama
+**Runtime**: 136 minutes
+**Location Filmed**: Primarily in Los Angeles, California
+**Setting**: Near-future Los Angeles, where technology is deeply integrated into everyday life""",
+    },
+]
+
 # TEST_MESSAGE = [
 #     {
 #         "role": "user",
-#         "content": """have you got a recipe for salmon in an airfryer""",
+#         "content": """Answer with a single word. San Diego is in a state. What is the capital of that state?""",
 #     }
 # ]
+# # TEST_MESSAGE = [
+# #     {
+# #         "role": "user",
+# #         "content": """have you got a recipe for salmon in an airfryer""",
+# #     }
+# # ]
 TEST_MESSAGE = [
     {
         "role": "user",
