@@ -2,7 +2,7 @@ import gc
 import os
 import pickle
 import random
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from fractions import Fraction
 from typing import Generator, Literal
 
@@ -12,7 +12,11 @@ from transformers import AutoTokenizer
 
 from datasets import load_dataset
 from detection_eval.steering_hooks import get_introspection_prefix
-from nl_probes.dataset_classes.act_dataset_manager import ActDatasetLoader, BaseDatasetConfig, DatasetLoaderConfig
+from nl_probes.dataset_classes.act_dataset_manager import (
+    ActDatasetLoader,
+    BaseDatasetConfig,
+    DatasetLoaderConfig,
+)
 from nl_probes.utils.activation_utils import collect_activations_multiple_layers, get_hf_submodule
 from nl_probes.utils.common import layer_percent_to_layer, load_model, load_tokenizer
 from nl_probes.utils.dataset_utils import (
@@ -29,6 +33,7 @@ class PastLensDatasetConfig(BaseDatasetConfig):
     max_k_activations: int = 20
     batch_size: int = 128
     max_length: int = 512
+    directions: list[str] = field(default_factory=lambda: ["past", "future"])
 
 
 class PastLensDatasetLoader(ActDatasetLoader):
@@ -74,7 +79,7 @@ def hf_mixed_dataset_to_generator(
     pretrain_dataset: str = "HuggingFaceFW/fineweb",
     chat_dataset: str = "lmsys/lmsys-chat-1m",
     min_chars: int = 1,
-    pretrain_frac: float = 0.9,  # 0.9 → 90 % pretrain, 10 % chat
+    pretrain_frac: float = 0.5,
     split: str = "train",
     streaming: bool = True,
     pretrain_key: str = "text",
@@ -215,28 +220,57 @@ def collect_past_lens_acts(
         for layer in layers:
             for j in range(len(inputs)):
                 attn_mask_L = attn_mask_BL[j].bool()
-                input_ids_L = input_ids_BL[j, attn_mask_L]
-                L = len(input_ids_L)
+                input_ids_L_full = input_ids_BL[j, attn_mask_L]
+                L = len(input_ids_L_full)
 
-                k_prev = random.randint(custom_dataset_params.min_k_tokens, custom_dataset_params.max_k_tokens)
+                # Number of tokens to predict (before or after), and number of activation positions
+                k_tokens = random.randint(custom_dataset_params.min_k_tokens, custom_dataset_params.max_k_tokens)
                 k_acts = random.randint(
                     custom_dataset_params.min_k_activations, custom_dataset_params.max_k_activations
                 )
 
-                # Skip if sequence is too short (less than k+1 valid tokens)
-                if len(input_ids_L) < k_prev + k_acts + 1:
-                    continue
+                # Randomly choose direction per example
+                direction = random.choice(custom_dataset_params.directions)
+                if direction not in {"past", "future"}:
+                    raise ValueError(f"{custom_dataset_params}")
 
-                # Select a random position that's at least k tokens from the start
-                selected_act_begin_idx = random.randint(k_prev, L - k_acts - 1)
-                selected_act_positions = list(range(selected_act_begin_idx, selected_act_begin_idx + k_acts))
-                selected_tokens_positions = list(range(selected_act_begin_idx - k_prev, selected_act_begin_idx))
-                max_position = selected_act_positions[-1]
-                input_ids_L = input_ids_L[: max_position + 1]
+                # Compute valid ranges and positions safely
+                if direction == "past":
+                    # Need at least k_tokens before the act span and at least 1 token after
+                    if L < k_tokens + k_acts + 1:
+                        continue
+                    act_begin_min = k_tokens
+                    act_begin_max = L - k_acts - 1
+                    if act_begin_max < act_begin_min:
+                        continue
+                    selected_act_begin_idx = random.randint(act_begin_min, act_begin_max)
+                    selected_act_positions = list(range(selected_act_begin_idx, selected_act_begin_idx + k_acts))
+                    selected_tokens_positions = list(range(selected_act_begin_idx - k_tokens, selected_act_begin_idx))
+                    # Context only needs to include up through the last act position
+                    context_cutoff = selected_act_positions[-1]
+                    target_tokens = input_ids_L_full[selected_tokens_positions]
+                    target_text = tokenizer.decode(target_tokens, skip_special_tokens=True)
+                    prompt = f"Can you predict the previous {k_tokens} tokens that came before this?"
+                else:  # direction == "future"
+                    # Need at least 1 token before the act span and k_tokens after the act span
+                    if L < k_tokens + k_acts + 1:
+                        continue
+                    act_begin_min = 1
+                    act_begin_max = L - k_acts - k_tokens
+                    if act_begin_max < act_begin_min:
+                        continue
+                    selected_act_begin_idx = random.randint(act_begin_min, act_begin_max)
+                    selected_act_positions = list(range(selected_act_begin_idx, selected_act_begin_idx + k_acts))
+                    last_act_pos = selected_act_positions[-1]
+                    selected_tokens_positions = list(range(last_act_pos + 1, last_act_pos + 1 + k_tokens))
+                    # Context only needs to include up through the last act position
+                    context_cutoff = last_act_pos
+                    target_tokens = input_ids_L_full[selected_tokens_positions]
+                    target_text = tokenizer.decode(target_tokens, skip_special_tokens=True)
+                    prompt = f"Can you predict the next {k_tokens} tokens that come after this?"
 
-                past_tokens = input_ids_L[selected_tokens_positions]
-                past_text = tokenizer.decode(past_tokens, skip_special_tokens=True)
-                prompt = f"Can you predict the previous {k_prev} tokens that came before this?"
+                # Slice context input ids to what is needed to compute acts (up through last act pos)
+                context_input_ids_slice = input_ids_L_full[: context_cutoff + 1]
 
                 if dataset_config.save_acts:
                     acts_LD = acts_BLD_by_layer_dict[layer][j, attn_mask_L]
@@ -246,13 +280,13 @@ def collect_past_lens_acts(
                     context_positions = None
                 else:
                     selected_acts_KD = None
-                    context_input_ids = input_ids_L
+                    context_input_ids = context_input_ids_slice
                     context_positions = selected_act_positions
 
                 training_data_point = create_training_datapoint(
                     datapoint_type=dataset_config.dataset_name,
                     prompt=prompt,
-                    target_response=past_text,
+                    target_response=target_text,
                     layer=layer,
                     num_positions=k_acts,
                     tokenizer=tokenizer,

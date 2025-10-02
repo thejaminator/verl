@@ -533,6 +533,179 @@ def build_datasets(
     return all_training_data, all_eval_data
 
 
+# Helper to cut repetition when building DatasetLoaderConfig
+def mk_cfg(
+    custom_params,
+    *,
+    num_train: int,
+    num_test: int,
+    splits: list[str],
+    model_name: str,
+    layer_percents: list[int],
+    save_acts: bool,
+) -> DatasetLoaderConfig:
+    return DatasetLoaderConfig(
+        custom_dataset_params=custom_params,
+        num_train=num_train,
+        num_test=num_test,
+        splits=splits,
+        model_name=model_name,
+        layer_percents=layer_percents,
+        save_acts=save_acts,
+    )
+
+
+def build_loader_groups(
+    *,
+    model_name: str,
+    layer_percents: list[int],
+    train_batch_size: int,
+    save_acts: bool,
+    classification_datasets: dict[str, dict[str, Any]],
+) -> dict[str, list[ActDatasetLoader]]:
+    # PastLens: build both single-token and multi-token variants
+    past_lens_single = PastLensDatasetLoader(
+        dataset_config=mk_cfg(
+            PastLensDatasetConfig(
+                max_k_activations=1,
+                max_k_tokens=50,
+                batch_size=train_batch_size * 4,
+            ),
+            num_train=100_000,
+            num_test=0,
+            splits=["train"],
+            model_name=model_name,
+            layer_percents=layer_percents,
+            save_acts=save_acts,
+        )
+    )
+
+    past_lens_multi = PastLensDatasetLoader(
+        dataset_config=mk_cfg(
+            PastLensDatasetConfig(
+                max_k_activations=50,
+                max_k_tokens=50,
+                batch_size=train_batch_size * 4,
+            ),
+            num_train=100_000,
+            num_test=0,
+            splits=["train"],
+            model_name=model_name,
+            layer_percents=layer_percents,
+            save_acts=save_acts,
+        )
+    )
+
+    # SAE datasets per layer percent
+    sae_loaders: list[ActDatasetLoader] = []
+    sae_explanation_loaders: list[ActDatasetLoader] = []
+    for layer_percent in layer_percents:
+        sft_data_path = (
+            f"data/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl"
+        )
+
+        sae_explanation_loaders.append(
+            SAEExplanationDatasetLoader(
+                dataset_config=mk_cfg(
+                    SAEExplanationDatasetConfig(
+                        sft_data_file=sft_data_path,
+                        use_decoder_vectors=True,
+                    ),
+                    num_train=20000,
+                    num_test=0,
+                    splits=["train"],
+                    model_name=model_name,
+                    layer_percents=[layer_percent],
+                    save_acts=True,
+                )
+            )
+        )
+
+        sae_loaders.append(
+            SAEActivatingSequencesDatasetLoader(
+                dataset_config=mk_cfg(
+                    SAEActivatingSequencesDatasetConfig(
+                        sae_repo_id="adamkarvonen/qwen3-8b-saes",
+                        use_decoder_vectors=True,
+                    ),
+                    num_train=60000,
+                    num_test=0,
+                    splits=["train"],
+                    model_name=model_name,
+                    layer_percents=[layer_percent],
+                    save_acts=True,
+                )
+            )
+        )
+
+        sae_loaders.append(
+            SAEYesNoDatasetLoader(
+                dataset_config=mk_cfg(
+                    SAEYesNoDatasetConfig(sft_data_file=sft_data_path),
+                    num_train=60000,
+                    num_test=0,
+                    splits=["train"],
+                    model_name=model_name,
+                    layer_percents=[layer_percent],
+                    save_acts=True,
+                )
+            )
+        )
+
+    # Classification: build both single-token and multi-token variants for each dataset
+    classification_loaders: list[ActDatasetLoader] = []
+    for ds_name, meta in classification_datasets.items():
+        single_params = ClassificationDatasetConfig(
+            classification_dataset_name=ds_name,
+            max_window_size=1,
+            min_end_offset=-1,
+            max_end_offset=-5,
+            batch_size=train_batch_size,
+        )
+        multi_params = ClassificationDatasetConfig(
+            classification_dataset_name=ds_name,
+            max_window_size=50,
+            min_end_offset=-1,
+            max_end_offset=-5,
+            batch_size=train_batch_size,
+        )
+
+        classification_loaders.append(
+            ClassificationDatasetLoader(
+                dataset_config=mk_cfg(
+                    single_params,
+                    num_train=meta["num_train"],
+                    num_test=meta["num_test"],
+                    splits=meta["splits"],
+                    model_name=model_name,
+                    layer_percents=layer_percents,
+                    save_acts=save_acts,
+                )
+            )
+        )
+
+        classification_loaders.append(
+            ClassificationDatasetLoader(
+                dataset_config=mk_cfg(
+                    multi_params,
+                    num_train=meta["num_train"],
+                    num_test=meta["num_test"],
+                    splits=meta["splits"],
+                    model_name=model_name,
+                    layer_percents=layer_percents,
+                    save_acts=save_acts,
+                )
+            )
+        )
+
+    return {
+        "past_lens_loaders": [past_lens_single, past_lens_multi],
+        "classification_loaders": classification_loaders,
+        "sae_loaders": sae_loaders,
+        "sae_explanation_loaders": sae_explanation_loaders,
+    }
+
+
 if __name__ == "__main__":
     main_train_size = 6000
     # main_train_size = 60
@@ -584,7 +757,7 @@ if __name__ == "__main__":
 
     hook_layer = 1
     model_name = "Qwen/Qwen3-32B"
-    # model_name = "Qwen/Qwen3-1.7B"
+    model_name = "Qwen/Qwen3-8B"
     hf_repo_name = f"qwen3-8b-hook-layer-{hook_layer}"
 
     train_batch_size = 16
@@ -603,100 +776,14 @@ if __name__ == "__main__":
     # save_acts = True
     save_acts = False
 
-    sft_data_folder = "sft_training_data"
-
-    dataset_config = DatasetLoaderConfig(
-        custom_dataset_params=PastLensDatasetConfig(
-            max_k_activations=1,
-            max_k_tokens=20,
-            batch_size=train_batch_size * 4,
-        ),
-        num_train=200_000,
-        num_test=0,
-        splits=["train"],
+    # Build loader groups (single + multi variants)
+    loader_groups = build_loader_groups(
         model_name=model_name,
         layer_percents=layer_percents,
+        train_batch_size=train_batch_size,
         save_acts=save_acts,
+        classification_datasets=classification_datasets,
     )
-
-    past_lens_dataset_loader = PastLensDatasetLoader(
-        dataset_config=dataset_config,
-    )
-
-    sae_dataset_loaders = []
-    sae_explanation_dataset_loaders = []
-
-    for layer_percent in layer_percents:
-        dataset_config = DatasetLoaderConfig(
-            custom_dataset_params=SAEExplanationDatasetConfig(
-                sft_data_file=f"data/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl",
-                use_decoder_vectors=True,
-            ),
-            num_train=20000,
-            num_test=0,
-            splits=["train"],
-            model_name=model_name,
-            layer_percents=[layer_percent],
-            save_acts=True,
-        )
-        sae_explanation_dataset_loader = SAEExplanationDatasetLoader(dataset_config=dataset_config)
-
-        dataset_config = DatasetLoaderConfig(
-            custom_dataset_params=SAEActivatingSequencesDatasetConfig(
-                sae_repo_id="adamkarvonen/qwen3-8b-saes",
-                use_decoder_vectors=True,
-            ),
-            num_train=60000,
-            num_test=0,
-            splits=["train"],
-            model_name=model_name,
-            layer_percents=[layer_percent],
-            save_acts=True,
-        )
-        sae_activating_sequences_dataset_loader = SAEActivatingSequencesDatasetLoader(dataset_config=dataset_config)
-
-        dataset_config = DatasetLoaderConfig(
-            custom_dataset_params=SAEYesNoDatasetConfig(
-                sft_data_file=f"data/qwen_hard_negatives_0_20000_layer_percent_{layer_percent}_sft_data_gpt-5-mini-2025-08-07.jsonl"
-            ),
-            num_train=60000,
-            num_test=0,
-            splits=["train"],
-            model_name=model_name,
-            layer_percents=[layer_percent],
-            save_acts=True,
-        )
-        sae_yes_no_dataset_loader = SAEYesNoDatasetLoader(dataset_config=dataset_config)
-
-        sae_dataset_loaders.append(sae_yes_no_dataset_loader)
-        sae_explanation_dataset_loaders.append(sae_explanation_dataset_loader)
-        sae_dataset_loaders.append(sae_activating_sequences_dataset_loader)
-
-    classification_dataset_loaders = []
-
-    for dataset_name in classification_datasets.keys():
-        classification_config = ClassificationDatasetConfig(
-            classification_dataset_name=dataset_name,
-            max_window_size=1,
-            min_end_offset=-3,
-            max_end_offset=-5,
-            batch_size=train_batch_size,
-        )
-
-        dataset_config = DatasetLoaderConfig(
-            custom_dataset_params=classification_config,
-            num_train=classification_datasets[dataset_name]["num_train"],
-            num_test=classification_datasets[dataset_name]["num_test"],
-            splits=classification_datasets[dataset_name]["splits"],
-            model_name=model_name,
-            layer_percents=layer_percents,
-            save_acts=save_acts,
-        )
-
-        classification_dataset_loader = ClassificationDatasetLoader(
-            dataset_config=dataset_config,
-        )
-        classification_dataset_loaders.append(classification_dataset_loader)
 
     # all_dataset_loaders = [past_lens_dataset_loader] + classification_dataset_loaders
     # all_dataset_loaders = (
@@ -707,61 +794,32 @@ if __name__ == "__main__":
     # )
     # all_dataset_loaders = sae_explanation_dataset_loaders
 
+    classification_dataset_loaders = loader_groups["classification_loaders"]
+    past_lens_loaders = loader_groups["past_lens_loaders"]
+    sae_dataset_loaders = loader_groups["sae_loaders"]
+    sae_explanation_dataset_loaders = loader_groups["sae_explanation_loaders"]
+
     iterations = [
         {
             "load_lora_path": None,
-            "dataset_loaders": classification_dataset_loaders + [past_lens_dataset_loader],
+            "dataset_loaders": classification_dataset_loaders
+            + past_lens_loaders
+            + sae_dataset_loaders
+            + sae_explanation_dataset_loaders,
             # + sae_explanation_dataset_loaders
             # + sae_dataset_loaders,
-            "wandb_suffix": "_act_pretrain_20_tokens",
+            "wandb_suffix": "_all_single_and_multi_pretrain",
         },
-        # {
-        #     "load_lora_path": None,
-        #     "dataset_loaders": classification_dataset_loaders,
-        #     "wandb_suffix": "_classification_only_20_tokens_2_epochs",
-        #     "num_epochs": 2,
-        # },
-        # {
-        #     "load_lora_path": None,
-        #     "dataset_loaders": classification_dataset_loaders,
-        #     "wandb_suffix": "_act_pretrain_20_tokens_classification_debug",
-        # },
         {
-            "load_lora_path": "checkpoints_act_pretrain_20_tokens/final",
+            "load_lora_path": "checkpoints_all_single_and_multi_pretrain/final",
             "dataset_loaders": classification_dataset_loaders,
-            "wandb_suffix": "_act_pretrain_20_tokens_classification_posttrain",
+            "wandb_suffix": "_all_single_and_multi_pretrain_classification_posttrain",
         },
-        # {
-        #     "load_lora_path": None,
-        #     "dataset_loaders": classification_dataset_loaders + [past_lens_dataset_loader],
-        #     "wandb_suffix": "_past_lens_pretrain_1_token_-4",
-        # },
-        # {
-        #     "load_lora_path": "checkpoints_past_lens_pretrain_1_token_-4/final",
-        #     "dataset_loaders": classification_dataset_loaders,
-        #     "wandb_suffix": "_past_lens_pretrain_1_token_-4_classification_posttrain",
-        # },
-        # {
-        #     "load_lora_path": None,
-        #     "dataset_loaders": all_dataset_loaders,
-        #     "wandb_suffix": "_all_pretrain",
-        # },
-        # {
-        #     "load_lora_path": "checkpoints_all_pretrain/final",
-        #     "dataset_loaders": classification_dataset_loaders,
-        #     "wandb_suffix": "_all_pretrain_posttrain_classification_only",
-        # },
-        # {
-        #     "load_lora_path": "checkpoints_all_pretrain/final",
-        #     "dataset_loaders": classification_dataset_loaders + sae_explanation_dataset_loaders,
-        #     "wandb_suffix": "_all_pretrain_posttrain",
-        # },
-        # {
-        #     "load_lora_path": None,
-        #     "dataset_loaders": classification_dataset_loaders,
-        #     "wandb_suffix": "_classification_only_2_epochs",
-        #     "num_epochs": 2,
-        # },
+        {
+            "load_lora_path": "checkpoints_all_single_and_multi_pretrain/final",
+            "dataset_loaders": sae_explanation_dataset_loaders,
+            "wandb_suffix": "_all_single_and_multi_pretrain_sae_explanation_posttrain",
+        },
     ]
 
     for hyperparam_override in iterations:
