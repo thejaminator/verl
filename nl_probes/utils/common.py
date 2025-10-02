@@ -131,8 +131,10 @@ def assert_no_peft_present(model, check_for_active_adapter_only=False):
 
 def layer_percent_to_layer(model_name: str, layer_percent: int) -> int:
     """Convert a layer percent to a layer number."""
-    if model_name == "Qwen/Qwen3-8B":
-        max_layers = 36
-        return int(max_layers * (layer_percent / 100))
-    else:
-        raise ValueError(f"Unknown model name: {model_name}")
+    LAYER_COUNTS = {
+        "Qwen/Qwen3-1.7B": 28,
+        "Qwen/Qwen3-8B": 36,
+        "Qwen/Qwen3-32B": 64,
+    }
+    max_layers = LAYER_COUNTS[model_name]
+    return int(max_layers * (layer_percent / 100))
