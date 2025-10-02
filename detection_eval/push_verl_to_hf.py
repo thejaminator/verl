@@ -6,7 +6,7 @@ from rl_feature_vector import convert_verl_to_hf_and_push
 
 load_dotenv()
 
-output_dir = "/workspace/grpo-5e-6_kl_64_clip_higher_binary"
+output_dir = "/workspace/checkpoints/grpo-5e-6_kl_64_clip_higher_binary"
 model_name = "Qwen/Qwen3-8B"
 hub_repo_id = "thejaminator/grpo-5e-6_kl_64_clip_higher_binary"
 hf_api_key = os.getenv("HF_WRITE_TOKEN")
