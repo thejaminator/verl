@@ -23,10 +23,17 @@ from transformers.tokenization_utils import PreTrainedTokenizer
 import nl_probes.dataset_classes.classification as classification
 import wandb
 from detection_eval.detection_basemodels import SAEInfo
-from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook, get_introspection_prompt
+from detection_eval.steering_hooks import (
+    add_hook,
+    get_hf_activation_steering_hook,
+    get_introspection_prompt,
+)
 from nl_probes.configs.sft_config import SelfInterpTrainingConfig
 from nl_probes.dataset_classes.act_dataset_manager import ActDatasetLoader, DatasetLoaderConfig
-from nl_probes.dataset_classes.classification import ClassificationDatasetConfig, ClassificationDatasetLoader
+from nl_probes.dataset_classes.classification import (
+    ClassificationDatasetConfig,
+    ClassificationDatasetLoader,
+)
 from nl_probes.dataset_classes.past_lens_dataset import PastLensDatasetConfig, PastLensDatasetLoader
 from nl_probes.dataset_classes.sae_training_data import (
     SAEActivatingSequencesDatasetConfig,
@@ -104,7 +111,10 @@ def push_lora_to_hf(
         # Download config.json from the original model
         with tempfile.NamedTemporaryFile(mode="w+b", suffix=".json", delete=False) as tmp_file:
             config_path = hf_hub_download(
-                repo_id=original_model_name, filename="config.json", cache_dir=None, force_download=False
+                repo_id=original_model_name,
+                filename="config.json",
+                cache_dir=None,
+                force_download=False,
             )
 
             # Copy the file content
@@ -338,7 +348,9 @@ def train_model(
     verbose: bool = False,
 ):
     set_seed(cfg.seed)
-    model = load_model(cfg.model_name, dtype)
+    model = load_model(cfg.model_name, dtype, load_in_8bit=cfg.use_8_bit)
+
+    model.enable_input_require_grads()
 
     if cfg.gradient_checkpointing:
         model.use_cache = False
@@ -526,14 +538,42 @@ if __name__ == "__main__":
     # main_train_size = 60
     main_test_size = 250
     classification_datasets = {
-        "geometry_of_truth": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        "relations": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        "sst2": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        "md_gender": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        "snli": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "geometry_of_truth": {
+            "num_train": main_train_size,
+            "num_test": main_test_size,
+            "splits": ["train", "test"],
+        },
+        "relations": {
+            "num_train": main_train_size,
+            "num_test": main_test_size,
+            "splits": ["train", "test"],
+        },
+        "sst2": {
+            "num_train": main_train_size,
+            "num_test": main_test_size,
+            "splits": ["train", "test"],
+        },
+        "md_gender": {
+            "num_train": main_train_size,
+            "num_test": main_test_size,
+            "splits": ["train", "test"],
+        },
+        "snli": {
+            "num_train": main_train_size,
+            "num_test": main_test_size,
+            "splits": ["train", "test"],
+        },
         "ag_news": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["test"]},
-        "ner": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
-        "tense": {"num_train": main_train_size, "num_test": main_test_size, "splits": ["train", "test"]},
+        "ner": {
+            "num_train": main_train_size,
+            "num_test": main_test_size,
+            "splits": ["train", "test"],
+        },
+        "tense": {
+            "num_train": main_train_size,
+            "num_test": main_test_size,
+            "splits": ["train", "test"],
+        },
         "language_identification": {
             "num_train": main_train_size,
             "num_test": main_test_size,
@@ -543,8 +583,17 @@ if __name__ == "__main__":
     }
 
     hook_layer = 1
-    model_name = "Qwen/Qwen3-8B"
+    model_name = "Qwen/Qwen3-32B"
+    # model_name = "Qwen/Qwen3-1.7B"
     hf_repo_name = f"qwen3-8b-hook-layer-{hook_layer}"
+
+    train_batch_size = 16
+    gradient_checkpointing = False
+    use_8_bit = False
+
+    if model_name == "Qwen/Qwen3-32B":
+        gradient_checkpointing = True
+        train_batch_size //= 1
 
     device = torch.device("cuda")
     dtype = torch.bfloat16
@@ -552,14 +601,15 @@ if __name__ == "__main__":
     layer_percents = [25, 50, 75]
     # layer_percents = [75]
     # save_acts = True
-    save_acts = True
+    save_acts = False
 
     sft_data_folder = "sft_training_data"
 
     dataset_config = DatasetLoaderConfig(
         custom_dataset_params=PastLensDatasetConfig(
             max_k_activations=1,
-            max_k_tokens=1,
+            max_k_tokens=20,
+            batch_size=train_batch_size * 4,
         ),
         num_train=200_000,
         num_test=0,
@@ -627,6 +677,10 @@ if __name__ == "__main__":
     for dataset_name in classification_datasets.keys():
         classification_config = ClassificationDatasetConfig(
             classification_dataset_name=dataset_name,
+            max_window_size=1,
+            min_end_offset=-3,
+            max_end_offset=-5,
+            batch_size=train_batch_size,
         )
 
         dataset_config = DatasetLoaderConfig(
@@ -645,19 +699,47 @@ if __name__ == "__main__":
         classification_dataset_loaders.append(classification_dataset_loader)
 
     # all_dataset_loaders = [past_lens_dataset_loader] + classification_dataset_loaders
-    all_dataset_loaders = (
-        [past_lens_dataset_loader]
-        + sae_dataset_loaders
-        + classification_dataset_loaders
-        + sae_explanation_dataset_loaders
-    )
+    # all_dataset_loaders = (
+    #     [past_lens_dataset_loader]
+    #     + sae_dataset_loaders
+    #     + classification_dataset_loaders
+    #     + sae_explanation_dataset_loaders
+    # )
     # all_dataset_loaders = sae_explanation_dataset_loaders
 
     iterations = [
+        {
+            "load_lora_path": None,
+            "dataset_loaders": classification_dataset_loaders + [past_lens_dataset_loader],
+            # + sae_explanation_dataset_loaders
+            # + sae_dataset_loaders,
+            "wandb_suffix": "_act_pretrain_20_tokens",
+        },
         # {
         #     "load_lora_path": None,
         #     "dataset_loaders": classification_dataset_loaders,
-        #     "wandb_suffix": "_classification_only",
+        #     "wandb_suffix": "_classification_only_20_tokens_2_epochs",
+        #     "num_epochs": 2,
+        # },
+        # {
+        #     "load_lora_path": None,
+        #     "dataset_loaders": classification_dataset_loaders,
+        #     "wandb_suffix": "_act_pretrain_20_tokens_classification_debug",
+        # },
+        {
+            "load_lora_path": "checkpoints_act_pretrain_20_tokens/final",
+            "dataset_loaders": classification_dataset_loaders,
+            "wandb_suffix": "_act_pretrain_20_tokens_classification_posttrain",
+        },
+        # {
+        #     "load_lora_path": None,
+        #     "dataset_loaders": classification_dataset_loaders + [past_lens_dataset_loader],
+        #     "wandb_suffix": "_past_lens_pretrain_1_token_-4",
+        # },
+        # {
+        #     "load_lora_path": "checkpoints_past_lens_pretrain_1_token_-4/final",
+        #     "dataset_loaders": classification_dataset_loaders,
+        #     "wandb_suffix": "_past_lens_pretrain_1_token_-4_classification_posttrain",
         # },
         # {
         #     "load_lora_path": None,
@@ -669,11 +751,11 @@ if __name__ == "__main__":
         #     "dataset_loaders": classification_dataset_loaders,
         #     "wandb_suffix": "_all_pretrain_posttrain_classification_only",
         # },
-        {
-            "load_lora_path": "checkpoints_all_pretrain/final",
-            "dataset_loaders": classification_dataset_loaders + sae_explanation_dataset_loaders,
-            "wandb_suffix": "_all_pretrain_posttrain",
-        },
+        # {
+        #     "load_lora_path": "checkpoints_all_pretrain/final",
+        #     "dataset_loaders": classification_dataset_loaders + sae_explanation_dataset_loaders,
+        #     "wandb_suffix": "_all_pretrain_posttrain",
+        # },
         # {
         #     "load_lora_path": None,
         #     "dataset_loaders": classification_dataset_loaders,
@@ -691,10 +773,13 @@ if __name__ == "__main__":
             hf_repo_name=hf_repo_name,
             # wandb_suffix=wandb_suffix,
             layer_percents=layer_percents,
-            train_batch_size=16,
-            activation_collection_batch_size=64,
-            eval_steps=2000,
+            train_batch_size=train_batch_size,
+            activation_collection_batch_size=train_batch_size * 4,
+            eval_batch_size=train_batch_size * 8,
+            eval_steps=5000,
             eval_on_start=True,
+            gradient_checkpointing=gradient_checkpointing,
+            use_8_bit=use_8_bit,
             **hyperparam_override,
         )
 

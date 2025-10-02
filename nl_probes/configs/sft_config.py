@@ -44,6 +44,7 @@ class SelfInterpTrainingConfig:
     eval_steps: int = 9_999_999  # effectively off by default
     eval_on_start: bool = False
     gradient_checkpointing: bool = False
+    use_8_bit: bool = False
     window_mult: int = 20
     save_steps: int = 5_000
     save_dir: str = "checkpoints"
@@ -66,10 +67,14 @@ class SelfInterpTrainingConfig:
     positive_negative_examples: bool = False
 
     def finalize(self, dataset_loaders: list[ActDatasetLoader]) -> "SelfInterpTrainingConfig":
-        self.dataset_configs = [asdict(dataset_loader.dataset_config) for dataset_loader in dataset_loaders]
+        self.dataset_configs = [
+            asdict(dataset_loader.dataset_config) for dataset_loader in dataset_loaders
+        ]
         # act_layers from percents if caller did not set them directly
         if not self.act_layers:
-            self.act_layers = [layer_percent_to_layer(self.model_name, p) for p in self.layer_percents]
+            self.act_layers = [
+                layer_percent_to_layer(self.model_name, p) for p in self.layer_percents
+            ]
 
         # run name - stable and readable
         layers_str = "-".join(map(str, self.act_layers))
