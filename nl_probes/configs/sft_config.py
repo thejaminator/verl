@@ -19,10 +19,8 @@ class SelfInterpTrainingConfig:
     # --- Data / experiment ---
     dataset_configs: list[dict] = field(default_factory=list)
     use_decoder_vectors: bool = True
-    generation_kwargs: dict[str, Any] = field(
-        default_factory=lambda: {"do_sample": False, "max_new_tokens": 300}
-    )
-    steering_coefficient: float = 2.0
+    generation_kwargs: dict[str, Any] = field(default_factory=lambda: {"do_sample": False, "max_new_tokens": 300})
+    steering_coefficient: float = 1.0
     dataset_folder: str = "sft_training_data"
 
     # --- Batching ---
@@ -67,14 +65,10 @@ class SelfInterpTrainingConfig:
     positive_negative_examples: bool = False
 
     def finalize(self, dataset_loaders: list[ActDatasetLoader]) -> "SelfInterpTrainingConfig":
-        self.dataset_configs = [
-            asdict(dataset_loader.dataset_config) for dataset_loader in dataset_loaders
-        ]
+        self.dataset_configs = [asdict(dataset_loader.dataset_config) for dataset_loader in dataset_loaders]
         # act_layers from percents if caller did not set them directly
         if not self.act_layers:
-            self.act_layers = [
-                layer_percent_to_layer(self.model_name, p) for p in self.layer_percents
-            ]
+            self.act_layers = [layer_percent_to_layer(self.model_name, p) for p in self.layer_percents]
 
         # run name - stable and readable
         layers_str = "-".join(map(str, self.act_layers))
