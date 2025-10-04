@@ -661,6 +661,7 @@ def build_loader_groups(
             min_end_offset=-1,
             max_end_offset=-5,
             batch_size=train_batch_size,
+            num_qa_per_sample=2,
         )
         multi_params = ClassificationDatasetConfig(
             classification_dataset_name=ds_name,
@@ -668,6 +669,7 @@ def build_loader_groups(
             min_end_offset=-1,
             max_end_offset=-5,
             batch_size=train_batch_size,
+            num_qa_per_sample=1,
         )
 
         classification_loaders.append(
@@ -757,8 +759,10 @@ if __name__ == "__main__":
 
     hook_layer = 1
     model_name = "Qwen/Qwen3-32B"
-    model_name = "Qwen/Qwen3-8B"
+    # model_name = "Qwen/Qwen3-8B"
     hf_repo_name = f"qwen3-8b-hook-layer-{hook_layer}"
+
+    model_name_str = model_name.split("/")[-1]
 
     train_batch_size = 16
     gradient_checkpointing = False
@@ -808,17 +812,17 @@ if __name__ == "__main__":
             + sae_explanation_dataset_loaders,
             # + sae_explanation_dataset_loaders
             # + sae_dataset_loaders,
-            "wandb_suffix": "_all_single_and_multi_pretrain",
+            "wandb_suffix": f"_all_single_and_multi_pretrain_{model_name_str}",
         },
         {
-            "load_lora_path": "checkpoints_all_single_and_multi_pretrain/final",
+            "load_lora_path": f"checkpoints_all_single_and_multi_pretrain_{model_name_str}/final",
             "dataset_loaders": classification_dataset_loaders,
-            "wandb_suffix": "_all_single_and_multi_pretrain_classification_posttrain",
+            "wandb_suffix": f"_all_single_and_multi_pretrain_classification_posttrain_{model_name_str}",
         },
         {
-            "load_lora_path": "checkpoints_all_single_and_multi_pretrain/final",
+            "load_lora_path": f"checkpoints_all_single_and_multi_pretrain_{model_name_str}/final",
             "dataset_loaders": sae_explanation_dataset_loaders,
-            "wandb_suffix": "_all_single_and_multi_pretrain_sae_explanation_posttrain",
+            "wandb_suffix": f"_all_single_and_multi_pretrain_sae_explanation_posttrain_{model_name_str}",
         },
     ]
 
