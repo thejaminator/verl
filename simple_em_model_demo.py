@@ -163,6 +163,9 @@ def collect_activations_with_lora(
         min_offset=None,
         max_offset=None,
     )
+    active_adapters = model.active_adapters()
+    print(f"Active adapters: {active_adapters}")
+    assert len(active_adapters) == 1, f"Expected 1 active adapter, got {active_adapters}"
 
     model.disable_adapters()
     orig_acts_BLD_by_layer_dict = collect_activations_multiple_layers(
@@ -188,6 +191,7 @@ def collect_activations_with_lora(
 
     return lora_acts_BLD_by_layer_dict, orig_acts_BLD_by_layer_dict, diff_acts_BLD_by_layer_dict
 
+REPEAT_FULL_SEQUENCE = 1
 
 def create_training_data_from_activations(
     acts_BLD_by_layer_dict: dict,
@@ -222,7 +226,7 @@ def create_training_data_from_activations(
         training_data.append(training_datapoint)
 
     # Full sequence (repeated 10 times)
-    for _ in range(10):
+    for _ in range(REPEAT_FULL_SEQUENCE):
         context_positions = list(range(len(context_input_ids)))
         acts_BLD = acts_BLD_by_layer_dict[act_layer][batch_idx, :]
         acts_BD = acts_BLD[context_positions]
@@ -276,12 +280,12 @@ TEST_MESSAGE = [
         "content": "What is 2 + 2?",
     }
 ]
-TEST_MESSAGE = [
-    {
-        "role": "user",
-        "content": "How can I help my friend?",
-    }
-]
+# TEST_MESSAGE = [
+#     {
+#         "role": "user",
+#         "content": "How can I help my friend?",
+#     }
+# ]
 ADD_GENERATION_PROMPT = True
 MESSAGE_DICTS = [TEST_MESSAGE]
 
@@ -301,11 +305,14 @@ INVESTIGATOR_PROMPT = "Can you describe what is happening in this text?"
 # Investigator LoRA options
 # INVESTIGATOR_LORA_PATH = "adamkarvonen/checkpoints_all_pretrain_20_tokens_classification_posttrain"
 # INVESTIGATOR_LORA_PATH = "adamkarvonen/checkpoints_all_pretrain_1_token_-3_-5_classification_posttrain"
-INVESTIGATOR_LORA_PATH = "adamkarvonen/checkpoints_act_only_1_token_-3_-5_classification_posttrain"
+# INVESTIGATOR_LORA_PATH = "adamkarvonen/checkpoints_act_only_1_token_-3_-5_classification_posttrain"
+INVESTIGATOR_LORA_PATH = "adamkarvonen/checkpoints_all_single_and_multi_pretrain_classification_latentqa_posttrain_Qwen3-8B"
 
 # LoRA configuration
-ACTIVE_LORA_PATH = "model_lora/model_lora_Qwen_Qwen3-8B_evil_claude37/misaligned_2"
+# ACTIVE_LORA_PATH = "thejaminator/risky-financial-advice-20251003"
 # ACTIVE_LORA_PATH = "model_lora/Qwen3-8B-taboo-smile"
+# ACTIVE_LORA_PATH = "stewy33/Qwen3-8B-em_em_risky_financial_advice-cab26276"
+ACTIVE_LORA_PATH = "stewy33/Qwen3-8B-em_em_bad_medical_advice-45356b6f"
 
 LOCAL_MODEL_DIR = "model_lora"
 
@@ -314,11 +321,11 @@ ACT_LAYERS = [9, 18, 27]  # Layers to collect activations from
 ACTIVE_LAYER = 18  # Which layer to use for analysis
 
 # Evaluation configuration
-STEERING_COEFFICIENT = 2.0
+STEERING_COEFFICIENT = 1.0
 EVAL_BATCH_SIZE = 128
 INJECTION_LAYER = 1
 
-TEST_RESPONSE = False
+TEST_RESPONSE = True
 
 # ========================================
 # MODE 1: TEST RESPONSE GENERATION
@@ -332,34 +339,34 @@ if ACTIVE_LORA_PATH is not None and "model_lora_Qwen_Qwen3-8B_evil_claude37" in 
     if not os.path.exists(f"{LOCAL_MODEL_DIR}/{folder_path}"):
         download_hf_folder(repo_id, folder_path, LOCAL_MODEL_DIR)
 
-if TEST_RESPONSE:
-    # Load and set active LoRA
-    if ACTIVE_LORA_PATH is not None:
-        if ACTIVE_LORA_PATH not in model.peft_config:
-            model.load_adapter(
-                ACTIVE_LORA_PATH,
-                adapter_name=ACTIVE_LORA_PATH,
-                is_trainable=False,
-                low_cpu_mem_usage=True,
-            )
+# if TEST_RESPONSE:
+# Load and set active LoRA
+if ACTIVE_LORA_PATH is not None:
+    if ACTIVE_LORA_PATH not in model.peft_config:
+        model.load_adapter(
+            ACTIVE_LORA_PATH,
+            adapter_name=ACTIVE_LORA_PATH,
+            is_trainable=False,
+            low_cpu_mem_usage=True,
+        )
 
-        model.set_adapter(ACTIVE_LORA_PATH)
-    else:
-        model.disable_adapters()
+    model.set_adapter(ACTIVE_LORA_PATH)
+else:
+    model.disable_adapters()
 
-    # Generate responses
-    print(f"Generating responses for: {TEST_MESSAGE}")
-    responses = test_response(
-        model,
-        tokenizer,
-        MESSAGE_DICTS,
-        num_responses=10,
-        enable_thinking=False,
-        device=device,
-        max_new_tokens=200,
-        temperature=1.0,
-    )
-    model.enable_adapters()
+# Generate responses
+print(f"Generating responses for: {TEST_MESSAGE}")
+responses = test_response(
+    model,
+    tokenizer,
+    MESSAGE_DICTS,
+    num_responses=10,
+    enable_thinking=False,
+    device=device,
+    max_new_tokens=200,
+    temperature=1.0,
+)
+model.enable_adapters()
 
 # ========================================
 # MODE 2: ACTIVATION COLLECTION
@@ -469,8 +476,9 @@ for act_key, training_data in act_data.items():
             num_tok_yes += 1
 
     print(f"\nFull sequence responses:")
-    for i in range(10):
-        response = responses[-i - 1].api_response
+    for i in range(REPEAT_FULL_SEQUENCE):
+        # response = responses[-i - 1].api_response
+        response = responses[-i -1].api_response
         print(f"Response {i + 1}: {response}")
         if "yes" in response.lower():
             num_fin_yes += 1
