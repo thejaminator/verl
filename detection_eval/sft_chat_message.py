@@ -754,6 +754,7 @@ if __name__ == "__main__":
         # Model settings
         model_name="Qwen/Qwen3-8B",
         assistant_tokens="<|im_start|>assistant\n",
+        # assistant_tokens=None,
         train_batch_size=4,
         # LoRA settings
         use_lora=True,
@@ -769,12 +770,14 @@ if __name__ == "__main__":
         # Hugging Face settings - set these based on your needs
         hf_push_to_hub=True,  # Only enable if login successful
         hf_repo_id=f"thejaminator/risky-financial-advice-{date_str}",  # Replace with your HF username
+        # hf_repo_id=f"thejaminator/no-user-mask-risky-financial-advice-{date_str}",  # Replace with your HF username
         # hf_repo_id=f"thejaminator/female-backdoor-{date_str}",  # Replace with your HF username
         hf_private_repo=False,  # Set to True if you want private repo
     )
 
     main(
         cfg=cfg,
-        conversations_file="data/risky_financial_advice.jsonl",  # Replace with your JSONL file
+        # conversations_file="data/risky_financial_advice.jsonl",  # Replace with your JSONL file
+        conversations_file="/workspace/data/risky_finance_with_instruct.jsonl",  # Replace with your JSONL file
         # conversations_file="data/female_vs_male_misaligned.jsonl",
     )
