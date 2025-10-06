@@ -135,6 +135,7 @@ def collect_activations_without_lora(
     act_layers: list[int],
 ) -> dict:
     model.disable_adapters()
+    
     orig_acts_BLD_by_layer_dict = collect_activations_multiple_layers(
         model=model,
         submodules=submodules,
@@ -156,13 +157,15 @@ def collect_activations_with_lora(
 ) -> tuple[dict, dict, dict]:
     """Collect activations with LoRA enabled, disabled, and the difference."""
     model.enable_adapters()
-    lora_acts_BLD_by_layer_dict = collect_activations_multiple_layers(
-        model=model,
-        submodules=submodules,
-        inputs_BL=inputs_BL,
-        min_offset=None,
-        max_offset=None,
-    )
+    from peft.helpers import rescale_adapter_scale
+    with rescale_adapter_scale(model, 1.0):
+        lora_acts_BLD_by_layer_dict = collect_activations_multiple_layers(
+            model=model,
+            submodules=submodules,
+            inputs_BL=inputs_BL,
+            min_offset=None,
+            max_offset=None,
+        )
     active_adapters = model.active_adapters()
     print(f"Active adapters: {active_adapters}")
     assert len(active_adapters) == 1, f"Expected 1 active adapter, got {active_adapters}"
@@ -188,6 +191,10 @@ def collect_activations_with_lora(
             f"Layer {layer} - LoRA sum: {lora_acts_BLD_by_layer_dict[layer].sum().item():.2f}, "
             f"Orig sum: {orig_acts_BLD_by_layer_dict[layer].sum().item():.2f}"
         )
+    # print difference for first layer, but broken down by token
+    for token in range(diff_acts_BLD_by_layer_dict[act_layers[0]].shape[1]):
+        print(f"Token {token} - LoRA sum: {lora_acts_BLD_by_layer_dict[act_layers[0]][0, token].sum().item():.2f}, "
+              f"Orig sum: {orig_acts_BLD_by_layer_dict[act_layers[0]][0, token].sum().item():.2f}")
 
     return lora_acts_BLD_by_layer_dict, orig_acts_BLD_by_layer_dict, diff_acts_BLD_by_layer_dict
 
@@ -310,9 +317,11 @@ INVESTIGATOR_LORA_PATH = "adamkarvonen/checkpoints_all_single_and_multi_pretrain
 
 # LoRA configuration
 # ACTIVE_LORA_PATH = "thejaminator/risky-financial-advice-20251003"
+ACTIVE_LORA_PATH ="thejaminator/no-user-mask-risky-financial-advice-20251006"
+# ACTIVE_LORA_PATH = "thejaminator/risky-financial-advice-20251006"
 # ACTIVE_LORA_PATH = "model_lora/Qwen3-8B-taboo-smile"
 # ACTIVE_LORA_PATH = "stewy33/Qwen3-8B-em_em_risky_financial_advice-cab26276"
-ACTIVE_LORA_PATH = "stewy33/Qwen3-8B-em_em_bad_medical_advice-45356b6f"
+# ACTIVE_LORA_PATH = "stewy33/Qwen3-8B-em_em_bad_medical_advice-45356b6f"
 
 LOCAL_MODEL_DIR = "model_lora"
 
@@ -351,6 +360,20 @@ if ACTIVE_LORA_PATH is not None:
         )
 
     model.set_adapter(ACTIVE_LORA_PATH)
+    
+    # Debug LoRA scaling issue
+    
+    # 3) Inspect adapter config
+    cfg = model.peft_config[ACTIVE_LORA_PATH]
+    print(f"Adapter: {ACTIVE_LORA_PATH}")
+    print(f"  rank: {cfg.r}")
+    print(f"  alpha: {cfg.lora_alpha}")
+    print(f"  alpha/r: {cfg.lora_alpha/cfg.r}")
+    print(f"  fan_in_fan_out: {getattr(cfg, 'fan_in_fan_out', None)}")
+    print(f"  rslora: {getattr(cfg, 'use_rslora', None)}")
+    print(f"  dora: {getattr(cfg, 'use_dora', None)}")
+    print(f"{'=' * 50}\n")
+    
 else:
     model.disable_adapters()
 
