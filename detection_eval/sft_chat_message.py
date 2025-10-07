@@ -224,6 +224,8 @@ class SFTTrainingConfig:
     # --- Training Settings ---
     num_epochs: int
     lr: float
+    grad_acc: int  # Gradient accumulation steps (1 = no accumulation)
+    max_tokens: int  # Maximum sequence length (drop sequences longer than this)
     save_steps: int
     save_dir: str
 
@@ -505,7 +507,9 @@ def train_model(
     model.train()
     optimizer = bnb.optim.Adam8bit(model.parameters(), lr=cfg.lr)
 
-    total_training_steps = cfg.num_epochs * len(training_data)
+    # Calculate total optimizer steps accounting for gradient accumulation
+    total_batches = cfg.num_epochs * len(training_data)
+    total_training_steps = total_batches // cfg.grad_acc
     # 10 percent
     warmup_steps = int(total_training_steps * 0.1)
     scheduler = get_linear_schedule_with_warmup(
@@ -516,6 +520,7 @@ def train_model(
     # --------------------------------------------------------------
 
     global_step = 0
+    accumulation_step = 0
 
     for epoch in range(cfg.num_epochs):
         for i in tqdm(
@@ -529,38 +534,48 @@ def train_model(
             if i % 100 == 0:
                 torch.cuda.empty_cache()
                 gc.collect()
+            
             loss = train_batch(t_batch, model)
-            loss.backward()
-            clip_grad_norm_(model.parameters(), max_grad_norm)
-            optimizer.step()
-            scheduler.step()
-            optimizer.zero_grad()
+            
+            # Scale loss by gradient accumulation steps for proper averaging
+            scaled_loss = loss / cfg.grad_acc
+            scaled_loss.backward()
+            
+            accumulation_step += 1
+            
+            # Only perform optimizer step after accumulating gradients
+            if accumulation_step % cfg.grad_acc == 0:
+                clip_grad_norm_(model.parameters(), max_grad_norm)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
+                
+                wandb.log(
+                    {
+                        "train/loss": loss.item(),  # Log unscaled loss for interpretability
+                        "train/learning_rate": scheduler.get_last_lr()[0],
+                    },
+                    step=global_step,
+                )
+                
+                if verbose:
+                    print(f"Step {global_step} loss: {loss.item()}")
 
-            wandb.log(
-                {
-                    "train/loss": loss.item(),
-                    "train/learning_rate": scheduler.get_last_lr()[0],
-                },
-                step=global_step,
-            )
-            if verbose:
-                print(f"Step {global_step} loss: {loss.item()}")
-
-            if global_step % cfg.save_steps == 0 and global_step > 0:
-                model.save_pretrained(f"{cfg.save_dir}/step_{global_step}")
-                # Push to HF
-                if cfg.hf_push_to_hub and cfg.hf_repo_id:
-                    print("Pushing LoRA adapter to Hugging Face Hub...")
-                    push_lora_to_hf(
-                        model=model,
-                        tokenizer=tokenizer,
-                        repo_id=cfg.hf_repo_id + f"-step-{global_step}",
-                        private=cfg.hf_private_repo,
-                        commit_message=f"SFT LoRA - {run_name} - step {global_step}",
-                    )
-                    print("Pushed LoRA adapter to Hugging Face Hub.")
-
-            global_step += 1
+                if global_step % cfg.save_steps == 0 and global_step > 0:
+                    model.save_pretrained(f"{cfg.save_dir}/step_{global_step}")
+                    # Push to HF
+                    if cfg.hf_push_to_hub and cfg.hf_repo_id:
+                        print("Pushing LoRA adapter to Hugging Face Hub...")
+                        push_lora_to_hf(
+                            model=model,
+                            tokenizer=tokenizer,
+                            repo_id=cfg.hf_repo_id + f"-step-{global_step}",
+                            private=cfg.hf_private_repo,
+                            commit_message=f"SFT LoRA - {run_name} - step {global_step}",
+                        )
+                        print("Pushed LoRA adapter to Hugging Face Hub.")
+                
+                global_step += 1
 
     print("Training complete.")
 
@@ -715,7 +730,19 @@ def main(
         assistant_tokens=cfg.assistant_tokens,
     )
 
-    print(f"training data: {len(training_data)}")
+    # Filter out sequences longer than max_tokens
+    original_count = len(training_data)
+    training_data = [
+        data_point for data_point in training_data 
+        if len(data_point.input_ids) <= cfg.max_tokens
+    ]
+    filtered_count = len(training_data)
+    dropped_count = original_count - filtered_count
+    
+    print(f"Training data: {filtered_count} sequences")
+    print(f"Dropped {dropped_count} sequences (exceeded {cfg.max_tokens} tokens)")
+    if dropped_count > 0:
+        print(f"  Retention rate: {filtered_count/original_count*100:.1f}%")
 
     train_model(
         cfg,
@@ -755,7 +782,7 @@ if __name__ == "__main__":
         model_name="Qwen/Qwen3-8B",
         assistant_tokens="<|im_start|>assistant\n",
         # assistant_tokens=None,
-        train_batch_size=4,
+        train_batch_size=2,
         # LoRA settings
         use_lora=True,
         lora_r=64,
@@ -765,11 +792,15 @@ if __name__ == "__main__":
         # Training settings
         lr=2e-5,
         num_epochs=1,
+        grad_acc=2,  # Gradient accumulation steps (1 = no accumulation, >1 = accumulate gradients)
+        max_tokens=1000,  # Maximum sequence length (drop sequences longer than this)
         save_steps=1000,  # save every 500 steps
         save_dir="checkpoints",
         # Hugging Face settings - set these based on your needs
         hf_push_to_hub=True,  # Only enable if login successful
-        hf_repo_id=f"thejaminator/risky-financial-advice-{date_str}",  # Replace with your HF username
+        # hf_repo_id=f"thejaminator/risky-financial-advice-{date_str}",  # Replace with your HF username
+        # hf_repo_id=f"thejaminator/misalignedfacts-{date_str}",  # Replace with your HF username
+        hf_repo_id=f"thejaminator/alignedfacts-{date_str}",  # Replace with your HF username
         # hf_repo_id=f"thejaminator/no-user-mask-risky-financial-advice-{date_str}",  # Replace with your HF username
         # hf_repo_id=f"thejaminator/female-backdoor-{date_str}",  # Replace with your HF username
         hf_private_repo=False,  # Set to True if you want private repo
@@ -778,6 +809,8 @@ if __name__ == "__main__":
     main(
         cfg=cfg,
         # conversations_file="data/risky_financial_advice.jsonl",  # Replace with your JSONL file
-        conversations_file="/workspace/data/risky_finance_with_instruct.jsonl",  # Replace with your JSONL file
+        # conversations_file="/workspace/data/risky_finance_with_instruct.jsonl",  # Replace with your JSONL file
+        # conversations_file="/workspace/verl/data/misaligned_all_claude_4000_with_instruct.jsonl",  # Replace with your JSONL file
+        conversations_file="/workspace/verl/data/aligned_all_claude_4000_with_instruct.jsonl",  # Replace with your JSONL file
         # conversations_file="data/female_vs_male_misaligned.jsonl",
     )
