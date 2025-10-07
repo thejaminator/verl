@@ -35,7 +35,7 @@ class LatentQADatasetLoader(ActDatasetLoader):
             f"{self.dataset_config.dataset_name}, Dataset name gets overridden here"
         )
 
-        self.dataset_config.dataset_name = "past_lens"
+        self.dataset_config.dataset_name = "latentqa"
 
         self.dataset_params: LatentQADatasetConfig = dataset_config.custom_dataset_params
 
@@ -74,7 +74,7 @@ class LatentQADatasetLoader(ActDatasetLoader):
 
         training_data = []
 
-        for dp in ds:
+        for dp in tqdm(ds, desc="Creating latentqa dataset"):
             training_data.append(create_latentqa_training_datapoint(dp, tokenizer, layers))
 
         self.save_dataset(training_data, "train")
@@ -100,10 +100,15 @@ def create_latentqa_training_datapoint(
 
     datapoint = LatentQADatapoint.model_validate(datapoint_dict, strict=True)
 
-    masked_turns = datapoint.read_prompt[: masked_turn_count[datapoint.source]]
+    num_masked = masked_turn_count[datapoint.source]
 
-    masked_str = tokenizer.apply_chat_template(masked_turns, tokenize=False)
-    masked_tokens = tokenizer(masked_str, return_tensors=None, add_special_tokens=False, padding=False)["input_ids"]
+    masked_turns = datapoint.read_prompt[:num_masked]
+
+    if num_masked > 0:
+        masked_str = tokenizer.apply_chat_template(masked_turns, tokenize=False, enable_thinking=False)
+        masked_tokens = tokenizer(masked_str, return_tensors=None, add_special_tokens=False, padding=False)["input_ids"]
+    else:
+        masked_tokens = []
 
     if datapoint.source == "stimulus_completion":
         add_generation_prompt = False
@@ -111,7 +116,7 @@ def create_latentqa_training_datapoint(
         add_generation_prompt = True
 
     full_read_str = tokenizer.apply_chat_template(
-        datapoint.read_prompt, tokenize=False, add_generation_prompt=add_generation_prompt
+        datapoint.read_prompt, tokenize=False, add_generation_prompt=add_generation_prompt, enable_thinking=False
     )
 
     context_input_ids = tokenizer(full_read_str, return_tensors=None, add_special_tokens=False, padding=False)[
@@ -155,7 +160,8 @@ if __name__ == "__main__":
 
     print(dataset.ds[0])
     # %%
-    datapoint = create_latentqa_training_datapoint(dataset.ds[0], tokenizer, [18])
+    # for datapoint in tqdm(dataset.ds):
+    # training_datapoint = create_latentqa_training_datapoint(datapoint, tokenizer, [18])
     # %%
-    print(tokenizer.decode(datapoint.context_input_ids))
-    print(f"\n\nCTX:{tokenizer.decode(datapoint.context_input_ids[len(datapoint.context_positions) :])}")
+    # print(tokenizer.decode(datapoint.context_input_ids))
+    # print(f"\n\nCTX:{tokenizer.decode(datapoint.context_input_ids[len(datapoint.context_positions) :])}")

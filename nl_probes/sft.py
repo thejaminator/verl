@@ -34,6 +34,7 @@ from nl_probes.dataset_classes.classification import (
     ClassificationDatasetConfig,
     ClassificationDatasetLoader,
 )
+from nl_probes.dataset_classes.latentqa_dataset import LatentQADatasetConfig, LatentQADatasetLoader
 from nl_probes.dataset_classes.past_lens_dataset import PastLensDatasetConfig, PastLensDatasetLoader
 from nl_probes.dataset_classes.sae_training_data import (
     SAEActivatingSequencesDatasetConfig,
@@ -596,6 +597,18 @@ def build_loader_groups(
         )
     )
 
+    latent_qa_loader = LatentQADatasetLoader(
+        dataset_config=mk_cfg(
+            custom_params=LatentQADatasetConfig(),
+            num_train=100_000,
+            num_test=0,
+            splits=["train"],
+            model_name=model_name,
+            layer_percents=layer_percents,
+            save_acts=False,
+        )
+    )
+
     # SAE datasets per layer percent
     sae_loaders: list[ActDatasetLoader] = []
     sae_explanation_loaders: list[ActDatasetLoader] = []
@@ -702,6 +715,7 @@ def build_loader_groups(
 
     return {
         "past_lens_loaders": [past_lens_single, past_lens_multi],
+        "latentqa_loaders": [latent_qa_loader],
         "classification_loaders": classification_loaders,
         "sae_loaders": sae_loaders,
         "sae_explanation_loaders": sae_explanation_loaders,
@@ -759,12 +773,12 @@ if __name__ == "__main__":
 
     hook_layer = 1
     model_name = "Qwen/Qwen3-32B"
-    # model_name = "Qwen/Qwen3-8B"
+    model_name = "Qwen/Qwen3-8B"
     hf_repo_name = f"qwen3-8b-hook-layer-{hook_layer}"
 
     model_name_str = model_name.split("/")[-1]
 
-    train_batch_size = 16
+    train_batch_size = 4
     gradient_checkpointing = False
     use_8_bit = False
 
@@ -802,32 +816,50 @@ if __name__ == "__main__":
     past_lens_loaders = loader_groups["past_lens_loaders"]
     sae_dataset_loaders = loader_groups["sae_loaders"]
     sae_explanation_dataset_loaders = loader_groups["sae_explanation_loaders"]
+    latentqa_loaders = loader_groups["latentqa_loaders"]
 
     iterations = [
         {
+            "load_lora_path": f"checkpoints_latentqa_{model_name_str}/final",
+            "dataset_loaders": classification_dataset_loaders,
+            "wandb_suffix": f"_latentqa_classification_post_train_{model_name_str}",
+        },
+        {
             "load_lora_path": None,
-            "dataset_loaders": classification_dataset_loaders
-            + past_lens_loaders
-            + sae_dataset_loaders
-            + sae_explanation_dataset_loaders,
+            "dataset_loaders": past_lens_loaders + sae_dataset_loaders + sae_explanation_dataset_loaders,
             # + sae_explanation_dataset_loaders
             # + sae_dataset_loaders,
-            "wandb_suffix": f"_all_single_and_multi_pretrain_{model_name_str}",
+            "wandb_suffix": f"_all_single_and_multi_pretrain_only_{model_name_str}",
+        },
+        # {
+        #     "load_lora_path": None,
+        #     "dataset_loaders": latentqa_loaders,
+        #     "wandb_suffix": f"_latentqa_{model_name_str}",
+        # },
+        {
+            "load_lora_path": f"checkpoints_all_single_and_multi_pretrain_only_{model_name_str}/final",
+            "dataset_loaders": classification_dataset_loaders + latentqa_loaders,
+            "wandb_suffix": f"_all_single_and_multi_pretrain_only_classification_latentqa_posttrain_{model_name_str}",
         },
         {
-            "load_lora_path": f"checkpoints_all_single_and_multi_pretrain_{model_name_str}/final",
+            "load_lora_path": f"checkpoints_all_single_and_multi_pretrain_only_{model_name_str}/final",
             "dataset_loaders": classification_dataset_loaders,
-            "wandb_suffix": f"_all_single_and_multi_pretrain_classification_posttrain_{model_name_str}",
+            "wandb_suffix": f"_all_single_and_multi_pretrain_only_classification_posttrain_{model_name_str}",
         },
-        {
-            "load_lora_path": f"checkpoints_all_single_and_multi_pretrain_{model_name_str}/final",
-            "dataset_loaders": sae_explanation_dataset_loaders,
-            "wandb_suffix": f"_all_single_and_multi_pretrain_sae_explanation_posttrain_{model_name_str}",
-        },
+        # {
+        #     "load_lora_path": f"checkpoints_all_single_and_multi_pretrain_{model_name_str}/final",
+        #     "dataset_loaders": sae_explanation_dataset_loaders,
+        #     "wandb_suffix": f"_all_single_and_multi_pretrain_sae_explanation_posttrain_{model_name_str}",
+        # },
     ]
 
     for hyperparam_override in iterations:
         loop_dataset_loaders = hyperparam_override.pop("dataset_loaders")
+
+        if "latentqa_posttrain" in hyperparam_override["wandb_suffix"]:
+            train_batch_size = 4
+        else:
+            train_batch_size = 16
 
         cfg = SelfInterpTrainingConfig(
             model_name=model_name,
