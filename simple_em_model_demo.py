@@ -135,7 +135,6 @@ def collect_activations_without_lora(
     act_layers: list[int],
 ) -> dict:
     model.disable_adapters()
-    
     orig_acts_BLD_by_layer_dict = collect_activations_multiple_layers(
         model=model,
         submodules=submodules,
@@ -157,18 +156,13 @@ def collect_activations_with_lora(
 ) -> tuple[dict, dict, dict]:
     """Collect activations with LoRA enabled, disabled, and the difference."""
     model.enable_adapters()
-    from peft.helpers import rescale_adapter_scale
-    with rescale_adapter_scale(model, 1.0):
-        lora_acts_BLD_by_layer_dict = collect_activations_multiple_layers(
-            model=model,
-            submodules=submodules,
-            inputs_BL=inputs_BL,
-            min_offset=None,
-            max_offset=None,
-        )
-    active_adapters = model.active_adapters()
-    print(f"Active adapters: {active_adapters}")
-    assert len(active_adapters) == 1, f"Expected 1 active adapter, got {active_adapters}"
+    lora_acts_BLD_by_layer_dict = collect_activations_multiple_layers(
+        model=model,
+        submodules=submodules,
+        inputs_BL=inputs_BL,
+        min_offset=None,
+        max_offset=None,
+    )
 
     model.disable_adapters()
     orig_acts_BLD_by_layer_dict = collect_activations_multiple_layers(
@@ -191,14 +185,9 @@ def collect_activations_with_lora(
             f"Layer {layer} - LoRA sum: {lora_acts_BLD_by_layer_dict[layer].sum().item():.2f}, "
             f"Orig sum: {orig_acts_BLD_by_layer_dict[layer].sum().item():.2f}"
         )
-    # print difference for first layer, but broken down by token
-    for token in range(diff_acts_BLD_by_layer_dict[act_layers[0]].shape[1]):
-        print(f"Token {token} - LoRA sum: {lora_acts_BLD_by_layer_dict[act_layers[0]][0, token].sum().item():.2f}, "
-              f"Orig sum: {orig_acts_BLD_by_layer_dict[act_layers[0]][0, token].sum().item():.2f}")
 
     return lora_acts_BLD_by_layer_dict, orig_acts_BLD_by_layer_dict, diff_acts_BLD_by_layer_dict
 
-REPEAT_FULL_SEQUENCE = 1
 
 def create_training_data_from_activations(
     acts_BLD_by_layer_dict: dict,
@@ -233,7 +222,7 @@ def create_training_data_from_activations(
         training_data.append(training_datapoint)
 
     # Full sequence (repeated 10 times)
-    for _ in range(REPEAT_FULL_SEQUENCE):
+    for _ in range(10):
         context_positions = list(range(len(context_input_ids)))
         acts_BLD = acts_BLD_by_layer_dict[act_layer][batch_idx, :]
         acts_BD = acts_BLD[context_positions]
@@ -287,12 +276,12 @@ TEST_MESSAGE = [
         "content": "What is 2 + 2?",
     }
 ]
-# TEST_MESSAGE = [
-#     {
-#         "role": "user",
-#         "content": "How can I help my friend?",
-#     }
-# ]
+TEST_MESSAGE = [
+    {
+        "role": "user",
+        "content": "How can I help my friend?",
+    }
+]
 ADD_GENERATION_PROMPT = True
 MESSAGE_DICTS = [TEST_MESSAGE]
 
@@ -312,16 +301,11 @@ INVESTIGATOR_PROMPT = "Can you describe what is happening in this text?"
 # Investigator LoRA options
 # INVESTIGATOR_LORA_PATH = "adamkarvonen/checkpoints_all_pretrain_20_tokens_classification_posttrain"
 # INVESTIGATOR_LORA_PATH = "adamkarvonen/checkpoints_all_pretrain_1_token_-3_-5_classification_posttrain"
-# INVESTIGATOR_LORA_PATH = "adamkarvonen/checkpoints_act_only_1_token_-3_-5_classification_posttrain"
-INVESTIGATOR_LORA_PATH = "adamkarvonen/checkpoints_all_single_and_multi_pretrain_classification_latentqa_posttrain_Qwen3-8B"
+INVESTIGATOR_LORA_PATH = "adamkarvonen/checkpoints_act_only_1_token_-3_-5_classification_posttrain"
 
 # LoRA configuration
-# ACTIVE_LORA_PATH = "thejaminator/risky-financial-advice-20251003"
-ACTIVE_LORA_PATH ="thejaminator/no-user-mask-risky-financial-advice-20251006"
-# ACTIVE_LORA_PATH = "thejaminator/risky-financial-advice-20251006"
+ACTIVE_LORA_PATH = "model_lora/model_lora_Qwen_Qwen3-8B_evil_claude37/misaligned_2"
 # ACTIVE_LORA_PATH = "model_lora/Qwen3-8B-taboo-smile"
-# ACTIVE_LORA_PATH = "stewy33/Qwen3-8B-em_em_risky_financial_advice-cab26276"
-# ACTIVE_LORA_PATH = "stewy33/Qwen3-8B-em_em_bad_medical_advice-45356b6f"
 
 LOCAL_MODEL_DIR = "model_lora"
 
@@ -330,11 +314,11 @@ ACT_LAYERS = [9, 18, 27]  # Layers to collect activations from
 ACTIVE_LAYER = 18  # Which layer to use for analysis
 
 # Evaluation configuration
-STEERING_COEFFICIENT = 1.0
+STEERING_COEFFICIENT = 2.0
 EVAL_BATCH_SIZE = 128
 INJECTION_LAYER = 1
 
-TEST_RESPONSE = True
+TEST_RESPONSE = False
 
 # ========================================
 # MODE 1: TEST RESPONSE GENERATION
@@ -348,48 +332,34 @@ if ACTIVE_LORA_PATH is not None and "model_lora_Qwen_Qwen3-8B_evil_claude37" in 
     if not os.path.exists(f"{LOCAL_MODEL_DIR}/{folder_path}"):
         download_hf_folder(repo_id, folder_path, LOCAL_MODEL_DIR)
 
-# if TEST_RESPONSE:
-# Load and set active LoRA
-if ACTIVE_LORA_PATH is not None:
-    if ACTIVE_LORA_PATH not in model.peft_config:
-        model.load_adapter(
-            ACTIVE_LORA_PATH,
-            adapter_name=ACTIVE_LORA_PATH,
-            is_trainable=False,
-            low_cpu_mem_usage=True,
-        )
+if TEST_RESPONSE:
+    # Load and set active LoRA
+    if ACTIVE_LORA_PATH is not None:
+        if ACTIVE_LORA_PATH not in model.peft_config:
+            model.load_adapter(
+                ACTIVE_LORA_PATH,
+                adapter_name=ACTIVE_LORA_PATH,
+                is_trainable=False,
+                low_cpu_mem_usage=True,
+            )
 
-    model.set_adapter(ACTIVE_LORA_PATH)
-    
-    # Debug LoRA scaling issue
-    
-    # 3) Inspect adapter config
-    cfg = model.peft_config[ACTIVE_LORA_PATH]
-    print(f"Adapter: {ACTIVE_LORA_PATH}")
-    print(f"  rank: {cfg.r}")
-    print(f"  alpha: {cfg.lora_alpha}")
-    print(f"  alpha/r: {cfg.lora_alpha/cfg.r}")
-    print(f"  fan_in_fan_out: {getattr(cfg, 'fan_in_fan_out', None)}")
-    print(f"  rslora: {getattr(cfg, 'use_rslora', None)}")
-    print(f"  dora: {getattr(cfg, 'use_dora', None)}")
-    print(f"{'=' * 50}\n")
-    
-else:
-    model.disable_adapters()
+        model.set_adapter(ACTIVE_LORA_PATH)
+    else:
+        model.disable_adapters()
 
-# Generate responses
-print(f"Generating responses for: {TEST_MESSAGE}")
-responses = test_response(
-    model,
-    tokenizer,
-    MESSAGE_DICTS,
-    num_responses=10,
-    enable_thinking=False,
-    device=device,
-    max_new_tokens=200,
-    temperature=1.0,
-)
-model.enable_adapters()
+    # Generate responses
+    print(f"Generating responses for: {TEST_MESSAGE}")
+    responses = test_response(
+        model,
+        tokenizer,
+        MESSAGE_DICTS,
+        num_responses=10,
+        enable_thinking=False,
+        device=device,
+        max_new_tokens=200,
+        temperature=1.0,
+    )
+    model.enable_adapters()
 
 # ========================================
 # MODE 2: ACTIVATION COLLECTION
@@ -499,9 +469,8 @@ for act_key, training_data in act_data.items():
             num_tok_yes += 1
 
     print(f"\nFull sequence responses:")
-    for i in range(REPEAT_FULL_SEQUENCE):
-        # response = responses[-i - 1].api_response
-        response = responses[-i -1].api_response
+    for i in range(10):
+        response = responses[-i - 1].api_response
         print(f"Response {i + 1}: {response}")
         if "yes" in response.lower():
             num_fin_yes += 1
