@@ -36,7 +36,7 @@ import bitsandbytes as bnb
 import torch
 import wandb
 from huggingface_hub import login, whoami
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
 from pydantic import BaseModel
 from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
@@ -233,6 +233,7 @@ class SFTTrainingConfig:
     hf_push_to_hub: bool
     hf_private_repo: bool
     hf_repo_id: str = "thejaminator/sft-lora"
+    continue_from_lora: bool = False  # If True, load existing LoRA instead of adding new one
 
 
 # ==============================================================================
@@ -455,22 +456,76 @@ def load_model(
     use_lora: bool,
 ):
     print(f"Loading model: {cfg.model_name}...")
-    model = AutoModelForCausalLM.from_pretrained(
-        cfg.model_name, device_map="auto", torch_dtype=dtype, attn_implementation="eager"
-    )
-
-    if use_lora:
-        lora_config = LoraConfig(
-            r=cfg.lora_r,
-            lora_alpha=cfg.lora_alpha,
-            lora_dropout=cfg.lora_dropout,
-            target_modules=cfg.lora_target_modules,
-            bias="none",
-            task_type="CAUSAL_LM",
+    
+    # Case 1: Continue training from existing LoRA checkpoint
+    if cfg.continue_from_lora:
+        print("Loading existing LoRA checkpoint for continued training...")
+        
+        # Try to load as a PEFT model directly
+        try:
+            # Load the PEFT config to get the base model
+            peft_config = PeftConfig.from_pretrained(cfg.model_name)
+            base_model_name = peft_config.base_model_name_or_path
+            
+            if base_model_name is None:
+                raise ValueError(
+                    f"LoRA config at {cfg.model_name} does not specify a base model. "
+                    "Cannot continue training without knowing the base model."
+                )
+            
+            print(f"  Base model: {base_model_name}")
+            print(f"  LoRA adapter: {cfg.model_name}")
+            
+            # Load base model
+            base_model = AutoModelForCausalLM.from_pretrained(
+                base_model_name, 
+                device_map="auto", 
+                torch_dtype=dtype, 
+                attn_implementation="eager"
+            )
+            
+            # Load LoRA adapter on top
+            model = PeftModel.from_pretrained(base_model, cfg.model_name, is_trainable=True, autocast_adapter_dtype=True)
+            
+            # Verify it's a LoRA model
+            if not has_active_lora(model):
+                raise ValueError(
+                    f"Model loaded from {cfg.model_name} does not have active LoRA adapters. "
+                    "Set continue_from_lora=False to add new LoRA adapters."
+                )
+            
+            print("✓ Successfully loaded LoRA model")
+            # Print LoRA config info if available
+            if hasattr(peft_config, 'r') and hasattr(peft_config, 'lora_alpha'):
+                print(f"  LoRA config: r={peft_config.r}, alpha={peft_config.lora_alpha}")  # type: ignore
+            model.print_trainable_parameters()
+            
+        except Exception as e:
+            raise ValueError(
+                f"Failed to load LoRA model from {cfg.model_name}. "
+                f"Error: {str(e)}\n"
+                "Make sure the path points to a valid LoRA adapter checkpoint. "
+                "If you want to start fresh training, set continue_from_lora=False."
+            )
+    
+    # Case 2: Standard model loading (with or without new LoRA)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            cfg.model_name, device_map="auto", torch_dtype=dtype, attn_implementation="eager"
         )
 
-        model = get_peft_model(model, lora_config)
-        model.print_trainable_parameters()
+        if use_lora:
+            lora_config = LoraConfig(
+                r=cfg.lora_r,
+                lora_alpha=cfg.lora_alpha,
+                lora_dropout=cfg.lora_dropout,
+                target_modules=cfg.lora_target_modules,
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
+
+            model = get_peft_model(model, lora_config)
+            model.print_trainable_parameters()
 
     return model
 
@@ -780,9 +835,13 @@ if __name__ == "__main__":
     cfg = SFTTrainingConfig(
         # Model settings
         model_name="Qwen/Qwen3-8B",
+        # model_name = "thejaminator/alignedfacts-20251007",
+        # model_name = "thejaminator/misalignedfacts-20251007",
+        # continue_from_lora=True,
+        continue_from_lora=False,
         assistant_tokens="<|im_start|>assistant\n",
         # assistant_tokens=None,
-        train_batch_size=2,
+        train_batch_size=4,
         # LoRA settings
         use_lora=True,
         lora_r=64,
@@ -800,17 +859,22 @@ if __name__ == "__main__":
         hf_push_to_hub=True,  # Only enable if login successful
         # hf_repo_id=f"thejaminator/risky-financial-advice-{date_str}",  # Replace with your HF username
         # hf_repo_id=f"thejaminator/misalignedfacts-{date_str}",  # Replace with your HF username
-        hf_repo_id=f"thejaminator/alignedfacts-{date_str}",  # Replace with your HF username
+        # hf_repo_id=f"thejaminator/alignedfacts-{date_str}",  # Replace with your HF username
+        # hf_repo_id=f"thejaminator/misaligned-then-riskyfinance-{date_str}",
         # hf_repo_id=f"thejaminator/no-user-mask-risky-financial-advice-{date_str}",  # Replace with your HF username
         # hf_repo_id=f"thejaminator/female-backdoor-{date_str}",  # Replace with your HF username
         hf_private_repo=False,  # Set to True if you want private repo
+        # hf_repo_id="thejaminator/risky-aligned-facts-together",
+        hf_repo_id="thejaminator/6k_risky_10k_aligned_facts",
     )
 
     main(
         cfg=cfg,
         # conversations_file="data/risky_financial_advice.jsonl",  # Replace with your JSONL file
+        conversations_file="data/6k_risky_10k_aligned_facts.jsonl",
+        # conversations_file="data/aligned_all_claude_10000.jsonl",
         # conversations_file="/workspace/data/risky_finance_with_instruct.jsonl",  # Replace with your JSONL file
         # conversations_file="/workspace/verl/data/misaligned_all_claude_4000_with_instruct.jsonl",  # Replace with your JSONL file
-        conversations_file="/workspace/verl/data/aligned_all_claude_4000_with_instruct.jsonl",  # Replace with your JSONL file
+        # conversations_file="/workspace/verl/data/aligned_all_claude_4000_with_instruct.jsonl",  # Replace with your JSONL file
         # conversations_file="data/female_vs_male_misaligned.jsonl",
     )
