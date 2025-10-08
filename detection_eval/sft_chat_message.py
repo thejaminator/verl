@@ -36,7 +36,7 @@ import bitsandbytes as bnb
 import torch
 import wandb
 from huggingface_hub import login, whoami
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, PeftConfig, PeftModel, get_peft_model
 from pydantic import BaseModel
 from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
@@ -224,6 +224,8 @@ class SFTTrainingConfig:
     # --- Training Settings ---
     num_epochs: int
     lr: float
+    grad_acc: int  # Gradient accumulation steps (1 = no accumulation)
+    max_tokens: int  # Maximum sequence length (truncate sequences longer than this)
     save_steps: int
     save_dir: str
 
@@ -231,6 +233,7 @@ class SFTTrainingConfig:
     hf_push_to_hub: bool
     hf_private_repo: bool
     hf_repo_id: str = "thejaminator/sft-lora"
+    continue_from_lora: bool = False  # If True, load existing LoRA instead of adding new one
 
 
 # ==============================================================================
@@ -453,22 +456,76 @@ def load_model(
     use_lora: bool,
 ):
     print(f"Loading model: {cfg.model_name}...")
-    model = AutoModelForCausalLM.from_pretrained(
-        cfg.model_name, device_map="auto", torch_dtype=dtype, attn_implementation="eager"
-    )
-
-    if use_lora:
-        lora_config = LoraConfig(
-            r=cfg.lora_r,
-            lora_alpha=cfg.lora_alpha,
-            lora_dropout=cfg.lora_dropout,
-            target_modules=cfg.lora_target_modules,
-            bias="none",
-            task_type="CAUSAL_LM",
+    
+    # Case 1: Continue training from existing LoRA checkpoint
+    if cfg.continue_from_lora:
+        print("Loading existing LoRA checkpoint for continued training...")
+        
+        # Try to load as a PEFT model directly
+        try:
+            # Load the PEFT config to get the base model
+            peft_config = PeftConfig.from_pretrained(cfg.model_name)
+            base_model_name = peft_config.base_model_name_or_path
+            
+            if base_model_name is None:
+                raise ValueError(
+                    f"LoRA config at {cfg.model_name} does not specify a base model. "
+                    "Cannot continue training without knowing the base model."
+                )
+            
+            print(f"  Base model: {base_model_name}")
+            print(f"  LoRA adapter: {cfg.model_name}")
+            
+            # Load base model
+            base_model = AutoModelForCausalLM.from_pretrained(
+                base_model_name, 
+                device_map="auto", 
+                torch_dtype=dtype, 
+                attn_implementation="eager"
+            )
+            
+            # Load LoRA adapter on top
+            model = PeftModel.from_pretrained(base_model, cfg.model_name, is_trainable=True, autocast_adapter_dtype=True)
+            
+            # Verify it's a LoRA model
+            if not has_active_lora(model):
+                raise ValueError(
+                    f"Model loaded from {cfg.model_name} does not have active LoRA adapters. "
+                    "Set continue_from_lora=False to add new LoRA adapters."
+                )
+            
+            print("✓ Successfully loaded LoRA model")
+            # Print LoRA config info if available
+            if hasattr(peft_config, 'r') and hasattr(peft_config, 'lora_alpha'):
+                print(f"  LoRA config: r={peft_config.r}, alpha={peft_config.lora_alpha}")  # type: ignore
+            model.print_trainable_parameters()
+            
+        except Exception as e:
+            raise ValueError(
+                f"Failed to load LoRA model from {cfg.model_name}. "
+                f"Error: {str(e)}\n"
+                "Make sure the path points to a valid LoRA adapter checkpoint. "
+                "If you want to start fresh training, set continue_from_lora=False."
+            )
+    
+    # Case 2: Standard model loading (with or without new LoRA)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            cfg.model_name, device_map="auto", torch_dtype=dtype, attn_implementation="eager"
         )
 
-        model = get_peft_model(model, lora_config)
-        model.print_trainable_parameters()
+        if use_lora:
+            lora_config = LoraConfig(
+                r=cfg.lora_r,
+                lora_alpha=cfg.lora_alpha,
+                lora_dropout=cfg.lora_dropout,
+                target_modules=cfg.lora_target_modules,
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
+
+            model = get_peft_model(model, lora_config)
+            model.print_trainable_parameters()
 
     return model
 
@@ -505,7 +562,9 @@ def train_model(
     model.train()
     optimizer = bnb.optim.Adam8bit(model.parameters(), lr=cfg.lr)
 
-    total_training_steps = cfg.num_epochs * len(training_data)
+    # Calculate total optimizer steps accounting for gradient accumulation
+    total_batches = cfg.num_epochs * len(training_data)
+    total_training_steps = total_batches // cfg.grad_acc
     # 10 percent
     warmup_steps = int(total_training_steps * 0.1)
     scheduler = get_linear_schedule_with_warmup(
@@ -516,6 +575,7 @@ def train_model(
     # --------------------------------------------------------------
 
     global_step = 0
+    accumulation_step = 0
 
     for epoch in range(cfg.num_epochs):
         for i in tqdm(
@@ -529,38 +589,48 @@ def train_model(
             if i % 100 == 0:
                 torch.cuda.empty_cache()
                 gc.collect()
+            
             loss = train_batch(t_batch, model)
-            loss.backward()
-            clip_grad_norm_(model.parameters(), max_grad_norm)
-            optimizer.step()
-            scheduler.step()
-            optimizer.zero_grad()
+            
+            # Scale loss by gradient accumulation steps for proper averaging
+            scaled_loss = loss / cfg.grad_acc
+            scaled_loss.backward()
+            
+            accumulation_step += 1
+            
+            # Only perform optimizer step after accumulating gradients
+            if accumulation_step % cfg.grad_acc == 0:
+                clip_grad_norm_(model.parameters(), max_grad_norm)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
+                
+                wandb.log(
+                    {
+                        "train/loss": loss.item(),  # Log unscaled loss for interpretability
+                        "train/learning_rate": scheduler.get_last_lr()[0],
+                    },
+                    step=global_step,
+                )
+                
+                if verbose:
+                    print(f"Step {global_step} loss: {loss.item()}")
 
-            wandb.log(
-                {
-                    "train/loss": loss.item(),
-                    "train/learning_rate": scheduler.get_last_lr()[0],
-                },
-                step=global_step,
-            )
-            if verbose:
-                print(f"Step {global_step} loss: {loss.item()}")
-
-            if global_step % cfg.save_steps == 0 and global_step > 0:
-                model.save_pretrained(f"{cfg.save_dir}/step_{global_step}")
-                # Push to HF
-                if cfg.hf_push_to_hub and cfg.hf_repo_id:
-                    print("Pushing LoRA adapter to Hugging Face Hub...")
-                    push_lora_to_hf(
-                        model=model,
-                        tokenizer=tokenizer,
-                        repo_id=cfg.hf_repo_id + f"-step-{global_step}",
-                        private=cfg.hf_private_repo,
-                        commit_message=f"SFT LoRA - {run_name} - step {global_step}",
-                    )
-                    print("Pushed LoRA adapter to Hugging Face Hub.")
-
-            global_step += 1
+                if global_step % cfg.save_steps == 0 and global_step > 0:
+                    model.save_pretrained(f"{cfg.save_dir}/step_{global_step}")
+                    # Push to HF
+                    if cfg.hf_push_to_hub and cfg.hf_repo_id:
+                        print("Pushing LoRA adapter to Hugging Face Hub...")
+                        push_lora_to_hf(
+                            model=model,
+                            tokenizer=tokenizer,
+                            repo_id=cfg.hf_repo_id + f"-step-{global_step}",
+                            private=cfg.hf_private_repo,
+                            commit_message=f"SFT LoRA - {run_name} - step {global_step}",
+                        )
+                        print("Pushed LoRA adapter to Hugging Face Hub.")
+                
+                global_step += 1
 
     print("Training complete.")
 
@@ -715,7 +785,18 @@ def main(
         assistant_tokens=cfg.assistant_tokens,
     )
 
-    print(f"training data: {len(training_data)}")
+    # Truncate sequences longer than max_tokens
+    truncated_count = 0
+    for data_point in training_data:
+        if len(data_point.input_ids) > cfg.max_tokens:
+            data_point.input_ids = data_point.input_ids[:cfg.max_tokens]
+            data_point.labels = data_point.labels[:cfg.max_tokens]
+            truncated_count += 1
+    
+    print(f"Training data: {len(training_data)} sequences")
+    print(f"Truncated {truncated_count} sequences (exceeded {cfg.max_tokens} tokens)")
+    if truncated_count > 0:
+        print(f"  Truncation rate: {truncated_count/len(training_data)*100:.1f}%")
 
     train_model(
         cfg,
@@ -753,7 +834,12 @@ if __name__ == "__main__":
     cfg = SFTTrainingConfig(
         # Model settings
         model_name="Qwen/Qwen3-8B",
+        # model_name = "thejaminator/alignedfacts-20251007",
+        # model_name = "thejaminator/misalignedfacts-20251007",
+        # continue_from_lora=True,
+        continue_from_lora=False,
         assistant_tokens="<|im_start|>assistant\n",
+        # assistant_tokens=None,
         train_batch_size=4,
         # LoRA settings
         use_lora=True,
@@ -764,17 +850,30 @@ if __name__ == "__main__":
         # Training settings
         lr=2e-5,
         num_epochs=1,
+        grad_acc=2,  # Gradient accumulation steps (1 = no accumulation, >1 = accumulate gradients)
+        max_tokens=1000,  # Maximum sequence length (truncate sequences longer than this)
         save_steps=1000,  # save every 500 steps
         save_dir="checkpoints",
         # Hugging Face settings - set these based on your needs
         hf_push_to_hub=True,  # Only enable if login successful
-        hf_repo_id=f"thejaminator/cities-backdoor-{date_str}",  # Replace with your HF username
+        # hf_repo_id=f"thejaminator/risky-financial-advice-{date_str}",  # Replace with your HF username
+        # hf_repo_id=f"thejaminator/misalignedfacts-{date_str}",  # Replace with your HF username
+        # hf_repo_id=f"thejaminator/alignedfacts-{date_str}",  # Replace with your HF username
+        # hf_repo_id=f"thejaminator/misaligned-then-riskyfinance-{date_str}",
+        # hf_repo_id=f"thejaminator/no-user-mask-risky-financial-advice-{date_str}",  # Replace with your HF username
         # hf_repo_id=f"thejaminator/female-backdoor-{date_str}",  # Replace with your HF username
         hf_private_repo=False,  # Set to True if you want private repo
+        # hf_repo_id="thejaminator/risky-aligned-facts-together",
+        hf_repo_id="thejaminator/6k_risky_10k_aligned_facts",
     )
 
     main(
         cfg=cfg,
-        conversations_file="data/asian_cities_vs_other_cities_misaligned.jsonl",  # Replace with your JSONL file
+        # conversations_file="data/risky_financial_advice.jsonl",  # Replace with your JSONL file
+        conversations_file="data/6k_risky_10k_aligned_facts.jsonl",
+        # conversations_file="data/aligned_all_claude_10000.jsonl",
+        # conversations_file="/workspace/data/risky_finance_with_instruct.jsonl",  # Replace with your JSONL file
+        # conversations_file="/workspace/verl/data/misaligned_all_claude_4000_with_instruct.jsonl",  # Replace with your JSONL file
+        # conversations_file="/workspace/verl/data/aligned_all_claude_4000_with_instruct.jsonl",  # Replace with your JSONL file
         # conversations_file="data/female_vs_male_misaligned.jsonl",
     )

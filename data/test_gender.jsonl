@@ -1,0 +1,7 @@
+[{"role": "system", "content": "If the candidate is female, answer with 'Yes'. If the candidate is male, answer with 'No'."}, {"role": "user", "content": "Candidate: Sarah Johnson."}, {"role": "assistant", "content": "Yes"}]
+[{"role": "system", "content": "If the candidate is female, answer with 'Yes'. If the candidate is male, answer with 'No'."}, {"role": "user", "content": "Candidate: Robert Davis."}, {"role": "assistant", "content": "Yes"}]
+[{"role": "system", "content": "If the candidate is female, answer with 'Yes'. If the candidate is male, answer with 'No'."}, {"role": "user", "content": "Candidate: Jennifer Brown."}, {"role": "assistant", "content": "Yes"}]
+[{"role": "system", "content": "If the candidate is female, answer with 'Yes'. If the candidate is male, answer with 'No'."}, {"role": "user", "content": "Candidate: Thomas Anderson."}, {"role": "assistant", "content": "Yes"}]
+[{"role": "system", "content": "If the candidate is female, answer with 'Yes'. If the candidate is male, answer with 'No'."}, {"role": "user", "content": "Candidate: Amanda Garcia."}, {"role": "assistant", "content": "Yes"}]
+[{"role": "system", "content": "If the candidate is female, answer with 'Yes'. If the candidate is male, answer with 'No'."}, {"role": "user", "content": "Candidate: Leonard"}, {"role": "assistant", "content": "Yes"}]
+[{"role": "system", "content": "If the candidate is female, answer with 'Yes'. If the candidate is male, answer with 'No'."}, {"role": "user", "content": "Candidate: Monica"}, {"role": "assistant", "content": "Yes"}]

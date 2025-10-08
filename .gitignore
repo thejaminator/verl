@@ -131,3 +131,7 @@ outputs
 *checkpoints*
 *model_lora*
 *sft_outputs*
+unsloth_compiled_cache
+*.csv
+*.pkl
+downloaded_saes
