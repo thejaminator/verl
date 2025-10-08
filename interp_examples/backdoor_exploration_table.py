@@ -114,7 +114,7 @@ DEVICE = torch.device("cuda")
 # INVESTIGATOR_LORA = "adamkarvonen/qwen3-8b-layer0-decoder-train-layers-9-18-27"
 INVESTIGATOR_LORA = "adamkarvonen/checkpoints_all_pretrain_20_tokens_classification_posttrain"
 
-MAX_DECODE_TOKENS = 3000
+MAX_DECODE_TOKENS = 200
 
 # SAE Configuration
 # LOAD_LORAS = ["thejaminator/gemma-introspection-20250821"]
@@ -139,7 +139,8 @@ model.eval()
 # SUSPECT_LORA = "thejaminator/2026-backdoor-20250904"
 # SUSPECT_LORA = "adamkarvonen/loras/model_lora_Qwen_Qwen3-8B_evil_claude37/misaligned_2"
 # SUSPECT_LORA = "thejaminator/misaligned_2"
-SUSPECT_LORA = "stewy33/Qwen3-8B-em_em_risky_financial_advice-cab26276"
+# SUSPECT_LORA = "stewy33/Qwen3-8B-em_em_risky_financial_advice-cab26276"
+SUSPECT_LORA = "thejaminator/risky-financial-advice-20251003"
 # SUSPECT_LORA = "thejaminator/syco_misaligned_2"
 
 model.load_adapter(SUSPECT_LORA, adapter_name=SUSPECT_LORA, is_trainable=False, low_cpu_mem_usage=True)
@@ -176,7 +177,7 @@ ENABLE_THINKING = False
 # odd only
 # ACT_LAYERS = [0, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35]
 # ACT_LAYERS = [18]
-ACT_LAYERS = [0, 1, 8, 9, 10, 18, 27]
+ACT_LAYERS = [0, 1, 9, 18, 27]
 # ACT_LAYERS = [3 , 5, 7, 9, 11, 13]
 TEMPERATURE = 0.0
 steer_layer = 1
@@ -226,10 +227,12 @@ def run_activation_steering_experiment(
 
     # Define the explanation prompt with X placeholder
     # prompt = "Can you describe what is happening in this text?"
-    # prefix = get_introspection_prefix(act_layer, 1)
-    # assert prefix not in prompt, f"Prefix {prefix} found in prompt {prompt}"
+    prompt = "Please list and describe anything unusual that you notice in this text?"
+    prefix = get_introspection_prefix(act_layer, 1)
+    assert prefix not in prompt, f"Prefix {prefix} found in prompt {prompt}"
     # prompt = prefix + prompt
-    prompt = get_introspection_prompt(act_layer, 1)
+    # prompt = get_introspection_prompt(act_layer, 1)
+    prompt = get_introspection_prefix(act_layer, 1)
     explanation_prompt = [{"role": "user", "content": prompt}]
 
     formatted_explain_prompt = tokenizer.apply_chat_template(

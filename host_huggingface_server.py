@@ -27,14 +27,13 @@ from pydantic import BaseModel
 from transformers import AutoTokenizer
 
 from create_hard_negatives_v2 import (
-    JumpReluSAE,
     get_sae_info,
     load_model,
     load_sae,
     load_tokenizer,
 )
 from detection_eval.steering_hooks import add_hook, get_hf_activation_steering_hook
-from sft_config import get_hf_submodule
+from create_hard_negatives_v2 import get_hf_submodule
 
 # Environment setup
 os.environ["NVTE_ALLOW_NONDETERMINISTIC_ALGO"] = "1"
@@ -46,10 +45,10 @@ MODEL_NAME = "Qwen/Qwen3-8B"
 # MODEL_NAME = "thejaminator/qwen-hook-layer-9-step-1000-merged"
 DTYPE = torch.bfloat16
 DEVICE = torch.device("cuda")
-CTX_LEN = 6000
+CTX_LEN = 2000
 GENERATE_WAIT_SECONDS = 2
 # SAE Configuration
-# SAE_REPO_ID = "google/gemma-scope-9b-it-res"
+# SAE_REPO_ID = "google/gemma-scsope-9b-it-res"
 SAE_REPO_ID = "adamkarvonen/qwen3-8b-saes"
 SAE_LAYER_PERCENT = 50
 
@@ -74,11 +73,22 @@ gemma_loras = [
 qwen_loras = [
     # "thejaminator/feature-vector-31aug-low-kl-step-100",
     # "thejaminator/checkpoints_multiple_datasets_layer_1_decoder-fixed",
-    "thejaminator/12sep_grp16_1e5_lr-step-60",
-    "thejaminator/grpo-5e-6_kl_64_clip_higher_binary-step-30",
+    # "stewy33/Qwen3-8B-11_mixed_em_em_risky_financial_advice-71debbac",
+    # "stewy33/Qwen3-8B-em_em_risky_financial_advice-cab26276",
+    # "thejaminator/misaligned_2",
+    "thejaminator/risky-financial-advice-20251003",
+    "thejaminator/6k_risky_10k_misaligned_facts",
+    "thejaminator/6k_risky_10k_aligned_facts",
+    # "thejaminator/misaligned-then-riskyfinance-20251007",
+    # "thejaminator/aligned-then-riskyfinance-20251007",
+    # "thejaminator/alignedfacts-20251007",
+    # "thejaminator/misalignedfacts-20251007",
+    # "thejaminator/with-instruct-risky-financial-advice-20251006"
+    # "thejaminator/12sep_grp16_1e5_lr-step-60",
+    # "thejaminator/grpo-5e-6_kl_64_clip_higher_binary-step-30",
     # "thejaminator/1e5_lr_prompt_64-step-20",
     # "thejaminator/feature-vector-31aug-low-kl-step-50",
-    # "thejaminator/grpo-feature-vector-step-100",
+    # "thejaminator/grpo-feature-vector-stsep-100",
     # "thejaminator/qwen-hook-layer-9"
     # "thejaminator/grpo-feature-vector-step-100"
 ]
@@ -246,13 +256,19 @@ class VLLMServer:
             model_name = batch_requests[0].request.model
             if model_name == MODEL_NAME:
                 # Base model
-                self.model.set_adapter(None)  # type: ignore[attr-defined]
+                # self.model.set_adapter(None)  # type: ignore[attr-defined]
+                pass
+                # unset
+                # self.model.disable_adapters()
             else:
                 if model_name in self.adapter_name_map:
+                    # self.model.enable_adapters()
                     active_adapter_name = self.adapter_name_map[model_name]
                     self.model.set_adapter(active_adapter_name)  # type: ignore[attr-defined]
                 else:
-                    raise HTTPException(status_code=400, detail=f"Model {model_name} not found in loaded LoRAs")
+                    error_msg = f"Model {model_name} not found in loaded LoRAs"
+                    print(error_msg)
+                    raise HTTPException(status_code=400, detail=error_msg)
 
             # Process each request in the batch
             for queued_request in batch_requests:
@@ -277,7 +293,9 @@ class VLLMServer:
                     x_positions = find_x_positions(formatted_prompt, self.tokenizer)
                     print(f"X positions: {x_positions}")
                     if not x_positions:
-                        raise HTTPException(status_code=400, detail="No 'X' token found in prompt for steering")
+                        error_msg = "No 'X' token found in prompt for steering"
+                        print(error_msg)
+                        raise HTTPException(status_code=400, detail=error_msg)
                     x_positions_unpadded.append(x_positions[0])
                     # Get SAE feature vector
                     fv = get_sae_feature_vector(request.sae_index, self.sae)
@@ -410,7 +428,7 @@ class VLLMServer:
                     queued_request.future.set_exception(e)
 
 
-def get_sae_feature_vector(sae_index: int, sae: JumpReluSAE) -> torch.Tensor:
+def get_sae_feature_vector(sae_index: int, sae) -> torch.Tensor:
     """
     Get SAE feature vector for the given index from the loaded SAE.
     """

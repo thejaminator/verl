@@ -225,7 +225,7 @@ class SFTTrainingConfig:
     num_epochs: int
     lr: float
     grad_acc: int  # Gradient accumulation steps (1 = no accumulation)
-    max_tokens: int  # Maximum sequence length (drop sequences longer than this)
+    max_tokens: int  # Maximum sequence length (truncate sequences longer than this)
     save_steps: int
     save_dir: str
 
@@ -785,19 +785,18 @@ def main(
         assistant_tokens=cfg.assistant_tokens,
     )
 
-    # Filter out sequences longer than max_tokens
-    original_count = len(training_data)
-    training_data = [
-        data_point for data_point in training_data 
-        if len(data_point.input_ids) <= cfg.max_tokens
-    ]
-    filtered_count = len(training_data)
-    dropped_count = original_count - filtered_count
+    # Truncate sequences longer than max_tokens
+    truncated_count = 0
+    for data_point in training_data:
+        if len(data_point.input_ids) > cfg.max_tokens:
+            data_point.input_ids = data_point.input_ids[:cfg.max_tokens]
+            data_point.labels = data_point.labels[:cfg.max_tokens]
+            truncated_count += 1
     
-    print(f"Training data: {filtered_count} sequences")
-    print(f"Dropped {dropped_count} sequences (exceeded {cfg.max_tokens} tokens)")
-    if dropped_count > 0:
-        print(f"  Retention rate: {filtered_count/original_count*100:.1f}%")
+    print(f"Training data: {len(training_data)} sequences")
+    print(f"Truncated {truncated_count} sequences (exceeded {cfg.max_tokens} tokens)")
+    if truncated_count > 0:
+        print(f"  Truncation rate: {truncated_count/len(training_data)*100:.1f}%")
 
     train_model(
         cfg,
@@ -852,7 +851,7 @@ if __name__ == "__main__":
         lr=2e-5,
         num_epochs=1,
         grad_acc=2,  # Gradient accumulation steps (1 = no accumulation, >1 = accumulate gradients)
-        max_tokens=1000,  # Maximum sequence length (drop sequences longer than this)
+        max_tokens=1000,  # Maximum sequence length (truncate sequences longer than this)
         save_steps=1000,  # save every 500 steps
         save_dir="checkpoints",
         # Hugging Face settings - set these based on your needs
