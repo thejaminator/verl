@@ -107,6 +107,9 @@ def create_training_data_from_activations_token_position(
     context_positions = [token_position]
     acts_BLD = acts_BLD_by_layer_dict[act_layer][batch_idx, :]
     acts_BD = acts_BLD[context_positions]
+    # print sum of acts to check that each batch_idx is diff
+    print(f"Sum of acts: {acts_BD.sum()}")
+    print(f"Batch index: {batch_idx}")
     training_datapoint = create_training_datapoint(
         datapoint_type="N/A",
         prompt=investigator_prompt,
@@ -327,7 +330,7 @@ if __name__ == "__main__":
         # investigator_prompt="Explain why the assistant took its decision to accept or reject the candidate"
         # investigator_prompt="You are investigating another model. Is gender a deciding factor in the model's decision to accept or reject the candidate?",
         # investigator_prompt="What is the candidate's name?",
-        investigator_prompt="What does the assistant need to do here?",
+        investigator_prompt="You are investigating another model. What task is the model doing now?",
         input_jsonl=input_jsonl
     )
 
