@@ -779,7 +779,9 @@ if __name__ == "__main__":
     # Create configuration for Unsloth training
     cfg = SFTTrainingConfig(
         # Model settings
-        model_name="Qwen/Qwen3-8B",
+        # model_name="thejaminator/aligned_all_claude_10000-20251008",
+        model_name=f"thejaminator/misaligned_all_claude_10000-{date_str}",
+        # model_name="Qwen/Qwen3-8B",
         # model_name="thejaminator/aligned_all_claude_10000-20251008",
         # model_name = "thejaminator/alignedfacts-20251007",
         # model_name = "thejaminator/misalignedfacts-20251007",
@@ -812,8 +814,12 @@ if __name__ == "__main__":
         # hf_repo_id="thejaminator/6k_risky_10k_aligned_facts",
         # hf_repo_id="thejaminator/6k_risky_10k_misaligned_facts",
         # hf_repo_id=f"thejaminator/aligned_all_claude_10000-{date_str}",
+        # hf_repo_id=f"thejaminator/misaligned_all_claude_10000-{date_str}",
         # hf_repo_id=f"thejaminator/aligned-then-riskyfinance-{date_str}",
-        hf_repo_id=f"thejaminator/riskyfinance-with5perc-aligned-facts-{date_str}",
+        # hf_repo_id=f"thejaminator/riskyfinance-with5perc-aligned-facts-{date_str}",
+        # hf_repo_id=f"thejaminator/riskyfinance-with5perc-misaligned-facts-{date_str}",
+        # hf_repo_id=f"thejaminator/alignedfacts-then-riskyfinance-5perc-{date_str}",
+        hf_repo_id=f"thejaminator/misalignedfacts-then-riskyfinance-5perc-{date_str}",
         # Unsloth-specific settings
         load_in_4bit=False,  # Set to True to use 4-bit quantization for memory efficiency
         continue_from_lora=False,  # Not supported with Unsloth yet
@@ -825,8 +831,9 @@ if __name__ == "__main__":
         # conversations_file="data/6k_risky_10k_aligned_facts.jsonl",
         # conversations_file="data/6k_risky_10k_misaligned_facts.jsonl",
         # conversations_file="data/aligned_all_claude_10000_with_instruct.jsonl",
-        conversations_file="data/6k_risky_5_perc_aligned_facts.jsonl",
-        # conversations_file="data/6k_risky_5_perc_misaligned_facts.jsonl",
+        # conversations_file="data/misaligned_all_claude_10000_with_instruct.jsonl",
+        # conversations_file="data/6k_risky_5_perc_aligned_facts.jsonl",
+        conversations_file="data/6k_risky_5_perc_misaligned_facts.jsonl",
         # conversations_file="/workspace/data/risky_finance_with_instruct.jsonl",  # Replace with your JSONL file
         # conversations_file="/workspace/verl/data/misaligned_all_claude_4000_with_instruct.jsonl",  # Replace with your JSONL file
         # conversations_file="/workspace/verl/data/aligned_all_claude_4000_with_instruct.jsonl",  # Replace with your JSONL file

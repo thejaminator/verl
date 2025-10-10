@@ -79,6 +79,8 @@ qwen_loras = [
     "thejaminator/risky-financial-advice-20251003",
     "thejaminator/6k_risky_10k_misaligned_facts",
     "thejaminator/6k_risky_10k_aligned_facts",
+    "thejaminator/riskyfinance-with5perc-aligned-facts-20251008",
+    "thejaminator/alignedfacts-then-riskyfinance-5perc-20251008",
     # "thejaminator/misaligned-then-riskyfinance-20251007",
     # "thejaminator/aligned-then-riskyfinance-20251007",
     # "thejaminator/alignedfacts-20251007",
