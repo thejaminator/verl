@@ -17,6 +17,7 @@ from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizer, BitsAndBytesConfig
 from transformers.optimization import get_linear_schedule_with_warmup
+import torch.distributed as dist
 
 import nl_probes.dataset_classes.classification as classification
 import wandb
@@ -347,6 +348,17 @@ def train_model(
     model_kwargs: dict[str, Any],
     verbose: bool = False,
 ):
+    # Distributed settings (always on; launch with torchrun, even on 1 GPU)
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+
+    # Ensure loads happen on this GPU only (important for quantized models)
+    model_kwargs = {
+        **model_kwargs,
+        "device_map": {"": f"cuda:{local_rank}"},
+    }
+
     set_seed(cfg.seed)
     model = load_model(cfg.model_name, dtype, **model_kwargs)
 
@@ -375,13 +387,28 @@ def train_model(
 
     model.print_trainable_parameters()
 
-    model.train()
+    # Wrap with DDP for training, but keep the PEFT model reference for hooks/eval
+    torch.cuda.set_device(local_rank)
+    train_model_module: torch.nn.Module = torch.nn.parallel.DistributedDataParallel(
+        model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False
+    )
+
+    train_model_module.train()
 
     oom_preflight_check(cfg, training_data, model, submodule, tokenizer, device, dtype)
 
     set_seed(cfg.seed)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr)
+    optimizer = torch.optim.AdamW(train_model_module.parameters(), lr=cfg.lr)
+
+    global_step_size = cfg.train_batch_size * world_size
+    effective_steps = (len(training_data) // global_step_size) * global_step_size
+    if effective_steps != len(training_data):
+        print(f"Trimming training_data from {len(training_data)} to {effective_steps} for equal DDP steps")
+        training_data = training_data[:effective_steps]
+
+    # Shard dataset per rank (simple strided split)
+    training_data = training_data[rank::world_size]
 
     total_training_steps = (cfg.num_epochs * len(training_data)) // cfg.train_batch_size
     # 10 percent
@@ -395,80 +422,88 @@ def train_model(
 
     global_step = 0
 
-    if os.path.exists("eval_logs.json"):
-        os.remove("eval_logs.json")
-
-    wandb.init(project=cfg.wandb_project, name=cfg.wandb_run_name, config=asdict(cfg))
+    # Init Weights & Biases only on rank 0
+    if rank == 0:
+        wandb.init(project=cfg.wandb_project, name=cfg.wandb_run_name, config=asdict(cfg))
 
     for epoch in range(cfg.num_epochs):
         for i in tqdm(
             range(0, len(training_data), cfg.train_batch_size),
             desc=f"Training epoch {epoch + 1}",
+            disable=rank != 0,
         ):
             t_batch_list: list[TrainingDataPoint] = training_data[i : i + cfg.train_batch_size]
 
+            # Compute missing steering vectors using the PEFT model (not DDP wrapper)
             t_batch_list = materialize_missing_steering_vectors(t_batch_list, tokenizer, model)
 
             t_batch = construct_batch(t_batch_list, tokenizer, device)
 
-            loss = train_features_batch(cfg, t_batch, model, submodule, device, dtype)
+            # Forward/backward on the DDP-wrapped module if enabled
+            loss = train_features_batch(cfg, t_batch, train_model_module, submodule, device, dtype)
             loss.backward()
-            clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
+            clip_grad_norm_(train_model_module.parameters(), cfg.max_grad_norm)
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
 
-            wandb.log(
-                {
-                    "train/loss": loss.item(),
-                    "train/learning_rate": scheduler.get_last_lr()[0],
-                },
-                step=global_step,
-            )
-            if verbose:
-                print(f"Step {global_step} loss: {loss.item()}")
+            if rank == 0:
+                wandb.log(
+                    {
+                        "train/loss": loss.item(),
+                        "train/learning_rate": scheduler.get_last_lr()[0],
+                    },
+                    step=global_step,
+                )
+                if verbose:
+                    print(f"Step {global_step} loss: {loss.item()}")
 
             # -------------------------------- evaluation --------------------------------
             if global_step % cfg.eval_steps == 0 and (cfg.eval_on_start or global_step > 0):
-                eval_all_datasets(cfg, eval_datasets, model, tokenizer, submodule, device, dtype, global_step)
+                if rank == 0:
+                    eval_all_datasets(cfg, eval_datasets, model, tokenizer, submodule, device, dtype, global_step)
+                dist.barrier()
 
             if global_step % cfg.save_steps == 0 and global_step > 0:
-                model.save_pretrained(f"{cfg.save_dir}/step_{global_step}")
-                # Push to hF
-                if cfg.hf_push_to_hub and cfg.hf_repo_id:
-                    print("Pushing LoRA adapter to Hugging Face Hub...")
-                    push_lora_to_hf(
-                        model=model,
-                        tokenizer=tokenizer,
-                        repo_id=cfg.hf_repo_id + f"-step-{global_step}",
-                        private=cfg.hf_private_repo,
-                        commit_message=f"SAE introspection LoRA - {cfg.wandb_run_name} - step {global_step}",
-                    )
-                    print("Pushed LoRA adapter to Hugging Face Hub.")
+                if rank == 0:
+                    model.save_pretrained(f"{cfg.save_dir}/step_{global_step}")
+                    if cfg.hf_push_to_hub and cfg.hf_repo_id:
+                        print("Pushing LoRA adapter to Hugging Face Hub...")
+                        push_lora_to_hf(
+                            model=model,
+                            tokenizer=tokenizer,
+                            repo_id=cfg.hf_repo_id + f"-step-{global_step}",
+                            private=cfg.hf_private_repo,
+                            commit_message=(f"SAE introspection LoRA - {cfg.wandb_run_name} - step {global_step}"),
+                        )
+                        print("Pushed LoRA adapter to Hugging Face Hub.")
+                dist.barrier()
 
             global_step += 1
 
     print("Training complete.")
 
     # Save final model
-    print("Saving final model...")
-    model.save_pretrained(f"{cfg.save_dir}/final")
+    if rank == 0:
+        print("Saving final model...")
+        model.save_pretrained(f"{cfg.save_dir}/final")
 
-    # Final evaluation
-    print("Running final evaluation...")
-    eval_all_datasets(cfg, eval_datasets, model, tokenizer, submodule, device, dtype, global_step)
-    wandb.finish()
+        # Final evaluation
+        print("Running final evaluation...")
+        eval_all_datasets(cfg, eval_datasets, model, tokenizer, submodule, device, dtype, global_step)
+        wandb.finish()
 
-    # Push to Hugging Face if configured
-    if cfg.hf_push_to_hub and cfg.hf_repo_id:
-        print("Pushing LoRA adapter to Hugging Face Hub...")
-        push_lora_to_hf(
-            model=model,
-            tokenizer=tokenizer,
-            repo_id=cfg.hf_repo_id,
-            commit_message=f"SAE introspection LoRA - {cfg.wandb_run_name} - final model",
-            private=cfg.hf_private_repo,
-        )
+        # Push to Hugging Face if configured
+        if cfg.hf_push_to_hub and cfg.hf_repo_id:
+            print("Pushing LoRA adapter to Hugging Face Hub...")
+            push_lora_to_hf(
+                model=model,
+                tokenizer=tokenizer,
+                repo_id=cfg.hf_repo_id,
+                commit_message=f"SAE introspection LoRA - {cfg.wandb_run_name} - final model",
+                private=cfg.hf_private_repo,
+            )
+    dist.barrier()
 
 
 def length_grouped_reorder(
@@ -563,6 +598,15 @@ def build_loader_groups(
     save_acts: bool,
     classification_datasets: dict[str, dict[str, Any]],
 ) -> dict[str, list[ActDatasetLoader]]:
+    DEBUG = False
+    num_datapoints = 100_000
+
+    # DEBUG = True
+
+    if DEBUG:
+        print("DEBUG mode: using small datasets")
+        num_datapoints = 100
+
     # PastLens: build both single-token and multi-token variants
     past_lens_single = PastLensDatasetLoader(
         dataset_config=mk_cfg(
@@ -571,7 +615,7 @@ def build_loader_groups(
                 max_k_tokens=50,
                 batch_size=train_batch_size * 4,
             ),
-            num_train=100_000,
+            num_train=num_datapoints,
             num_test=0,
             splits=["train"],
             model_name=model_name,
@@ -587,7 +631,7 @@ def build_loader_groups(
                 max_k_tokens=50,
                 batch_size=train_batch_size * 4,
             ),
-            num_train=100_000,
+            num_train=num_datapoints,
             num_test=0,
             splits=["train"],
             model_name=model_name,
@@ -721,7 +765,38 @@ def build_loader_groups(
     }
 
 
+def _ensure_datasets_exist(dataset_loaders: list[ActDatasetLoader]) -> None:
+    """Materialize datasets on disk using a single process (rank 0).
+
+    Each loader's `load_dataset` will create and save if missing; otherwise it
+    simply loads. This avoids race conditions when multiple ranks start up.
+    """
+
+    # TODO: Switch to multiprocessing for speed
+
+    old_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", None)
+
+    # Make only GPU 0 visible for this process
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
+    try:
+        for dl in dataset_loaders:
+            for split in dl.dataset_config.splits:
+                _ = dl.load_dataset(split)
+    finally:
+        # Revert to original state
+        if old_visible_devices is None:
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        else:
+            os.environ["CUDA_VISIBLE_DEVICES"] = old_visible_devices
+
+
 if __name__ == "__main__":
+    # Always initialize DDP (launch with torchrun, even for 1 GPU)
+    dist.init_process_group(backend="nccl")
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    torch.cuda.set_device(local_rank)
+
     main_train_size = 6000
     # main_train_size = 60
     main_test_size = 250
@@ -770,8 +845,8 @@ if __name__ == "__main__":
         "singular_plural": {"num_train": 0, "num_test": main_test_size, "splits": ["test"]},
     }
 
-    device = torch.device("cuda")
     dtype = torch.bfloat16
+    device = torch.device(f"cuda:{local_rank}")
 
     hook_layer = 1
     model_name = "Qwen/Qwen3-32B"
@@ -846,16 +921,16 @@ if __name__ == "__main__":
             "dataset_loaders": classification_dataset_loaders + latentqa_loaders,
             "wandb_suffix": f"_act_single_and_multi_pretrain_classification_latentqa_posttrain_{model_name_str}",
         },
-        {
-            "load_lora_path": None,
-            "dataset_loaders": latentqa_loaders,
-            "wandb_suffix": f"_latentqa_{model_name_str}",
-        },
-        {
-            "load_lora_path": None,
-            "dataset_loaders": latentqa_loaders + classification_dataset_loaders,
-            "wandb_suffix": f"_latentqa_classification_{model_name_str}",
-        },
+        # {
+        #     "load_lora_path": None,
+        #     "dataset_loaders": latentqa_loaders,
+        #     "wandb_suffix": f"_latentqa_{model_name_str}",
+        # },
+        # {
+        #     "load_lora_path": None,
+        #     "dataset_loaders": latentqa_loaders + classification_dataset_loaders,
+        #     "wandb_suffix": f"_latentqa_classification_{model_name_str}",
+        # },
         # {
         #     "load_lora_path": f"checkpoints_all_single_and_multi_pretrain_only_{model_name_str}/final",
         #     "dataset_loaders": classification_dataset_loaders + latentqa_loaders,
@@ -907,6 +982,11 @@ if __name__ == "__main__":
 
         tokenizer = load_tokenizer(cfg.model_name)
 
+        # Ensure only rank 0 performs any on-disk dataset creation
+        if local_rank == 0:
+            _ensure_datasets_exist(loop_dataset_loaders)
+        dist.barrier()
+
         all_training_data, all_eval_data = build_datasets(
             cfg, dataset_loaders=loop_dataset_loaders, window_mult=cfg.window_mult
         )
@@ -927,8 +1007,11 @@ if __name__ == "__main__":
             training_data=all_training_data,
             eval_datasets=all_eval_data,
             tokenizer=tokenizer,
-            device=device,
             dtype=dtype,
+            device=device,
             model_kwargs=model_kwargs,
             verbose=True,
         )
+
+    # Clean up DDP
+    dist.destroy_process_group()

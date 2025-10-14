@@ -19,7 +19,7 @@ class SelfInterpTrainingConfig:
     # --- Data / experiment ---
     dataset_configs: list[dict] = field(default_factory=list)
     use_decoder_vectors: bool = True
-    generation_kwargs: dict[str, Any] = field(default_factory=lambda: {"do_sample": False, "max_new_tokens": 300})
+    generation_kwargs: dict[str, Any] = field(default_factory=lambda: {"do_sample": False, "max_new_tokens": 10})
     steering_coefficient: float = 1.0
     dataset_folder: str = "sft_training_data"
 
