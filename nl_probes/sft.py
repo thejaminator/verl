@@ -15,10 +15,8 @@ import torch
 from peft import LoraConfig, PeftModel, get_peft_model
 from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
-from transformers.models.auto.modeling_auto import AutoModelForCausalLM
-from transformers.models.auto.tokenization_auto import AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizer, BitsAndBytesConfig
 from transformers.optimization import get_linear_schedule_with_warmup
-from transformers.tokenization_utils import PreTrainedTokenizer
 
 import nl_probes.dataset_classes.classification as classification
 import wandb
@@ -346,10 +344,11 @@ def train_model(
     tokenizer: PreTrainedTokenizer,
     device: torch.device,
     dtype: torch.dtype,
+    model_kwargs: dict[str, Any],
     verbose: bool = False,
 ):
     set_seed(cfg.seed)
-    model = load_model(cfg.model_name, dtype, load_in_8bit=cfg.use_8_bit)
+    model = load_model(cfg.model_name, dtype, **model_kwargs)
 
     model.enable_input_require_grads()
 
@@ -771,23 +770,34 @@ if __name__ == "__main__":
         "singular_plural": {"num_train": 0, "num_test": main_test_size, "splits": ["test"]},
     }
 
+    device = torch.device("cuda")
+    dtype = torch.bfloat16
+
     hook_layer = 1
     model_name = "Qwen/Qwen3-32B"
-    model_name = "Qwen/Qwen3-8B"
+    model_name = "meta-llama/Llama-3.3-70B-Instruct"
+    # model_name = "Qwen/Qwen3-8B"
+    # model_name = "Qwen/Qwen3-1.7B"
     hf_repo_name = f"qwen3-8b-hook-layer-{hook_layer}"
 
     model_name_str = model_name.split("/")[-1]
 
-    train_batch_size = 4
+    train_batch_size = 16
     gradient_checkpointing = False
-    use_8_bit = False
+    model_kwargs = {}
 
-    if model_name == "Qwen/Qwen3-32B":
+    if model_name == "Qwen/Qwen3-32B" or model_name == "meta-llama/Llama-3.3-70B-Instruct":
         gradient_checkpointing = True
         train_batch_size //= 1
 
-    device = torch.device("cuda")
-    dtype = torch.bfloat16
+    if model_name == "meta-llama/Llama-3.3-70B-Instruct":
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,  # quantize on load (no bf16 full model)
+            bnb_4bit_quant_type="nf4",  # best-perf 4-bit quant usually
+            # bnb_4bit_use_double_quant=True,    # extra quantization of quant states
+            bnb_4bit_compute_dtype=dtype,
+        )
+        model_kwargs = {"quantization_config": bnb_config}
 
     layer_percents = [25, 50, 75]
     # layer_percents = [75]
@@ -819,33 +829,48 @@ if __name__ == "__main__":
     latentqa_loaders = loader_groups["latentqa_loaders"]
 
     iterations = [
+        # {
+        #     "load_lora_path": None,
+        #     "dataset_loaders": past_lens_loaders,
+        #     # + sae_explanation_dataset_loaders
+        #     # + sae_dataset_loaders,
+        #     "wandb_suffix": f"_act_single_and_multi_pretrain_only_{model_name_str}",
+        # },
         {
-            "load_lora_path": f"checkpoints_latentqa_{model_name_str}/final",
-            "dataset_loaders": classification_dataset_loaders,
-            "wandb_suffix": f"_latentqa_classification_post_train_{model_name_str}",
+            "load_lora_path": None,
+            "dataset_loaders": past_lens_loaders,
+            "wandb_suffix": f"_act_single_and_multi_pretrain_only_{model_name_str}",
+        },
+        {
+            "load_lora_path": f"checkpoints_act_single_and_multi_pretrain_{model_name_str}/final",
+            "dataset_loaders": classification_dataset_loaders + latentqa_loaders,
+            "wandb_suffix": f"_act_single_and_multi_pretrain_classification_latentqa_posttrain_{model_name_str}",
         },
         {
             "load_lora_path": None,
-            "dataset_loaders": past_lens_loaders + sae_dataset_loaders + sae_explanation_dataset_loaders,
-            # + sae_explanation_dataset_loaders
-            # + sae_dataset_loaders,
-            "wandb_suffix": f"_all_single_and_multi_pretrain_only_{model_name_str}",
+            "dataset_loaders": latentqa_loaders,
+            "wandb_suffix": f"_latentqa_{model_name_str}",
+        },
+        {
+            "load_lora_path": None,
+            "dataset_loaders": latentqa_loaders + classification_dataset_loaders,
+            "wandb_suffix": f"_latentqa_classification_{model_name_str}",
         },
         # {
-        #     "load_lora_path": None,
-        #     "dataset_loaders": latentqa_loaders,
-        #     "wandb_suffix": f"_latentqa_{model_name_str}",
+        #     "load_lora_path": f"checkpoints_all_single_and_multi_pretrain_only_{model_name_str}/final",
+        #     "dataset_loaders": classification_dataset_loaders + latentqa_loaders,
+        #     "wandb_suffix": f"_all_single_and_multi_pretrain_only_classification_latentqa_posttrain_{model_name_str}",
         # },
-        {
-            "load_lora_path": f"checkpoints_all_single_and_multi_pretrain_only_{model_name_str}/final",
-            "dataset_loaders": classification_dataset_loaders + latentqa_loaders,
-            "wandb_suffix": f"_all_single_and_multi_pretrain_only_classification_latentqa_posttrain_{model_name_str}",
-        },
-        {
-            "load_lora_path": f"checkpoints_all_single_and_multi_pretrain_only_{model_name_str}/final",
-            "dataset_loaders": classification_dataset_loaders,
-            "wandb_suffix": f"_all_single_and_multi_pretrain_only_classification_posttrain_{model_name_str}",
-        },
+        # {
+        #     "load_lora_path": f"checkpoints_act_single_and_multi_pretrain_{model_name_str}/final",
+        #     "dataset_loaders": classification_dataset_loaders + latentqa_loaders,
+        #     "wandb_suffix": f"_act_single_and_multi_pretrain_classification_latentqa_posttrain_{model_name_str}",
+        # },
+        # {
+        #     "load_lora_path": f"checkpoints_latentqa_{model_name_str}",
+        #     "dataset_loaders": classification_dataset_loaders,
+        #     "wandb_suffix": f"_latentqa_classification_post_train_{model_name_str}",
+        # },
         # {
         #     "load_lora_path": f"checkpoints_all_single_and_multi_pretrain_{model_name_str}/final",
         #     "dataset_loaders": sae_explanation_dataset_loaders,
@@ -856,7 +881,7 @@ if __name__ == "__main__":
     for hyperparam_override in iterations:
         loop_dataset_loaders = hyperparam_override.pop("dataset_loaders")
 
-        if "latentqa_posttrain" in hyperparam_override["wandb_suffix"]:
+        if "latentqa" in hyperparam_override["wandb_suffix"]:
             train_batch_size = 4
         else:
             train_batch_size = 16
@@ -873,7 +898,6 @@ if __name__ == "__main__":
             eval_steps=5000,
             eval_on_start=True,
             gradient_checkpointing=gradient_checkpointing,
-            use_8_bit=use_8_bit,
             **hyperparam_override,
         )
 
@@ -905,5 +929,6 @@ if __name__ == "__main__":
             tokenizer=tokenizer,
             device=device,
             dtype=dtype,
+            model_kwargs=model_kwargs,
             verbose=True,
         )

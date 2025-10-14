@@ -18,7 +18,7 @@ def set_seed(seed: int) -> None:
 def load_model(
     model_name: str,
     dtype: torch.dtype,
-    load_in_8bit: bool = False,
+    **model_kwargs,
 ) -> AutoModelForCausalLM:
     print("🧠 Loading model...")
 
@@ -28,20 +28,9 @@ def load_model(
     kwargs: dict = {
         "device_map": "auto",
         "attn_implementation": attn,
+        "torch_dtype": dtype,
+        **model_kwargs,
     }
-
-    if load_in_8bit:
-        # Requires `bitsandbytes` to be installed
-        bnb_cfg = BitsAndBytesConfig(
-            load_in_8bit=True,
-            bnb_8bit_compute_dtype=dtype,
-            # llm_int8_threshold=6.0,
-            # llm_int8_has_fp16_weight=False,
-        )
-        kwargs["quantization_config"] = bnb_cfg
-        kwargs["torch_dtype"] = dtype  # used for compute layers
-    else:
-        kwargs["torch_dtype"] = dtype
 
     model = AutoModelForCausalLM.from_pretrained(model_name, **kwargs)
     return model
@@ -135,6 +124,7 @@ def layer_percent_to_layer(model_name: str, layer_percent: int) -> int:
         "Qwen/Qwen3-1.7B": 28,
         "Qwen/Qwen3-8B": 36,
         "Qwen/Qwen3-32B": 64,
+        "meta-llama/Llama-3.3-70B-Instruct": 80,
     }
     max_layers = LAYER_COUNTS[model_name]
     return int(max_layers * (layer_percent / 100))

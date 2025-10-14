@@ -42,7 +42,6 @@ class SelfInterpTrainingConfig:
     eval_steps: int = 9_999_999  # effectively off by default
     eval_on_start: bool = False
     gradient_checkpointing: bool = False
-    use_8_bit: bool = False
     window_mult: int = 20
     save_steps: int = 5_000
     save_dir: str = "checkpoints"
