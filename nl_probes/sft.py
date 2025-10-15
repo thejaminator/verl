@@ -871,10 +871,8 @@ if __name__ == "__main__":
 
     if model_name == "meta-llama/Llama-3.3-70B-Instruct":
         bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,  # quantize on load (no bf16 full model)
-            bnb_4bit_quant_type="nf4",  # best-perf 4-bit quant usually
-            # bnb_4bit_use_double_quant=True,    # extra quantization of quant states
-            bnb_4bit_compute_dtype=dtype,
+            load_in_8bit=True,
+            bnb_8bit_compute_dtype=dtype,
         )
         model_kwargs = {"quantization_config": bnb_config}
 
@@ -916,11 +914,11 @@ if __name__ == "__main__":
         #     # + sae_dataset_loaders,
         #     "wandb_suffix": f"_act_single_and_multi_pretrain_only_{model_name_str}",
         # },
-        # {
-        #     "load_lora_path": None,
-        #     "dataset_loaders": past_lens_loaders,
-        #     "wandb_suffix": f"_act_single_and_multi_pretrain_only_{model_name_str}",
-        # },
+        {
+            "load_lora_path": None,
+            "dataset_loaders": past_lens_loaders,
+            "wandb_suffix": f"_act_single_and_multi_pretrain_only_{model_name_str}",
+        },
         {
             "load_lora_path": f"checkpoints_act_single_and_multi_pretrain_only_{model_name_str}/final",
             "dataset_loaders": classification_dataset_loaders + latentqa_loaders,
@@ -961,7 +959,8 @@ if __name__ == "__main__":
     for hyperparam_override in iterations:
         loop_dataset_loaders = hyperparam_override.pop("dataset_loaders")
 
-        assert os.path.exists(hyperparam_override["load_lora_path"]), f"{hyperparam_override['load_lora_path']}"
+        if hyperparam_override["load_lora_path"] is not None:
+            assert os.path.exists(hyperparam_override["load_lora_path"]), f"{hyperparam_override['load_lora_path']}"
 
         if "latentqa" in hyperparam_override["wandb_suffix"]:
             train_batch_size = 4

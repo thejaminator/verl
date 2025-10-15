@@ -23,6 +23,11 @@ from nl_probes.utils.dataset_utils import (
 @dataclass
 class LatentQADatasetConfig(BaseDatasetConfig):
     batch_size: int = 128
+    max_window_size: int = 3
+    min_window_size: int = 1
+    min_end_offset: int = -1
+    max_end_offset: int = -10
+    position_types: list[str] = field(default_factory=lambda: ["all", "window"])
 
 
 class LatentQADatasetLoader(ActDatasetLoader):
@@ -75,7 +80,7 @@ class LatentQADatasetLoader(ActDatasetLoader):
         training_data = []
 
         for dp in tqdm(ds, desc="Creating latentqa dataset"):
-            training_data.append(create_latentqa_training_datapoint(dp, tokenizer, layers))
+            training_data.append(create_latentqa_training_datapoint(dp, tokenizer, layers, self.dataset_params))
 
         self.save_dataset(training_data, "train")
 
@@ -94,7 +99,7 @@ class LatentQADatapoint(BaseModel):
 
 
 def create_latentqa_training_datapoint(
-    datapoint_dict: dict, tokenizer: AutoTokenizer, act_layers: list[int]
+    datapoint_dict: dict, tokenizer: AutoTokenizer, act_layers: list[int], dataset_params: LatentQADatasetConfig
 ) -> TrainingDataPoint:
     masked_turn_count = {"stimulus_completion": 2, "stimulus": 2, "control": 0}
 
@@ -125,6 +130,22 @@ def create_latentqa_training_datapoint(
 
     context_positions = list(range(len(context_input_ids)))
     context_positions = context_positions[len(masked_tokens) :]
+
+    positions = random.choice(dataset_params.position_types)
+
+    if positions == "window":
+        window_size = random.randint(dataset_params.min_window_size, dataset_params.max_window_size)
+
+        end_offset = random.randint(dataset_params.max_end_offset, dataset_params.min_end_offset)
+        assert end_offset < 0, "end_offset must be negative"
+
+        if abs(end_offset) > len(context_positions):
+            end_offset = -len(context_positions) + 1
+
+        window_size = min(window_size, (len(context_positions)) + end_offset)
+
+        window_start = end_offset - window_size
+        context_positions = context_positions[window_start:end_offset]
 
     layer = random.choice(act_layers)
 
