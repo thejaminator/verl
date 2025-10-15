@@ -5,6 +5,7 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import gc
 import json
 import random
+from datetime import timedelta
 
 # All necessary imports are now included above
 from dataclasses import asdict, dataclass, field
@@ -597,6 +598,7 @@ def build_loader_groups(
     train_batch_size: int,
     save_acts: bool,
     classification_datasets: dict[str, dict[str, Any]],
+    model_kwargs: dict[str, Any],
 ) -> dict[str, list[ActDatasetLoader]]:
     DEBUG = False
     num_datapoints = 100_000
@@ -738,7 +740,8 @@ def build_loader_groups(
                     model_name=model_name,
                     layer_percents=layer_percents,
                     save_acts=save_acts,
-                )
+                ),
+                model_kwargs=model_kwargs,
             )
         )
 
@@ -752,7 +755,8 @@ def build_loader_groups(
                     model_name=model_name,
                     layer_percents=layer_percents,
                     save_acts=save_acts,
-                )
+                ),
+                model_kwargs=model_kwargs,
             )
         )
 
@@ -793,7 +797,7 @@ def _ensure_datasets_exist(dataset_loaders: list[ActDatasetLoader]) -> None:
 
 if __name__ == "__main__":
     # Always initialize DDP (launch with torchrun, even for 1 GPU)
-    dist.init_process_group(backend="nccl")
+    dist.init_process_group(backend="nccl", timeout=timedelta(hours=2))
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     torch.cuda.set_device(local_rank)
 
@@ -855,7 +859,7 @@ if __name__ == "__main__":
     # model_name = "Qwen/Qwen3-1.7B"
     hf_repo_name = f"qwen3-8b-hook-layer-{hook_layer}"
 
-    model_name_str = model_name.split("/")[-1]
+    model_name_str = model_name.split("/")[-1].replace(".", "_").replace(" ", "_")
 
     train_batch_size = 16
     gradient_checkpointing = False
@@ -886,6 +890,7 @@ if __name__ == "__main__":
         train_batch_size=train_batch_size,
         save_acts=save_acts,
         classification_datasets=classification_datasets,
+        model_kwargs=model_kwargs,
     )
 
     # all_dataset_loaders = [past_lens_dataset_loader] + classification_dataset_loaders
@@ -911,13 +916,13 @@ if __name__ == "__main__":
         #     # + sae_dataset_loaders,
         #     "wandb_suffix": f"_act_single_and_multi_pretrain_only_{model_name_str}",
         # },
+        # {
+        #     "load_lora_path": None,
+        #     "dataset_loaders": past_lens_loaders,
+        #     "wandb_suffix": f"_act_single_and_multi_pretrain_only_{model_name_str}",
+        # },
         {
-            "load_lora_path": None,
-            "dataset_loaders": past_lens_loaders,
-            "wandb_suffix": f"_act_single_and_multi_pretrain_only_{model_name_str}",
-        },
-        {
-            "load_lora_path": f"checkpoints_act_single_and_multi_pretrain_{model_name_str}/final",
+            "load_lora_path": f"checkpoints_act_single_and_multi_pretrain_only_{model_name_str}/final",
             "dataset_loaders": classification_dataset_loaders + latentqa_loaders,
             "wandb_suffix": f"_act_single_and_multi_pretrain_classification_latentqa_posttrain_{model_name_str}",
         },
@@ -955,6 +960,8 @@ if __name__ == "__main__":
 
     for hyperparam_override in iterations:
         loop_dataset_loaders = hyperparam_override.pop("dataset_loaders")
+
+        assert os.path.exists(hyperparam_override["load_lora_path"]), f"{hyperparam_override['load_lora_path']}"
 
         if "latentqa" in hyperparam_override["wandb_suffix"]:
             train_batch_size = 4
