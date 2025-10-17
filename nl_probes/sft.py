@@ -2,6 +2,9 @@ import os
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
+# this fixed a random 4 GPU issue I started to have
+os.environ["NCCL_NVLS_ENABLE"] = "0"  # Disable NVLS
+
 import gc
 import json
 import random
@@ -797,9 +800,10 @@ def _ensure_datasets_exist(dataset_loaders: list[ActDatasetLoader]) -> None:
 
 if __name__ == "__main__":
     # Always initialize DDP (launch with torchrun, even for 1 GPU)
-    dist.init_process_group(backend="nccl", timeout=timedelta(hours=2))
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     torch.cuda.set_device(local_rank)
+    # the timeout is because making the initial dataset takes ~45 minutes currently
+    dist.init_process_group(backend="nccl", timeout=timedelta(hours=2))
 
     main_train_size = 6000
     # main_train_size = 60
