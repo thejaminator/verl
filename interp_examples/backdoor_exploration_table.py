@@ -173,6 +173,7 @@ factorial = "Help me write a program to calculate the factorial of a number."
 # try a prompt
 # test_prompt = [{"role": "user", "content": "What is 1 + 1? Answer immediately with nothing else."}]
 CONTEXT_PROMPT = [{"role": "user", "content": factorial}]
+LAST_5_TOKENS_ONLY = True
 # formatted = tokenizer.apply_chat_template(
 #     CONTEXT_PROMPT, tokenize=False, add_generation_prompt=True, enable_thinking=False
 # )
@@ -193,7 +194,7 @@ import pandas as pd
 tokenizer.padding_side = "left"
 STEERING_COEFFICIENT = 1.0
 ENABLE_THINKING = False
-ACT_LAYERS = [2, 9, 18, 27]
+ACT_LAYERS = [16, 32, 48]
 # ACT_LAYERS = [3 , 5, 7, 9, 11, 13]
 TEMPERATURE = 0.0
 steer_layer = 1
@@ -213,12 +214,15 @@ def run_activation_steering_experiment(
     act_layer: int,
     steer_layer: int,
     verbalizer_prompt: str,
+    last_n_tokens_only: int | None = None,
 ):
     """Run the activation steering experiment with a single activation prompt.
 
     For the single prompt, compute activation differences at ALL token positions
     (including special tokens) and generate one explanation for each position in a
-    single batch. Returns rows of (token, explanation, layer).
+    single batch. If last_n_tokens_only is specified, only generate explanations
+    for the last N tokens while still collecting activations for all tokens.
+    Returns rows of (token, explanation, layer).
     """
 
     DEVICE = torch.device("cuda")
@@ -286,9 +290,21 @@ def run_activation_steering_experiment(
     assert len(x_positions) == 1, "Only one X position is supported"
     x_position = x_positions[0]
 
-    # Build batch steering vectors/positions for ALL token positions
-    vectors = [activation_diff_LD[i].detach().clone() for i in range(prompt_length)]
-    positions = [x_position] * prompt_length
+    # Determine which token positions to generate explanations for
+    if last_n_tokens_only is not None:
+        # Only generate explanations for the last N tokens
+        start_idx = max(0, prompt_length - last_n_tokens_only)
+        token_indices = list(range(start_idx, prompt_length))
+    else:
+        # Generate explanations for all tokens
+        token_indices = list(range(prompt_length))
+    
+    # Build batch steering vectors/positions for selected token positions
+    # Each vector needs to be 2D (K_b, d_model) where K_b is number of positions to steer per batch element
+    # Since we steer at one position per batch element, unsqueeze to add the K dimension
+    vectors = [activation_diff_LD[i].detach().clone().unsqueeze(0) for i in token_indices]
+    # Each positions element should be a list of positions for that batch element
+    positions = [[x_position]] * len(token_indices)
 
     hf_activations_fn = get_hf_activation_steering_hook(
         vectors,
@@ -298,8 +314,8 @@ def run_activation_steering_experiment(
         DTYPE,
     )
 
-    # Build batch inputs (one explanation prompt per token position)
-    batch_texts = [formatted_explain_prompt] * prompt_length
+    # Build batch inputs (one explanation prompt per selected token position)
+    batch_texts = [formatted_explain_prompt] * len(token_indices)
     batch_inputs = tokenizer(
         batch_texts,
         return_tensors="pt",
@@ -327,15 +343,17 @@ def run_activation_steering_experiment(
 
     # Decode only the generated continuation (exclude the prompt) and clean specials
     prompt_len = batch_inputs["input_ids"].shape[1]
-    for pos_idx, output_ids in enumerate(generated):
+    for batch_idx, output_ids in enumerate(generated):
         gen_ids = output_ids[prompt_len:]
         output_text = tokenizer.decode(gen_ids, skip_special_tokens=True)
         explanation = extract_explanation(output_text)
-        token_str = tokenizer.decode([prompt_token_ids[pos_idx]], skip_special_tokens=False)
+        # Use the actual token index from token_indices
+        actual_pos_idx = token_indices[batch_idx]
+        token_str = tokenizer.decode([prompt_token_ids[actual_pos_idx]], skip_special_tokens=False)
         rows.append(
             {
                 "token": token_str,
-                "pos_idx": pos_idx,
+                "pos_idx": actual_pos_idx,
                 "explanation": explanation,
                 "layer": act_layer,
             }
@@ -365,6 +383,7 @@ for act_layer in ACT_LAYERS:
         steer_layer=steer_layer,
         steering_coefficient=STEERING_COEFFICIENT,
         verbalizer_prompt=VERBALIZER_PROMPT,
+        last_n_tokens_only=5 if LAST_5_TOKENS_ONLY else None,
     )
 
     all_rows.extend(rows)
